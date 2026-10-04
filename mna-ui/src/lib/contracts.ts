@@ -1,0 +1,26 @@
+export type Source = 'MID' | 'ISCC' | 'both';
+export type Fit = 'Strong signal' | 'Worth exploring' | 'Needs research';
+export type Company = {
+  pk: string;
+  ecid: string | null;
+  cid: string | null;
+  name: string;
+  website: string;
+  city: string;
+  state: string;
+  source: Source;
+  description: string;
+  midScore?: number;
+  isccScore?: number;
+  screeningScore?: number;
+  signal: Fit;
+  tags: string[];
+  rawMid?: Record<string, string | number>;
+  rawIscc?: Record<string, string | number>;
+  pbId?: string;
+  pbWebsite?: string;
+  linkedin?: string;
+  enrichment?: Record<string, unknown>;
+};
+export type FunnelCounts = { midOnly: number; isccOnly: number; both: number };
+export type ExportKind = 'pitchbook' | 'llm' | 'full';

@@ -1,0 +1,140 @@
+import { useEffect, useRef, useState } from "react";
+import { Dialog } from "radix-ui";
+import { LoaderCircle, X } from "lucide-react";
+import ScreeningSetup from "./ScreeningSetup";
+import { getChatState } from "../lib/chat-store";
+import {
+  getScreeningCatalog,
+  previewScreening,
+  approveScreening,
+  hydrateScreeningSources,
+} from "../lib/screening-client";
+import type {
+  ScreeningCatalog,
+  ScreeningConfig,
+  ScreeningMode,
+  ScreeningProvider,
+} from "../lib/screening-contract";
+
+export default function SetupController({
+  sessionId,
+  provider,
+  mode,
+  request,
+  initialConfig,
+  onClose,
+  onSaved,
+}: {
+  sessionId: string;
+  provider: ScreeningProvider;
+  mode: ScreeningMode;
+  request?: string;
+  initialConfig?: ScreeningConfig;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const initial = useRef(getChatState(sessionId)).current;
+  const [catalog, setCatalog] = useState<ScreeningCatalog>();
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setError("");
+    void getScreeningCatalog(sessionId, initial.backendRunId)
+      .then((data) => {
+        if (active) setCatalog(data);
+      })
+      .catch((error) => {
+        if (active) setError(String(error.message ?? error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [sessionId, initial.backendRunId, attempt]);
+  const guard = () => {
+    const current = getChatState(sessionId);
+    if (
+      current.backendRunId !== initial.backendRunId ||
+      current.revision !== initial.revision
+    )
+      throw new Error(
+        "The screening changed while this setup was open. Close it and reopen the latest setup.",
+      );
+  };
+  if (!catalog)
+    return (
+      <Dialog.Root
+        open
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="ss-overlay" />
+          <Dialog.Content className="ss-dialog ss-loading-dialog">
+            <Dialog.Title>Prepare screening or a question</Dialog.Title>
+            <Dialog.Description>
+              Read company data and available source columns.
+            </Dialog.Description>
+            <Dialog.Close className="ct-icon-button" aria-label="Close setup">
+              <X size={18} />
+            </Dialog.Close>
+            {error ? (
+              <>
+                <p role="alert" className="ct-error-copy">
+                  {error}
+                </p>
+                <button
+                  type="button"
+                  className="ct-solid-button"
+                  onClick={() => setAttempt((x) => x + 1)}
+                >
+                  Try again
+                </button>
+              </>
+            ) : (
+              <p role="status">
+                <LoaderCircle size={16} className="ca-spin" /> Reading available
+                data…
+              </p>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    );
+  return (
+    <ScreeningSetup
+      provider={provider}
+      initialMode={mode}
+      initialPrompt={request}
+      initialConfig={initialConfig}
+      catalog={catalog}
+      criteriaText={initial.definition}
+      onClose={onClose}
+      onPreview={async (config) => {
+        guard();
+        return previewScreening(sessionId, initial.backendRunId, config);
+      }}
+      onApprove={async (config, preview) => {
+        guard();
+        const prepared = await approveScreening(
+          sessionId,
+          initial.backendRunId,
+          config,
+          preview,
+        );
+        onSaved();
+        return prepared;
+      }}
+      onHydrate={async (files) => {
+        guard();
+        if (!initial.backendRunId)
+          throw new Error(
+            "Find and save companies before adding enrichment files.",
+          );
+        await hydrateScreeningSources(sessionId, initial.backendRunId, files);
+        setCatalog(await getScreeningCatalog(sessionId, initial.backendRunId));
+      }}
+    />
+  );
+}

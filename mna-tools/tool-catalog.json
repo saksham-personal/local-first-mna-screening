@@ -1,0 +1,3284 @@
+[
+  {
+    "name": "search_companies",
+    "description": "Search canonical core-business descriptions; report non-core filters as unused",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "SearchFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "all_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "any_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "city": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "company_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "country": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "employees_max": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "employees_min": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "exclude_industries": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "exclude_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ownership": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revenue_max": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "revenue_min": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "sub_industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "SearchMode": {
+          "enum": [
+            "lexical",
+            "semantic",
+            "hybrid"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/SearchFilters"
+        },
+        "lexical_weight": {
+          "default": 0.45,
+          "format": "double",
+          "type": "number"
+        },
+        "limit": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/SearchMode"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prefer_meilisearch": {
+          "default": true,
+          "type": "boolean"
+        },
+        "query": {
+          "default": "",
+          "type": "string"
+        },
+        "query_vector": {
+          "default": null,
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "semantic_ratio": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "semantic_weight": {
+          "default": 0.55,
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "title": "SearchCompaniesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "find_company",
+    "description": "Resolve canonical company identity",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "company_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ecid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": 10,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "linkedin_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pbid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "website": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "FindCompanyArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "find_similar_companies",
+    "description": "Find companies similar to a stored seed vector",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "SearchFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "all_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "any_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "city": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "company_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "country": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "employees_max": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "employees_min": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "exclude_industries": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "exclude_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ownership": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revenue_max": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "revenue_min": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "sub_industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filters": {
+          "$ref": "#/$defs/SearchFilters"
+        },
+        "limit": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query_vector": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "FindSimilarArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "find_similar_to_examples",
+    "description": "Find companies using positive and negative example centroids",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "SearchFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "all_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "any_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "city": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "company_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "country": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "employees_max": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "employees_min": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "exclude_industries": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "exclude_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ownership": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revenue_max": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "revenue_min": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "sub_industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/SearchFilters"
+        },
+        "limit": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "negative_company_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "negative_vectors": {
+          "default": [],
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "positive_company_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "positive_vectors": {
+          "default": [],
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "FindSimilarExamplesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_company",
+    "description": "Read the canonical company record",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "company_id"
+      ],
+      "title": "GetCompanyArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_company_context",
+    "description": "Compose selected company sections within a character budget",
+    "category": "context",
+    "mutates_state": false,
+    "input_schema": {
+      "$defs": {
+        "CompanySection": {
+          "enum": [
+            "core",
+            "description",
+            "financials",
+            "products",
+            "services",
+            "keywords",
+            "previous_research",
+            "analyst_notes",
+            "evidence",
+            "screening_history",
+            "external_research",
+            "identifiers",
+            "enrichment",
+            "screening_results"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "max_chars": {
+          "default": 12000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/CompanySection"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "company_id",
+        "sections"
+      ],
+      "title": "CompanyContextArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_candidate_context",
+    "description": "Compose candidate context scoped to a screening run",
+    "category": "context",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "max_chars": {
+          "default": 12000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_id"
+      ],
+      "title": "CandidateContextArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_candidate_batch_context",
+    "description": "Compose selected candidate fields for batch screening",
+    "category": "context",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_per_company": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_ids",
+        "fields",
+        "max_per_company"
+      ],
+      "title": "CandidateBatchArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "build_context_packet",
+    "description": "Build prioritized, bounded context from authoritative state",
+    "category": "context",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "subject_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task_type": {
+          "type": "string"
+        },
+        "token_budget": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_type",
+        "subject_ids",
+        "token_budget"
+      ],
+      "title": "BuildPacketArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_run_context",
+    "description": "Read run objective, progress, questions and decisions",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail_level": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_original_criteria",
+    "description": "Read immutable original mandate criteria",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunOnly",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_active_screening_profile",
+    "description": "Read the current approved screening profile",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunOnly",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_screening_profile_version",
+    "description": "Read a historical profile version",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "version": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "version"
+      ],
+      "title": "ProfileVersionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "compare_profile_versions",
+    "description": "Compare profile versions and their lineage",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "version_a": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "version_b": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "version_a",
+        "version_b"
+      ],
+      "title": "CompareProfileArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "propose_screening_profile",
+    "description": "Persist a profile proposal for analyst approval",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "content": true,
+        "rationale": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "supporting_example_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "content"
+      ],
+      "title": "ProposeProfileArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_labelled_examples",
+    "description": "Read analyst labels and canonical company examples",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "LabelsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_representative_examples",
+    "description": "Select relevant examples per analyst label",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "labels": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "per_label": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "target_query": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RepresentativeArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "label_company",
+    "description": "Record actual analyst feedback; requires analyst credentials on every route",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "analyst_note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "company_id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_id",
+        "label"
+      ],
+      "title": "LabelCompanyArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_iscc",
+    "description": "Query a configured ISCC gateway with normalized results",
+    "category": "provider",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "limit": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "query"
+      ],
+      "title": "IsccSearchArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "bing_search",
+    "description": "Query a configured grounded Bing gateway",
+    "category": "provider",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_results": {
+          "default": 20,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "BingSearchArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "m365_research",
+    "description": "Research approved questions for scoped company IDs through a configured M365 gateway",
+    "category": "provider",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "companies": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "company_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "type": "string"
+        },
+        "required_fields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "title": "M365ResearchArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "fetch_url",
+    "description": "Cache a public URL and return artifact metadata",
+    "category": "provider",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "max_bytes": {
+          "default": 1000000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_secs": {
+          "default": 12,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        },
+        "use_cache": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "FetchUrlArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "extract_url_context",
+    "description": "Extract bounded page text relevant to an extraction goal",
+    "category": "provider",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "artifact_ref": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "extraction_goal": {
+          "default": "",
+          "type": "string"
+        },
+        "max_chars": {
+          "default": 20000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query_terms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "ExtractContextArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_evidence",
+    "description": "Read evidence with provenance, scoped to run and company",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "company_id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "source_types": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "company_id"
+      ],
+      "title": "EvidenceArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "save_evidence",
+    "description": "Persist a claim with source provenance and confidence",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "type": "string"
+        },
+        "claim_provenance": {
+          "default": null
+        },
+        "company_id": {
+          "type": "string"
+        },
+        "evidence_confidence": {
+          "type": "string"
+        },
+        "extraction_method": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "source_reference": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "source_url": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": true
+      },
+      "required": [
+        "run_id",
+        "company_id",
+        "claim",
+        "value",
+        "source_type",
+        "source_reference",
+        "evidence_confidence"
+      ],
+      "title": "SaveEvidenceArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_missing_evidence",
+    "description": "Identify attributes still lacking evidence",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "required_attributes": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_id"
+      ],
+      "title": "MissingEvidenceArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_research_memory",
+    "description": "Search persisted research in a run",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "query"
+      ],
+      "title": "SearchMemoryArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_previous_research",
+    "description": "Explicitly retrieve company research across runs",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "company_id"
+      ],
+      "title": "PreviousResearchArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_recent_agent_events",
+    "description": "Read recent meaningful workflow events",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "event_types": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "EventsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_search_history",
+    "description": "Read discovery queries and their provenance",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "source": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "SearchHistoryArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_open_questions",
+    "description": "Read unresolved research questions",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "include_resolved": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "QuestionsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "add_open_question",
+    "description": "Persist a research gap",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "question",
+        "priority"
+      ],
+      "title": "AddQuestionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "resolve_open_question",
+    "description": "Resolve a question using scoped evidence IDs",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "type": "string"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "question_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "question_id",
+        "answer"
+      ],
+      "title": "ResolveQuestionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "add_candidates",
+    "description": "Deduplicate candidates and retain discovery provenance",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "CandidateInput": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "company_id": {
+                  "type": "string"
+                },
+                "rank": {
+                  "default": null,
+                  "format": "int64",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "retrieval_score": {
+                  "default": null,
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "company_id"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "companies": {
+          "items": {
+            "$ref": "#/$defs/CandidateInput"
+          },
+          "type": "array"
+        },
+        "discovery_source": {
+          "type": "string"
+        },
+        "query_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "companies",
+        "discovery_source"
+      ],
+      "title": "AddCandidatesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_candidate_status",
+    "description": "Persist a classification and supporting reason",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_id",
+        "status"
+      ],
+      "title": "UpdateCandidateArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_candidate_set",
+    "description": "Read run candidates by status or identity; report non-core filters as unused",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$defs": {
+        "CandidateFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "company_ids": {
+              "default": null,
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "country": {
+              "default": null,
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "industry": {
+              "default": null,
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "revenue_max": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "revenue_min": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/CandidateFilters"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "statuses": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "CandidateSetArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "save_checkpoint",
+    "description": "Persist orchestrator state for restart recovery",
+    "category": "state",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "expected_sequence": {
+          "default": null,
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "namespace": {
+          "default": "default",
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "state": true
+      },
+      "required": [
+        "run_id",
+        "state"
+      ],
+      "title": "SaveCheckpointArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_checkpoint",
+    "description": "Read the latest durable orchestrator checkpoint",
+    "category": "state",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "namespace": {
+          "default": "default",
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "default": null,
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "GetCheckpointArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_mid",
+    "description": "Search the imported MID universe by qualitative business concepts",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "SearchFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "all_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "any_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "city": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "company_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "country": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "employees_max": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "employees_min": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "exclude_industries": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "exclude_keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ownership": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revenue_max": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "revenue_min": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "sub_industry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "SearchMode": {
+          "enum": [
+            "lexical",
+            "semantic",
+            "hybrid"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/SearchFilters"
+        },
+        "lexical_weight": {
+          "default": 0.45,
+          "format": "double",
+          "type": "number"
+        },
+        "limit": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/SearchMode"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prefer_meilisearch": {
+          "default": true,
+          "type": "boolean"
+        },
+        "query": {
+          "default": "",
+          "type": "string"
+        },
+        "query_vector": {
+          "default": null,
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "semantic_ratio": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "semantic_weight": {
+          "default": 0.55,
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "title": "SearchCompaniesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_iscc_score_samples",
+    "description": "Inspect description samples across saved ISCC relevance bands",
+    "category": "search",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "min_score": {
+          "default": 0.3,
+          "format": "double",
+          "type": "number"
+        },
+        "per_band": {
+          "default": 3,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "query_id"
+      ],
+      "title": "IsccScoreSamplesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "import_enrichment_files",
+    "description": "Detect and join user-supplied PitchBook and ROGO files with import metrics",
+    "category": "data",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "files"
+      ],
+      "title": "ImportEnrichmentFilesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "export_candidate_set",
+    "description": "Export PitchBook, LLM, or full source workbooks for selected candidates",
+    "category": "data",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "export_type": {
+          "type": "string"
+        },
+        "file_name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "export_type"
+      ],
+      "title": "ExportCandidateSetArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_discovery_summary",
+    "description": "Report unique candidates, MID/ISCC overlap and the recommended next step",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_company_identifiers",
+    "description": "Read ECID, CID, PBId and historical key cross-references",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "company_id"
+      ],
+      "title": "CompanyArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_source_rows",
+    "description": "Read bounded original MID and ISCC source rows",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "company_id"
+      ],
+      "title": "SourceRowsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_candidate_source_data",
+    "description": "Read paged candidate source columns with MID history, current-run ISCC, PitchBook and ROGO provenance",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after_company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "CandidateSourceDataArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_run_source_projection",
+    "description": "Build a run-scoped input table with independent PB/MID/ISCC name and website fallbacks, labeled descriptions, coverage and row hashes",
+    "category": "projection",
+    "mutates_state": false,
+    "input_schema": {
+      "$defs": {
+        "IdentitySources": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "name": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "website": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "website",
+            "description"
+          ],
+          "type": "object"
+        },
+        "SourceColumn": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "column"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "identity_sources": {
+          "$ref": "#/$defs/IdentitySources",
+          "default": {
+            "description": [
+              "PB",
+              "MID",
+              "ISCC"
+            ],
+            "name": [
+              "PB",
+              "MID",
+              "ISCC"
+            ],
+            "website": [
+              "PB",
+              "MID",
+              "ISCC"
+            ]
+          }
+        },
+        "input_columns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "selected_source_columns": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceColumn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "ProjectionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_source_field_catalog",
+    "description": "List available MID, ISCC, PitchBook and ROGO fields and missing-data counts for this run",
+    "category": "projection",
+    "mutates_state": false,
+    "input_schema": {
+      "$defs": {
+        "IdentitySources": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "name": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "website": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "website",
+            "description"
+          ],
+          "type": "object"
+        },
+        "SourceColumn": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "column"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "identity_sources": {
+          "$ref": "#/$defs/IdentitySources",
+          "default": {
+            "description": [
+              "PB",
+              "MID",
+              "ISCC"
+            ],
+            "name": [
+              "PB",
+              "MID",
+              "ISCC"
+            ],
+            "website": [
+              "PB",
+              "MID",
+              "ISCC"
+            ]
+          }
+        },
+        "input_columns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "selected_source_columns": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceColumn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "ProjectionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_retrieval_config",
+    "description": "Show the selected Arctic 768D INT8 embedder, replaceable reranker, 1000-result retrieval and top-500 reranking policy",
+    "category": "search",
+    "mutates_state": false,
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "embed_texts",
+    "description": "Obtain validated vectors from the configured local embedder; unconfigured inference returns an explicit unavailable state",
+    "category": "search",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "texts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "texts"
+      ],
+      "title": "EmbedArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "rerank_candidates",
+    "description": "Reorder only the first 500 retrieved companies using a configured local reranker and preserve the remaining companies and source scores",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "RerankCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "company_id": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "query_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retrieval_score": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "company_id",
+            "description",
+            "source"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/RerankCandidate"
+          },
+          "type": "array"
+        },
+        "query": {
+          "type": "string"
+        },
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "query",
+        "candidates"
+      ],
+      "title": "RerankArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "propose_prepared_plan",
+    "description": "Freeze a version-2 screening or question proposal with exact input rows, prompt, columns, deployment and batch size; requires later analyst approval and does not execute a provider",
+    "category": "execution",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "IdentitySources": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "name": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "website": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "website",
+            "description"
+          ],
+          "type": "object"
+        },
+        "SourceColumn": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "column"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "batch_size": {
+          "default": 50,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "company_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deployment": {
+          "type": "string"
+        },
+        "identity_sources": {
+          "$ref": "#/$defs/IdentitySources",
+          "default": {
+            "description": [
+              "PB",
+              "MID",
+              "ISCC"
+            ],
+            "name": [
+              "PB",
+              "MID",
+              "ISCC"
+            ],
+            "website": [
+              "PB",
+              "MID",
+              "ISCC"
+            ]
+          }
+        },
+        "input_columns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "output_columns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "provider_options": {
+          "default": null
+        },
+        "question": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retrieval_configuration": {
+          "default": null
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "score_columns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source_columns": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceColumn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "mode",
+        "provider",
+        "deployment",
+        "prompt"
+      ],
+      "title": "ProposeArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_prepared_plan",
+    "description": "Read a frozen version-2 proposal, approval status and durable jobs; never infer that a prepared handoff has executed",
+    "category": "execution",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id"
+      ],
+      "title": "PlanIdArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_execution_job",
+    "description": "Read durable batch state, immutable index mapping, repair diagnostics and recorded provider status",
+    "category": "execution",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "title": "JobIdArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_model_assessments",
+    "description": "Read accepted provider assessments by prompt and batch, independently of retrieval scores and verified evidence",
+    "category": "execution",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "AssessmentsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_search_policy",
+    "description": "Show core-business criteria and criteria deliberately unused for discovery",
+    "category": "workflow",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "propose_action_plan",
+    "description": "Record a bounded dependency graph for analyst review",
+    "category": "workflow",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "ActionKind": {
+          "enum": [
+            "search_mid",
+            "search_iscc",
+            "import_pitchbook",
+            "import_rogo",
+            "bing_research",
+            "llm_screening",
+            "m365_screening",
+            "m365_research",
+            "export"
+          ],
+          "type": "string"
+        },
+        "ActionStep": {
+          "additionalProperties": false,
+          "properties": {
+            "company_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "depends_on": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "$ref": "#/$defs/ActionKind"
+            },
+            "parameters": {
+              "default": null
+            },
+            "query_templates": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "step_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "step_id",
+            "kind"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/ActionStep"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "rationale",
+        "steps"
+      ],
+      "title": "PlanArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_action_plan",
+    "description": "Read an action plan and its approval metadata",
+    "category": "workflow",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id"
+      ],
+      "title": "PlanRef",
+      "type": "object"
+    }
+  },
+  {
+    "name": "prepare_screening_batch",
+    "description": "Legacy scored handoff; prefer propose_prepared_plan for index-only results and complete execution approval; genuine PB LinkedIn is included when available",
+    "category": "workflow",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "ScreeningEngine": {
+          "enum": [
+            "llm_suite",
+            "copilot"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "engine": {
+          "$ref": "#/$defs/ScreeningEngine"
+        },
+        "output_columns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id",
+        "step_id",
+        "engine",
+        "company_ids",
+        "prompt"
+      ],
+      "title": "BatchArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "prepare_bing_queries",
+    "description": "Expand three to five approved research templates using preferred company identity",
+    "category": "workflow",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id",
+        "step_id",
+        "company_ids"
+      ],
+      "title": "BingArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "save_screening_results",
+    "description": "Persist external screening scores or CHECK without inventing analyst labels",
+    "category": "workflow",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "ScreeningResult": {
+          "additionalProperties": false,
+          "properties": {
+            "additional_columns": {
+              "default": null
+            },
+            "company_id": {
+              "type": "string"
+            },
+            "fit_score": true,
+            "rationale": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "company_id",
+            "fit_score",
+            "rationale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "batch_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/ScreeningResult"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id",
+        "step_id",
+        "batch_id",
+        "results"
+      ],
+      "title": "ResultsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_screening_results",
+    "description": "Read run-scoped external screening results and their profile lineage",
+    "category": "workflow",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_id"
+      ],
+      "title": "ScreeningReadArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "complete_action_step",
+    "description": "Mark a plan step complete using service-issued successful-operation receipts",
+    "category": "workflow",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        },
+        "receipt_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id",
+        "step_id",
+        "receipt_ids"
+      ],
+      "title": "CompleteArgs",
+      "type": "object"
+    }
+  }
+]

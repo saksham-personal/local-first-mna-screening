@@ -1,0 +1,964 @@
+import {
+  Children,
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
+import {
+  ActionBarPrimitive,
+  AssistantRuntimeProvider,
+  AttachmentPrimitive,
+  BranchPickerPrimitive,
+  ComposerPrimitive,
+  ErrorPrimitive,
+  MessagePrimitive,
+  QueueItemPrimitive,
+  ThreadPrimitive,
+  fromThreadMessageLike,
+  useAui,
+  useAuiState,
+  useAuiEvent,
+  useLocalRuntime,
+  type ThreadAssistantMessagePart,
+} from "@assistant-ui/react";
+import {
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  Check,
+  ChevronDown,
+  Copy,
+  Download,
+  FileText,
+  Eye,
+  List,
+  LoaderCircle,
+  Paperclip,
+  Pencil,
+  RotateCcw,
+  Square,
+  X,
+} from "lucide-react";
+import type {
+  ArtifactAction,
+  ChatArtifact,
+  ChatState,
+} from "../lib/chat-contract";
+import {
+  approved,
+  getChatState,
+  updateChatState,
+  useChatState,
+} from "../lib/chat-store";
+import { appendWorkspaceMessages } from "../lib/workspace-message-sync";
+import {
+  createChatAdapter,
+  createFileAdapter,
+  pendingWorkspaceMessages,
+  transcriptFor,
+} from "../lib/chat-driver";
+import {
+  getJob,
+  getJobsConnectionError,
+  jobContent,
+  stopJob,
+  subscribeJobs,
+  toolLabels,
+} from "../lib/chat-jobs";
+import { commandPrompts } from "../lib/chat-policy";
+import { sessionStore, useSessionSnapshot } from "../lib/session-store";
+import ArtifactCard from "./ArtifactCard";
+import MarkdownMessage from "./MarkdownMessage";
+import Tooltip from "../Tooltip";
+import SelectField from "../ui/SelectField";
+import { attachmentError } from "../lib/attachment-policy";
+
+export type ComposerControls = {
+  setText: (text: string) => void;
+  addFiles: (files: File[]) => Promise<number>;
+};
+type Scope = {
+  sessionId: string;
+  onAction: (action: ArtifactAction) => void;
+  openLog: (eventId?: string) => void;
+  openContext: () => void;
+  openPrompts: () => void;
+  previewFile: (file: File) => void;
+};
+const ChatScope = createContext<Scope>({
+  sessionId: "",
+  onAction: () => {},
+  openLog: () => {},
+  openContext: () => {},
+  openPrompts: () => {},
+  previewFile: () => {},
+});
+type ToolPart = Extract<ThreadAssistantMessagePart, { type: "tool-call" }>;
+function ArtifactPart({ data }: { data: unknown }) {
+  const scope = useContext(ChatScope);
+  const state = useChatState(scope.sessionId);
+  const id =
+    data && typeof data === "object"
+      ? (data as { artifactId?: string }).artifactId
+      : undefined;
+  const artifact = state.artifacts.find((a) => a.id === id);
+  return artifact ? (
+    <ArtifactCard artifact={artifact} onAction={scope.onAction} />
+  ) : (
+    <p className="ct-missing-artifact">
+      This artifact is no longer available. The session log retains its original
+      record.
+    </p>
+  );
+}
+function Timestamp() {
+  const date = useAuiState((s) => s.message.createdAt);
+  return (
+    <time dateTime={date.toISOString()} title={date.toLocaleString()}>
+      {date.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}
+    </time>
+  );
+}
+function ToolCall(part: ToolPart) {
+  const { sessionId, openLog } = useContext(ChatScope);
+  const snapshot = useSessionSnapshot();
+  const event = snapshot.sessions
+    .find((s) => s.id === sessionId)
+    ?.events.find((e) => e.id === part.toolCallId);
+  const status =
+    event?.status ??
+    (part.result === undefined
+      ? "running"
+      : part.isError
+        ? "error"
+        : "success");
+  const label =
+    status === "success"
+      ? "Done"
+      : status === "running"
+        ? "Running"
+        : status === "cancelled"
+          ? "Stopped"
+          : "Failed";
+  return (
+    <details className={`ct-tool ct-tool-${status}`}>
+      <summary>
+        {status === "running" ? (
+          <LoaderCircle size={13} className="spin" />
+        ) : status === "success" ? (
+          <Check size={13} />
+        ) : (
+          <X size={13} />
+        )}
+        <span>
+          {toolLabels[part.toolName] ?? part.toolName.replaceAll("_", " ")}
+        </span>
+        <time title={event?.startedAt}>
+          {event
+            ? new Date(event.startedAt).toLocaleTimeString(undefined, {
+                hour12: false,
+              })
+            : ""}
+        </time>
+        <small>
+          {event?.durationMs !== undefined ? `${event.durationMs} ms` : label}
+        </small>
+        <ChevronDown size={12} />
+      </summary>
+      <div className="ct-tool-detail">
+        <div>
+          <code>{part.toolName}</code>
+          <button
+            type="button"
+            onClick={() => openLog(part.toolCallId)}
+            title="Inspect this call in the session log"
+          >
+            Session log <ArrowRight size={12} />
+          </button>
+        </div>
+        {event?.error && <p className="ct-error-copy">{event.error}</p>}
+        <strong>Input</strong>
+        <pre>{JSON.stringify(part.args, null, 2)}</pre>
+        <strong>Output</strong>
+        <pre>
+          {part.result === undefined
+            ? "Waiting for the tool…"
+            : JSON.stringify(part.result, null, 2)}
+        </pre>
+      </div>
+    </details>
+  );
+}
+function ToolTimeline({
+  children,
+  startIndex,
+  endIndex,
+}: {
+  children?: ReactNode;
+  startIndex: number;
+  endIndex: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { openLog } = useContext(ChatScope);
+  const items = Children.toArray(children);
+  return (
+    <div className="ct-tool-timeline">
+      <div className="ct-tool-timeline-head">
+        <span>
+          <List size={14} />
+          {endIndex - startIndex + 1} tool{" "}
+          {startIndex === endIndex ? "call" : "calls"}
+        </span>
+        <button type="button" onClick={() => openLog()}>
+          Inspect log <ArrowRight size={12} />
+        </button>
+      </div>
+      {expanded ? items : items.slice(-4)}
+      {items.length > 4 && (
+        <button
+          className="ct-more-tools"
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? "Show recent calls" : `Show all ${items.length} calls`}
+          <ChevronDown size={12} />
+        </button>
+      )}
+    </div>
+  );
+}
+function LoadingPart() {
+  const running = useAuiState((s) => s.message.status?.type === "running");
+  return running ? (
+    <div className="ct-thinking" role="status">
+      <LoaderCircle size={14} className="spin" />
+      <span>Preparing this step</span>
+    </div>
+  ) : null;
+}
+const parts = {
+  Text: MarkdownMessage,
+  Empty: LoadingPart,
+  tools: { Fallback: ToolCall },
+  ToolGroup: ToolTimeline,
+  data: { by_name: { "screening-artifact": ArtifactPart } },
+};
+function MessageActions({ user = false }: { user?: boolean }) {
+  const copied = useAuiState((s) => s.message.isCopied);
+  return (
+    <ActionBarPrimitive.Root
+      className="ct-message-actions"
+      hideWhenRunning
+      autohide="never"
+    >
+      <ActionBarPrimitive.Copy
+        copiedDuration={2000}
+        aria-label={copied ? "Message copied" : "Copy message"}
+        title={copied ? "Copied to clipboard" : "Copy message"}
+      >
+        {copied ? <Check size={13} /> : <Copy size={13} />}
+      </ActionBarPrimitive.Copy>
+      {user ? (
+        <ActionBarPrimitive.Edit
+          aria-label="Edit sent message"
+          title="Edit and submit a new revision"
+        >
+          <Pencil size={13} />
+        </ActionBarPrimitive.Edit>
+      ) : (
+        <>
+          <ActionBarPrimitive.Reload
+            aria-label="Retry this step"
+            title="Retry this step using current criteria"
+          >
+            <RotateCcw size={13} />
+          </ActionBarPrimitive.Reload>
+          <ActionBarPrimitive.ExportMarkdown
+            aria-label="Export message as Markdown"
+            title="Export this message"
+          >
+            <Download size={13} />
+          </ActionBarPrimitive.ExportMarkdown>
+        </>
+      )}
+      <BranchPickerPrimitive.Root
+        className="ct-message-branches"
+        hideWhenSingleBranch
+      >
+        <BranchPickerPrimitive.Previous aria-label="Previous message version">
+          ‹
+        </BranchPickerPrimitive.Previous>
+        <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
+        <BranchPickerPrimitive.Next aria-label="Next message version">
+          ›
+        </BranchPickerPrimitive.Next>
+      </BranchPickerPrimitive.Root>
+    </ActionBarPrimitive.Root>
+  );
+}
+function MessageAttachment() {
+  const attachment = useAuiState((s) => s.attachment);
+  return (
+    <AttachmentPrimitive.Root className="ct-sent-file">
+      <AttachmentPrimitive.Name />
+      <div>
+        {attachment.content?.map((p, i) =>
+          p.type === "data" ? <ArtifactPart key={i} data={p.data} /> : null,
+        )}
+      </div>
+    </AttachmentPrimitive.Root>
+  );
+}
+const attachmentComponents = { Attachment: MessageAttachment };
+function AssistantMessage() {
+  return (
+    <MessagePrimitive.Root className="ct-message ct-assistant">
+      <div className="ct-message-meta">
+        <span className="ct-assistant-mark">s</span>
+        <strong>Screening assistant</strong>
+        <Timestamp />
+      </div>
+      <div className="ct-message-body">
+        <MessagePrimitive.Parts components={parts} />
+        <MessagePrimitive.Error>
+          <div className="ct-message-error" role="alert">
+            <X size={14} />
+            <ErrorPrimitive.Message />
+          </div>
+        </MessagePrimitive.Error>
+        <MessageActions />
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+function UserMessage() {
+  const editing = useAuiState((s) => s.message.composer.isEditing);
+  return (
+    <MessagePrimitive.Root className="ct-message ct-user">
+      <div className="ct-message-meta">
+        <strong>You</strong>
+        <Timestamp />
+      </div>
+      {editing ? (
+        <ComposerPrimitive.Root className="ct-edit-composer">
+          <ComposerPrimitive.Input aria-label="Edit your sent message" />
+          <div>
+            <ComposerPrimitive.Cancel className="ct-ghost-button">
+              Cancel
+            </ComposerPrimitive.Cancel>
+            <ComposerPrimitive.Send className="ct-solid-button">
+              Save and send
+            </ComposerPrimitive.Send>
+          </div>
+        </ComposerPrimitive.Root>
+      ) : (
+        <div className="ct-message-body">
+          <MessagePrimitive.Parts components={parts} />
+          <MessagePrimitive.Attachments components={attachmentComponents} />
+          <MessageActions user />
+        </div>
+      )}
+    </MessagePrimitive.Root>
+  );
+}
+const messageComponents = { AssistantMessage, UserMessage };
+function PendingAttachment() {
+  const scope = useContext(ChatScope);
+  const attachment = useAuiState((s) => s.attachment);
+  return (
+    <AttachmentPrimitive.Root className="ct-attachment-chip">
+      <FileText size={14} />
+      <AttachmentPrimitive.Name />
+      {attachment.status.type === "incomplete" && (
+        <span className="ct-error-copy">
+          {attachment.status.message ?? "Upload failed"}
+        </span>
+      )}
+      {attachment.status.type === "running" && (
+        <LoaderCircle size={12} className="spin" />
+      )}
+      {/\.pdf$/i.test(attachment.name) &&
+        "file" in attachment &&
+        attachment.file && (
+          <button
+            type="button"
+            className="ct-pending-preview"
+            aria-label={`Preview ${attachment.name}`}
+            title="Preview PDF"
+            onClick={() => scope.previewFile(attachment.file!)}
+          >
+            <Eye size={14} />
+          </button>
+        )}
+      <AttachmentPrimitive.Remove
+        title="Remove attachment"
+        aria-label={`Remove ${attachment.name}`}
+      >
+        <X size={12} />
+      </AttachmentPrimitive.Remove>
+    </AttachmentPrimitive.Root>
+  );
+}
+const pendingAttachmentComponents = { Attachment: PendingAttachment };
+function Queue() {
+  const count = useAuiState((s) => s.composer.queue.length);
+  if (!count) return null;
+  return (
+    <div className="ct-queue">
+      <span>{count} queued · sends when this step finishes</span>
+      <ComposerPrimitive.Queue>
+        {({ queueItem }) => (
+          <div key={queueItem.id}>
+            <ArrowUp size={12} />
+            <QueueItemPrimitive.Text />
+            <QueueItemPrimitive.Remove
+              title="Remove queued message"
+              aria-label="Remove queued message"
+            >
+              <X size={13} />
+            </QueueItemPrimitive.Remove>
+          </div>
+        )}
+      </ComposerPrimitive.Queue>
+    </div>
+  );
+}
+function ComposerMenus({ state }: { state: ChatState }) {
+  const aui = useAui();
+  const text = useAuiState((s) => s.composer.text);
+  const slash = /^\/\S*$/.test(text);
+  const mention = /^@\S*$/.test(text);
+  if (slash)
+    return (
+      <div className="ct-composer-menu" aria-label="Slash commands">
+        {commandPrompts
+          .filter((c) => c.command.startsWith(text))
+          .map((c) => (
+            <button
+              type="button"
+              key={c.command}
+              onClick={() => {
+                aui.composer().setText(c.command);
+                aui.composer().send();
+              }}
+            >
+              <code>{c.command}</code>
+              <span>
+                {c.title}
+                <small>{c.description}</small>
+              </span>
+            </button>
+          ))}
+      </div>
+    );
+  if (mention)
+    return (
+      <div className="ct-composer-menu" aria-label="Company mentions">
+        {state.companies
+          .filter((c) =>
+            `${c.name} ${c.pk}`
+              .toLowerCase()
+              .includes(text.slice(1).toLowerCase()),
+          )
+          .slice(0, 7)
+          .map((c) => (
+            <button
+              type="button"
+              key={c.pk}
+              onClick={() => {
+                aui.composer().setText(`@${c.pk} Show company context`);
+                aui.composer().send();
+              }}
+            >
+              <span>
+                {c.name}
+                <small>
+                  {c.pk} · {c.source}
+                </small>
+              </span>
+            </button>
+          ))}
+        {!state.companies.length && (
+          <p>Company mentions are available after discovery.</p>
+        )}
+      </div>
+    );
+  return null;
+}
+function ModelMenu() {
+  return (
+    <SelectField
+      className="ct-model-select"
+      label="Assistant service"
+      value="local"
+      onChange={() => {}}
+      icon={<span className="ct-model-logo">s</span>}
+      options={[
+        {
+          value: "local",
+          label: "Local tools",
+          description: "Tools and files on this computer",
+        },
+        ...["LLMSuite", "OpenAI", "DeepSeek", "M365 Copilot"].map((name) => ({
+          value: name,
+          label: name,
+          description: "Not connected",
+          disabled: true,
+        })),
+      ]}
+    />
+  );
+}
+function Conversation({
+  state,
+  onBusyChange,
+  captureSend,
+  captureComposer,
+}: {
+  state: ChatState;
+  onBusyChange: (busy: boolean) => void;
+  captureSend: (send: (text: string, action?: ArtifactAction) => void) => void;
+  captureComposer: (controls: ComposerControls) => void;
+}) {
+  const aui = useAui();
+  const scope = useContext(ChatScope);
+  const empty = useAuiState((s) => s.thread.isEmpty);
+  const running = useAuiState((s) => s.thread.isRunning);
+  const draftText = useAuiState((s) => s.composer.text);
+  const [attachmentFailure, setAttachmentFailure] = useState("");
+  useAuiEvent("composer.attachmentAddError", (event) => {
+    setAttachmentFailure(event.message);
+  });
+  useEffect(() => {
+    captureComposer({
+      setText: (text) => aui.composer().setText(text),
+      addFiles: async (files) => {
+        setAttachmentFailure("");
+        const errors = files
+          .map(attachmentError)
+          .filter((error) => error !== undefined);
+        if (errors.length) setAttachmentFailure(errors.join(" "));
+        const results = await Promise.allSettled(
+          files
+            .filter((file) => !attachmentError(file))
+            .map((file) => aui.composer().addAttachment(file)),
+        );
+        return results.filter((result) => result.status === "fulfilled").length;
+      },
+    });
+  }, [aui, captureComposer]);
+  const [hydratedSession, setHydratedSession] = useState<string>();
+  const threadElement = useRef<HTMLDivElement>(null);
+  const composerElement = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const composer = composerElement.current;
+    if (!composer) return;
+    const measure = () =>
+      threadElement.current?.style.setProperty(
+        "--composer-height",
+        `${Math.ceil(composer.getBoundingClientRect().height)}px`,
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(composer);
+    return () => observer.disconnect();
+  }, []);
+  const job = useSyncExternalStore(
+    subscribeJobs,
+    () => getJob(state.jobId),
+    () => undefined,
+  );
+  const connection = useSyncExternalStore(
+    subscribeJobs,
+    getJobsConnectionError,
+    () => "",
+  );
+  useEffect(() => onBusyChange(running), [running, onBusyChange]);
+  useEffect(() => {
+    captureSend((text, action) =>
+      aui.thread().append({
+        role: "user",
+        content: [{ type: "text", text }],
+        metadata: { custom: action ? { artifactAction: action } : {} },
+      }),
+    );
+  }, [aui, captureSend]);
+  useEffect(() => {
+    const key = `screening-draft:${state.sessionId}`;
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(key);
+    } catch {
+      /* Session storage warning is handled by the store. */
+    }
+    // An empty string is a saved draft too: restore it to clear stale composer
+    // text when switching between sessions in a reused chat shell.
+    aui.composer().setText(saved ?? "");
+    setHydratedSession(state.sessionId);
+  }, [aui, state.sessionId]);
+  useEffect(() => {
+    // The hydration effect updates assistant-ui synchronously, but this
+    // effect still closes over the previous render's draftText. Wait for the
+    // hydration state update before persisting anything for this session.
+    if (hydratedSession !== state.sessionId) return;
+    try {
+      localStorage.setItem(`screening-draft:${state.sessionId}`, draftText);
+    } catch {
+      /* Draft stays in the composer. */
+    }
+  }, [draftText, hydratedSession, state.sessionId]);
+  const stop = () => {
+    if (job?.state === "running") void stopJob(job.id).catch(() => {});
+    aui.thread().cancelRun();
+  };
+  return (
+    <ThreadPrimitive.Root className="ct-thread" ref={threadElement}>
+      <ThreadPrimitive.Viewport className="ct-viewport">
+        {empty && (
+          <div className="ct-welcome">
+            <h1>Start a screening</h1>
+            <p>
+              Describe the core business you want to find, or upload your
+              criteria. You approve the search before it runs.
+            </p>
+            <div className="ct-welcome-prompts">
+              <button
+                type="button"
+                onClick={() => aui.composer().setText("Find companies that ")}
+              >
+                <span>
+                  <strong>Write your criteria</strong>
+                  <small>Products, services, and customers</small>
+                </span>
+                <ArrowRight size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  aui.thread().append({
+                    role: "user",
+                    content: [{ type: "text", text: "/example" }],
+                  })
+                }
+              >
+                <span>
+                  <strong>Run the example</strong>
+                  <small>Fictional companies · working tools</small>
+                </span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
+            <div className="ct-welcome-hint">
+              <Paperclip size={14} />
+              Drop a DDI, mapping file, or company data here, or attach below.
+            </div>
+          </div>
+        )}
+        <div className="ct-messages">
+          <ThreadPrimitive.Messages components={messageComponents} />
+        </div>
+        {running && (
+          <div className="ct-live-status" role="status">
+            <span className="ct-status-pulse" />
+            {job?.state === "running"
+              ? "Running tools · saved in the session log"
+              : "Preparing your next step"}
+          </div>
+        )}
+        <ThreadPrimitive.ScrollToBottom
+          className="ct-scroll-bottom"
+          aria-label="Scroll to latest message"
+          title="Scroll to latest message"
+        >
+          <ArrowDown size={15} />
+        </ThreadPrimitive.ScrollToBottom>
+      </ThreadPrimitive.Viewport>
+      <div className="ct-composer-wrap" ref={composerElement}>
+        {connection && (
+          <p className="ct-connection-error" role="status">
+            {connection}
+          </p>
+        )}
+        {attachmentFailure && (
+          <div className="ct-attachment-error" role="alert">
+            <span>{attachmentFailure}</span>
+            <button
+              className="ct-icon-button"
+              type="button"
+              aria-label="Dismiss attachment error"
+              onClick={() => setAttachmentFailure("")}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        <Queue />
+        <div className="ct-composer-context">
+          <button type="button" onClick={scope.openContext}>
+            <span
+              className={`ct-status-dot ${approved(state) ? "ct-approved" : ""}`}
+            />
+            {approved(state)
+              ? "Criteria approved"
+              : state.criteriaText
+                ? "Criteria need review"
+                : "No criteria yet"}
+            <ChevronDown size={11} />
+          </button>
+          {state.companies.length > 0 && (
+            <span>{state.companies.length} companies</span>
+          )}
+          <Tooltip label="What the assistant uses">
+            Only the approved core business definition is used to search. MID
+            and ISCC scores remain separate. This runtime uses local tools;
+            external model and research services are off.
+          </Tooltip>
+        </div>
+        <ComposerPrimitive.Root className="ct-composer">
+          <ComposerMenus state={state} />
+          <div className="ct-attachment-list">
+            <ComposerPrimitive.Attachments
+              components={pendingAttachmentComponents}
+            />
+          </div>
+          <ComposerPrimitive.Input
+            placeholder="Describe a business, ask for a next step, or type /…"
+            aria-label="Message the screening assistant"
+          />
+          <div className="ct-composer-footer">
+            <div className="ct-composer-tools">
+              <ComposerPrimitive.AddAttachment
+                className="ct-icon-button"
+                aria-label="Attach files"
+                title="Attach DDI, PitchBook, or ROGO files"
+              >
+                <Paperclip size={17} />
+              </ComposerPrimitive.AddAttachment>
+              <button
+                className="ct-icon-button"
+                type="button"
+                onClick={scope.openPrompts}
+                aria-label="Open prompt library"
+                title="Editable starting prompts"
+              >
+                <List size={17} />
+              </button>
+              <ModelMenu />
+            </div>
+            <div className="ct-composer-send-area">
+              {running && (
+                <button
+                  className="ct-icon-button ct-stop"
+                  type="button"
+                  onClick={stop}
+                  aria-label="Stop current step"
+                  title="Stop tools; preserve completed work"
+                >
+                  <Square size={13} />
+                </button>
+              )}
+              <ComposerPrimitive.Send
+                className="ct-send"
+                aria-label={running ? "Queue message" : "Send message"}
+                title={running ? "Queue for after this step" : "Send message"}
+              >
+                <ArrowUp size={17} />
+              </ComposerPrimitive.Send>
+            </div>
+          </div>
+        </ComposerPrimitive.Root>
+        <p className="ct-composer-note">
+          Drop files here to attach. You approve the search before it runs.
+        </p>
+      </div>
+    </ThreadPrimitive.Root>
+  );
+}
+function ChatRuntime({
+  sessionId,
+  title,
+  onAction,
+  openLog,
+  openContext,
+  openPrompts,
+  onBusyChange,
+  captureSend,
+  captureComposer,
+  previewFile,
+}: {
+  sessionId: string;
+  title: string;
+  onAction: Scope["onAction"];
+  openLog: (eventId?: string) => void;
+  openContext: () => void;
+  openPrompts: () => void;
+  onBusyChange: (busy: boolean) => void;
+  captureSend: (send: (text: string, action?: ArtifactAction) => void) => void;
+  captureComposer: (controls: ComposerControls) => void;
+  previewFile: (file: File) => void;
+}) {
+  const state = useChatState(sessionId);
+  const adapter = useMemo(
+    () => createChatAdapter(sessionId, { openLog, title: () => title }),
+    [sessionId, title, openLog],
+  );
+  const attachments = useMemo(() => createFileAdapter(sessionId), [sessionId]);
+  const initialMessages = useMemo(() => transcriptFor(sessionId), [sessionId]);
+  const runtime = useLocalRuntime(adapter, {
+    initialMessages,
+    adapters: { attachments },
+    unstable_enableMessageQueue: true,
+    unstable_queueClearOnCancel: false,
+  });
+  useEffect(
+    () => () => {
+      runtime.thread.cancelRun();
+    },
+    [runtime],
+  );
+  useEffect(() => {
+    let importing = false;
+    const syncWorkspaceMessages = () => {
+      if (importing || runtime.thread.getState().isRunning) return;
+      const repository = runtime.thread.export();
+      const additions = pendingWorkspaceMessages(
+        sessionId,
+        repository.messages.map((item) => item.message.id),
+      );
+      if (!additions.length) return;
+      const next = appendWorkspaceMessages(repository, additions);
+      const activeIds = runtime.thread
+        .getState()
+        .messages.map((message) => message.id);
+      importing = true;
+      try {
+        updateChatState(sessionId, {
+          branchMessageIds: [
+            ...activeIds,
+            ...additions.map((message) => message.id!),
+          ],
+        });
+        runtime.thread.import(next);
+      } finally {
+        importing = false;
+      }
+    };
+    syncWorkspaceMessages();
+    const offSession = sessionStore.subscribe(syncWorkspaceMessages);
+    const offRuntime = runtime.thread.subscribe(syncWorkspaceMessages);
+    return () => {
+      offSession();
+      offRuntime();
+    };
+  }, [runtime, sessionId]);
+  useEffect(() => {
+    let syncing = false;
+    const syncBackground = () => {
+      if (syncing || runtime.thread.getState().isRunning) return;
+      const current = getChatState(sessionId),
+        job = getJob(current.jobId),
+        context = current.jobContext;
+      if (!job || !context || context.id !== job.id) return;
+      const repository = runtime.thread.export();
+      const existing = repository.messages.find(
+        (item) => item.message.id === context.messageId,
+      );
+      if (
+        !current.branchMessageIds.includes(context.messageId) &&
+        job.state !== "running"
+      )
+        return;
+      const content = jobContent(job);
+      if (
+        existing &&
+        JSON.stringify(existing.message.content) === JSON.stringify(content)
+      )
+        return;
+      const message = fromThreadMessageLike(
+        {
+          id: context.messageId,
+          role: "assistant",
+          createdAt: new Date(job.startedAt),
+          content,
+          status:
+            job.state === "error"
+              ? {
+                  type: "incomplete",
+                  reason: "error",
+                  error: job.error ?? "Search failed",
+                }
+              : { type: "complete", reason: "stop" },
+        },
+        context.messageId,
+        { type: "complete", reason: "stop" },
+      );
+      const index = current.branchMessageIds.indexOf(context.messageId);
+      const previous =
+        index > 0 ? current.branchMessageIds[index - 1] : repository.headId;
+      const parentId =
+        existing?.parentId ??
+        (repository.messages.some((item) => item.message.id === previous)
+          ? previous!
+          : (repository.headId ?? null));
+      const messages = existing
+        ? repository.messages.map((item) =>
+            item.message.id === context.messageId ? { ...item, message } : item,
+          )
+        : [...repository.messages, { message, parentId }];
+      syncing = true;
+      try {
+        runtime.thread.import({
+          headId: existing ? repository.headId : context.messageId,
+          messages,
+        });
+      } finally {
+        syncing = false;
+      }
+    };
+    syncBackground();
+    const offJobs = subscribeJobs(syncBackground),
+      offRuntime = runtime.thread.subscribe(syncBackground);
+    return () => {
+      offJobs();
+      offRuntime();
+    };
+  }, [runtime, sessionId]);
+  const scope = useMemo(
+    () => ({
+      sessionId,
+      onAction,
+      openLog,
+      openContext,
+      openPrompts,
+      previewFile,
+    }),
+    [sessionId, onAction, openLog, openContext, openPrompts, previewFile],
+  );
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ChatScope.Provider value={scope}>
+        <Conversation
+          state={state}
+          onBusyChange={onBusyChange}
+          captureSend={captureSend}
+          captureComposer={captureComposer}
+        />
+      </ChatScope.Provider>
+    </AssistantRuntimeProvider>
+  );
+}
+
+/** Keep one chat mounted across view switches while isolating each session's runtime. */
+export default function ChatThread(props: ComponentProps<typeof ChatRuntime>) {
+  return <ChatRuntime key={props.sessionId} {...props} />;
+}

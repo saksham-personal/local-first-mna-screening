@@ -1,0 +1,546 @@
+{
+  "search_companies": {
+    "run_id": "R42",
+    "query": "insurance AND (claims OR policy)",
+    "mode": "lexical",
+    "limit": 1000,
+    "prefer_meilisearch": false
+  },
+  "search_mid": {
+    "run_id": "R42",
+    "query": "policy administration software for insurance carriers",
+    "mode": "hybrid",
+    "limit": 1000,
+    "prefer_meilisearch": false
+  },
+  "find_company": {
+    "run_id": "R42",
+    "cid": "101"
+  },
+  "find_similar_companies": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "limit": 100
+  },
+  "find_similar_to_examples": {
+    "run_id": "R42",
+    "positive_company_ids": [
+      "100-101"
+    ],
+    "negative_company_ids": [
+      "300-303"
+    ],
+    "limit": 100
+  },
+  "get_company": {
+    "company_id": "100-101"
+  },
+  "get_company_identifiers": {
+    "company_id": "CID:101"
+  },
+  "get_source_rows": {
+    "company_id": "100-101",
+    "source": "ISCC",
+    "limit": 20
+  },
+  "get_company_context": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "sections": [
+      "core",
+      "description",
+      "identifiers",
+      "enrichment",
+      "evidence",
+      "screening_results"
+    ],
+    "max_chars": 16000
+  },
+  "get_candidate_context": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "max_chars": 18000
+  },
+  "get_candidate_batch_context": {
+    "run_id": "R42",
+    "company_ids": [
+      "100-101",
+      "200-202"
+    ],
+    "fields": [
+      "name",
+      "description",
+      "PB_Description",
+      "ROGO",
+      "screening_results"
+    ],
+    "max_per_company": 8000
+  },
+  "get_run_source_projection": {
+    "run_id": "R42",
+    "company_ids": [
+      "100-101",
+      "200-202"
+    ],
+    "selected_source_columns": [
+      {
+        "source": "MID",
+        "column": "Sector"
+      }
+    ],
+    "identity_sources": {
+      "name": [
+        "PB",
+        "MID",
+        "ISCC"
+      ],
+      "website": [
+        "PB",
+        "MID",
+        "ISCC"
+      ],
+      "description": [
+        "PB",
+        "MID",
+        "ISCC"
+      ]
+    },
+    "input_columns": [
+      "index",
+      "pk",
+      "PBId",
+      "Company Name",
+      "Website",
+      "Description",
+      "LinkedIn URL",
+      "MID:Sector"
+    ]
+  },
+  "get_source_field_catalog": {
+    "run_id": "R42"
+  },
+  "build_context_packet": {
+    "run_id": "R42",
+    "task_type": "SCREEN_CANDIDATES",
+    "subject_ids": [
+      "100-101",
+      "200-202"
+    ],
+    "token_budget": 24000
+  },
+  "get_run_context": {
+    "run_id": "R42",
+    "detail_level": "full"
+  },
+  "get_original_criteria": {
+    "run_id": "R42"
+  },
+  "get_active_screening_profile": {
+    "run_id": "R42"
+  },
+  "get_screening_profile_version": {
+    "run_id": "R42",
+    "version": 2
+  },
+  "compare_profile_versions": {
+    "run_id": "R42",
+    "version_a": 1,
+    "version_b": 2
+  },
+  "propose_screening_profile": {
+    "run_id": "R42",
+    "content": {
+      "core_business_query": "insurance claims and policy administration software",
+      "core_business_criteria": [
+        "Owns a repeatable insurer workflow product"
+      ],
+      "unused_criteria": [
+        {
+          "criterion": "India headquarters",
+          "reason": "Geography is recorded but not used for discovery"
+        }
+      ]
+    },
+    "rationale": "Analyst clarified that claims workflow is in scope",
+    "supporting_example_ids": [
+      "100-101"
+    ]
+  },
+  "get_search_policy": {
+    "run_id": "R42"
+  },
+  "label_company": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "label": "BEST_FIT",
+    "analyst_note": "Analyst: this owned policy-administration product is a good example"
+  },
+  "get_labelled_examples": {
+    "run_id": "R42",
+    "labels": [
+      "BEST_FIT",
+      "MISFIT"
+    ],
+    "limit": 50
+  },
+  "get_representative_examples": {
+    "run_id": "R42",
+    "target_query": "policy administration product",
+    "per_label": 3,
+    "limit": 12
+  },
+  "save_evidence": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "claim": "products",
+    "value": [
+      "Policy administration SaaS"
+    ],
+    "source_type": "company_website",
+    "source_reference": "https://policynest.example/products",
+    "source_url": "https://policynest.example/products",
+    "evidence_confidence": "low",
+    "claim_provenance": {
+      "page_title": "Products",
+      "excerpt_hash": "sha256:returned-by-controller"
+    },
+    "extraction_method": "Unverified research lead; analyst review is pending"
+  },
+  "get_evidence": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "claims": [
+      "products",
+      "customer_segment"
+    ],
+    "limit": 100
+  },
+  "get_missing_evidence": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "required_attributes": [
+      "products",
+      "business_model",
+      "customer_segment"
+    ]
+  },
+  "search_iscc": {
+    "run_id": "R42",
+    "query": "Policy administration and claims workflow software platforms built for insurance carriers",
+    "limit": 1000
+  },
+  "get_iscc_score_samples": {
+    "run_id": "R42",
+    "query_id": "QRY-returned-iscc-id",
+    "per_band": 4,
+    "min_score": 0.3
+  },
+  "bing_search": {
+    "run_id": "R42",
+    "plan_id": "PLAN-returned-id",
+    "step_id": "bing-fit",
+    "company_id": "100-101",
+    "query": "Does PolicyNest; https://policynest.example build policy administration software?",
+    "max_results": 10
+  },
+  "m365_research": {
+    "run_id": "R42",
+    "plan_id": "PLAN-returned-id",
+    "step_id": "internal-research",
+    "question": "What policy-administration products does this company build?",
+    "company_ids": [
+      "100-101"
+    ],
+    "required_fields": [
+      "products",
+      "customer_segment"
+    ]
+  },
+  "fetch_url": {
+    "run_id": "R42",
+    "url": "https://policynest.example/products",
+    "max_bytes": 1000000,
+    "timeout_secs": 15,
+    "use_cache": true
+  },
+  "extract_url_context": {
+    "run_id": "R42",
+    "url": "https://policynest.example/products",
+    "content": "<main>PolicyNest builds policy administration software for insurance carriers.</main>",
+    "extraction_goal": "Find owned software products and customer segment",
+    "query_terms": [
+      "policy",
+      "insurance"
+    ],
+    "max_chars": 6000
+  },
+  "search_research_memory": {
+    "run_id": "R42",
+    "query": "policy administration",
+    "company_id": "100-101",
+    "limit": 20
+  },
+  "get_previous_research": {
+    "company_id": "100-101",
+    "limit": 20
+  },
+  "get_recent_agent_events": {
+    "run_id": "R42",
+    "event_types": [
+      "SCREENING_PROFILE_APPROVED",
+      "CANDIDATES_ADDED"
+    ],
+    "limit": 25
+  },
+  "get_search_history": {
+    "run_id": "R42",
+    "source": "search_iscc",
+    "limit": 20
+  },
+  "get_open_questions": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "include_resolved": false,
+    "limit": 100
+  },
+  "add_open_question": {
+    "run_id": "R42",
+    "question": "Do the screening criteria include claims workflow vendors or only policy administration?",
+    "priority": "high"
+  },
+  "resolve_open_question": {
+    "question_id": "QUE-returned-id",
+    "answer": "Analyst confirmed that claims workflow products are included",
+    "evidence_ids": []
+  },
+  "add_candidates": {
+    "run_id": "R42",
+    "companies": [
+      {
+        "company_id": "100-101",
+        "retrieval_score": 0.81,
+        "rank": 1
+      },
+      {
+        "company_id": "200-202",
+        "retrieval_score": 0.62,
+        "rank": 2
+      }
+    ],
+    "discovery_source": "ISCC",
+    "query_id": "QRY-returned-iscc-id"
+  },
+  "get_candidate_set": {
+    "run_id": "R42",
+    "statuses": [
+      "DISCOVERED",
+      "RESEARCH_REQUIRED"
+    ],
+    "limit": 1000
+  },
+  "update_candidate_status": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "status": "RESEARCH_REQUIRED",
+    "reason": "Source description suggests a policy product; verify that the company owns it"
+  },
+  "get_discovery_summary": {
+    "run_id": "R42"
+  },
+  "import_enrichment_files": {
+    "run_id": "R42",
+    "files": [
+      "upload-a.xlsx",
+      "upload-b.csv",
+      "upload-c.xlsx"
+    ]
+  },
+  "export_candidate_set": {
+    "run_id": "R42",
+    "export_type": "FULL",
+    "file_name": "R42-full.xlsx"
+  },
+  "propose_action_plan": {
+    "run_id": "R42",
+    "rationale": "Analyst requested PitchBook mapping followed by ROGO enrichment",
+    "steps": [
+      {
+        "step_id": "pb",
+        "kind": "import_pitchbook",
+        "parameters": {
+          "files": [
+            "mapping.csv",
+            "pb.xlsx"
+          ]
+        }
+      },
+      {
+        "step_id": "rogo",
+        "kind": "import_rogo",
+        "depends_on": [
+          "pb"
+        ],
+        "parameters": {
+          "files": [
+            "rogo.xlsx"
+          ]
+        }
+      }
+    ]
+  },
+  "get_action_plan": {
+    "run_id": "R42",
+    "plan_id": "PLAN-returned-id"
+  },
+  "prepare_screening_batch": {
+    "run_id": "R42",
+    "plan_id": "PLAN-returned-id",
+    "step_id": "fit",
+    "engine": "llm_suite",
+    "company_ids": [
+      "100-101",
+      "200-202"
+    ],
+    "prompt": "Score core-business fit from 0 to 10. Use CHECK when product ownership is unclear. Explain evidence and gaps. Ignore geography and company size.",
+    "output_columns": [
+      "fit_score",
+      "rationale",
+      "product_ownership"
+    ]
+  },
+  "prepare_bing_queries": {
+    "run_id": "R42",
+    "plan_id": "PLAN-returned-id",
+    "step_id": "bing-fit",
+    "company_ids": [
+      "100-101",
+      "200-202"
+    ]
+  },
+  "save_screening_results": {
+    "run_id": "R42",
+    "plan_id": "PLAN-returned-id",
+    "step_id": "fit",
+    "batch_id": "BATCH-returned-id",
+    "results": [
+      {
+        "company_id": "100-101",
+        "fit_score": "CHECK",
+        "rationale": "Legacy-debug example only; replace with the actual provider response"
+      }
+    ]
+  },
+  "get_screening_results": {
+    "run_id": "R42",
+    "company_id": "100-101",
+    "limit": 100
+  },
+  "complete_action_step": {
+    "run_id": "R42",
+    "plan_id": "PLAN-returned-id",
+    "step_id": "fit",
+    "receipt_ids": [
+      "OP-returned-id"
+    ]
+  },
+  "save_checkpoint": {
+    "run_id": "R42",
+    "namespace": "discovery",
+    "expected_sequence": 0,
+    "state": {
+      "profile_version": 1,
+      "phase": "candidate_review",
+      "completed_query_ids": [
+        "QRY-returned-mid-id"
+      ],
+      "next_action": "await_analyst_selection"
+    }
+  },
+  "get_checkpoint": {
+    "run_id": "R42",
+    "namespace": "discovery"
+  },
+  "get_candidate_source_data": {
+    "run_id": "R42",
+    "limit": 50
+  },
+  "get_retrieval_config": {},
+  "embed_texts": {
+    "texts": [
+      "Insurance policy administration and claims workflow software"
+    ]
+  },
+  "rerank_candidates": {
+    "run_id": "R42",
+    "query": "insurance policy administration software",
+    "candidates": [
+      {
+        "company_id": "100-101",
+        "description": "Builds policy administration software for insurers",
+        "source": "MID",
+        "query_id": "QRY-returned-mid-id"
+      }
+    ]
+  },
+  "propose_prepared_plan": {
+    "run_id": "R42",
+    "mode": "screening",
+    "provider": "llm_suite",
+    "deployment": "",
+    "prompt": "For each indexed company, assess core-business product fit. Return one table with Fit Score and Rationale; use CHECK when evidence is insufficient.",
+    "company_ids": [],
+    "source_columns": [
+      {
+        "source": "MID",
+        "column": "Sector"
+      }
+    ],
+    "identity_sources": {
+      "name": [
+        "PB",
+        "MID",
+        "ISCC"
+      ],
+      "website": [
+        "PB",
+        "MID",
+        "ISCC"
+      ],
+      "description": [
+        "PB",
+        "MID",
+        "ISCC"
+      ]
+    },
+    "input_columns": [
+      "index",
+      "pk",
+      "PBId",
+      "Company Name",
+      "Website",
+      "Description",
+      "LinkedIn URL",
+      "MID:Sector"
+    ],
+    "output_columns": [
+      "Fit Score",
+      "Rationale"
+    ],
+    "score_columns": [
+      "Fit Score"
+    ],
+    "batch_size": 50,
+    "provider_options": {},
+    "retrieval_configuration": {}
+  },
+  "get_prepared_plan": {
+    "plan_id": "PPLAN-returned-id"
+  },
+  "get_execution_job": {
+    "job_id": "JOB-returned-id"
+  },
+  "get_model_assessments": {
+    "run_id": "R42",
+    "plan_id": "PPLAN-returned-id"
+  }
+}

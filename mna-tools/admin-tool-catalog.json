@@ -1,0 +1,663 @@
+[
+  {
+    "controller_only": false,
+    "endpoint": "/admin/companies",
+    "input_schema": {
+      "$defs": {
+        "CompanyInput": {
+          "additionalProperties": false,
+          "properties": {
+            "city": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "company_id": {
+              "type": "string"
+            },
+            "country": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "embedding": {
+              "default": null,
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "employees": {
+              "default": null,
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "industry": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keywords": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "linkedin_url": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "metadata": {
+              "default": null
+            },
+            "name": {
+              "type": "string"
+            },
+            "ownership": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "products": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "revenue": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "services": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "sub_industry": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "website": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "company_id",
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "companies": {
+          "items": {
+            "$ref": "#/$defs/CompanyInput"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "companies"
+      ],
+      "title": "IngestArgs",
+      "type": "object"
+    },
+    "name": "ingest_companies"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/runs",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "initial_profile": {
+          "default": null
+        },
+        "objective": {
+          "type": "string"
+        },
+        "original_criteria": true,
+        "run_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "objective",
+        "original_criteria"
+      ],
+      "title": "CreateRunArgs",
+      "type": "object"
+    },
+    "name": "create_run"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/profiles/approve",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "approved_by": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "version": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "version"
+      ],
+      "title": "ApproveProfileArgs",
+      "type": "object"
+    },
+    "name": "approve_screening_profile"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/index",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "batch_size": {
+          "default": 500,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "full_rebuild": {
+          "default": false,
+          "type": "boolean"
+        },
+        "limit": {
+          "default": 200000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_timeout_secs": {
+          "default": 30,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wait_for_completion": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "title": "SyncIndexArgs",
+      "type": "object"
+    },
+    "name": "sync_search_index"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/company-files",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "title": "ImportCompanyFilesArgs",
+      "type": "object"
+    },
+    "name": "import_company_files"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/actions/approve",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "approve": {
+          "type": "boolean"
+        },
+        "approved_by": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id",
+        "approved_by",
+        "approve"
+      ],
+      "title": "ApproveArgs",
+      "type": "object"
+    },
+    "name": "approve_action_plan"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/prepared-plan-approve",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "approval_key": {
+          "type": "string"
+        },
+        "approved_by": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "digest",
+        "approved_by",
+        "approval_key"
+      ],
+      "title": "ApproveArgs",
+      "type": "object"
+    },
+    "name": "approve_prepared_plan"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/prepared-plan-cancel",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cancelled_by": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "cancelled_by"
+      ],
+      "title": "CancelArgs",
+      "type": "object"
+    },
+    "name": "cancel_prepared_plan"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/evidence-review",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "type": "string"
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reviewed_by": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "evidence_id",
+        "reviewed_by",
+        "decision",
+        "reason"
+      ],
+      "title": "ReviewArgs",
+      "type": "object"
+    },
+    "name": "review_evidence_claim"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/execution-lease",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "controller_id": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "controller_id"
+      ],
+      "title": "LeaseArgs",
+      "type": "object"
+    },
+    "name": "lease_execution_job"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/execution-mark",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "lease_token",
+        "request_key"
+      ],
+      "title": "DispatchArgs",
+      "type": "object"
+    },
+    "name": "mark_execution_dispatch"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/execution-response",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "response_text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "lease_token",
+        "response_text"
+      ],
+      "title": "ResponseArgs",
+      "type": "object"
+    },
+    "name": "record_execution_response"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/llmsuite-slot",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "purpose": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "purpose",
+        "request_key"
+      ],
+      "title": "SlotArgs",
+      "type": "object"
+    },
+    "name": "reserve_llmsuite_slot"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/execution-reconcile",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "response_text": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "job_id",
+        "attempt",
+        "outcome",
+        "reason"
+      ],
+      "title": "ReconcileArgs",
+      "type": "object"
+    },
+    "name": "reconcile_execution_job"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/execution-failure",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "retry_after_seconds": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "job_id",
+        "lease_token",
+        "kind",
+        "reason"
+      ],
+      "title": "FailureArgs",
+      "type": "object"
+    },
+    "name": "record_execution_failure"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/llmsuite-consume",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "purpose": {
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "purpose",
+        "request_key"
+      ],
+      "title": "SlotArgs",
+      "type": "object"
+    },
+    "name": "consume_llmsuite_slot"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/execution-dispatch",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "controller_id": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "controller_id"
+      ],
+      "title": "DispatchRequest",
+      "type": "object"
+    },
+    "name": "dispatch_execution_job"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/embedding-index",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after_company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "batch_size": {
+          "default": 16,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "limit": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "title": "RebuildEmbeddingsArgs",
+      "type": "object"
+    },
+    "name": "rebuild_embedding_index"
+  }
+]

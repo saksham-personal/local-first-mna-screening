@@ -1,0 +1,39 @@
+# Build outputs and local dependencies
+**/target/
+**/node_modules/
+**/dist/
+**/.pnpm-store/
+**/.check/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+**/venv/
+
+# Local state, test output, and logs
+**/data/
+**/.screening-data/
+**/output/
+**/.playwright-cli/
+**/.agents/
+**/*.log
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.sqlite
+**/*.sqlite3
+
+# Secrets and local configuration
+.env*
+!.env.example
+**/.env*
+!**/.env.example
+**/config.local.json
+
+# Generated delivery files
+/mna-tools-windows-x64.exe
+/mna-tools-source.zip
+/mna-ui-source.zip
+/mna-orchestrator-source.zip
+/delivery-manifest.json

@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+.check/
+dist/
+*.log
+.playwright-cli/
+output/
+.screening-data/
+.impeccable/config.local.json
