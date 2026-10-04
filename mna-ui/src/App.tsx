@@ -6,6 +6,9 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import {
@@ -16,6 +19,7 @@ import {
   Command,
   FileText,
   FolderOpen,
+  GripVertical,
   LayoutDashboard,
   List,
   Menu,
@@ -68,7 +72,24 @@ const SetupController = lazy(() => import("./screening/SetupController"));
 
 type Panel = "context" | "artifacts" | "runs" | null;
 type Dialog = "commands" | "prompts" | "criteria" | null;
+type ResizeSide = "navigation" | "inspector";
 const interfaceKey = "screening-interface-v1";
+const navigationWidthKey = "screening-navigation-width-v1";
+const inspectorWidthKey = "screening-inspector-width-v1";
+const navigationMinWidth = 220;
+const inspectorMinWidth = 300;
+function savedWidth(key: string, fallback: number, min: number, max: number) {
+  try {
+    const value = Number(localStorage.getItem(key));
+    if (Number.isFinite(value) && value >= min && value <= max) return value;
+  } catch {
+    /* Local storage is optional. */
+  }
+  return fallback;
+}
+function boundedWidth(value: number, min: number, max: number) {
+  return Math.round(Math.min(Math.max(value, min), Math.max(min, max)));
+}
 function initialInterface(): "chat" | "workspace" {
   try {
     return localStorage.getItem(interfaceKey) === "workspace"
@@ -366,6 +387,32 @@ export default function App() {
     [sidebar, setSidebar] = useState(true),
     [mobileNav, setMobileNav] = useState(false),
     [threadQuery, setThreadQuery] = useState("");
+  const [navigationWidth, setNavigationWidth] = useState(() =>
+    savedWidth(navigationWidthKey, 236, navigationMinWidth, 460),
+  );
+  const [inspectorWidth, setInspectorWidth] = useState(() =>
+    savedWidth(inspectorWidthKey, window.innerWidth <= 1150 ? 320 : 420, inspectorMinWidth, 900),
+  );
+  const [inspectorExpanded, setInspectorExpanded] = useState(false);
+  const previousInspectorWidth = useRef(inspectorWidth);
+  const activeResize = useRef<{
+    side: ResizeSide;
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+  } | undefined>(undefined);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(navigationWidthKey, String(navigationWidth));
+        if (!inspectorExpanded)
+          localStorage.setItem(inspectorWidthKey, String(inspectorWidth));
+      } catch {
+        /* Resizing still works without saved preferences. */
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [navigationWidth, inspectorWidth, inspectorExpanded]);
   const [compact, setCompact] = useState(
     () => window.matchMedia("(max-width: 1000px)").matches,
   );
@@ -393,6 +440,7 @@ export default function App() {
     [toast, setToast] = useState("");
   const [chatExpanded, setChatExpanded] = useState(false);
   const [preview, setPreview] = useState<{ file: StagedFile; url?: string }>();
+  const [newName, setNewName] = useState<string>();
   const [rename, setRename] = useState<string>();
   const [screeningSetup, setScreeningSetup] = useState<{
     key: string;
@@ -669,13 +717,107 @@ export default function App() {
     setBusy(false);
     setScreeningSetup(undefined);
   };
-  const newSession = () => {
-    sessionStore.createSession("New screening");
+  const newSession = (title: string) => {
+    sessionStore.createSession(title);
+    setNewName(undefined);
     setMobileNav(false);
     setPanel(null);
     setPreview(undefined);
     setBusy(false);
     setScreeningSetup(undefined);
+  };
+  const maximumWidth = (side: ResizeSide) => {
+    if (side === "navigation") {
+      const inspectorSpace =
+        mode === "chat" && panel && window.innerWidth > 980
+          ? inspectorMinWidth
+          : 0;
+      return Math.max(
+        navigationMinWidth,
+        Math.min(460, window.innerWidth - inspectorSpace - 320),
+      );
+    }
+    const navigationSpace =
+      sidebar && window.innerWidth > 760
+        ? Math.min(
+            navigationWidth,
+            window.innerWidth <= 980 ? window.innerWidth * 0.32 : navigationWidth,
+          )
+        : 0;
+    const chatSpace = mode === "chat" && window.innerWidth > 980 ? 320 : 16;
+    return Math.min(900, window.innerWidth - navigationSpace - chatSpace);
+  };
+  const startResize = (
+    side: ResizeSide,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    activeResize.current = {
+      side,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth:
+        event.currentTarget.parentElement?.getBoundingClientRect().width ??
+        (side === "navigation" ? navigationWidth : inspectorWidth),
+    };
+    if (side === "inspector") setInspectorExpanded(false);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const active = activeResize.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    const change = event.clientX - active.startX;
+    const width = boundedWidth(
+      active.startWidth + (active.side === "navigation" ? change : -change),
+      active.side === "navigation" ? navigationMinWidth : inspectorMinWidth,
+      maximumWidth(active.side),
+    );
+    if (active.side === "navigation") setNavigationWidth(width);
+    else setInspectorWidth(width);
+  };
+  const stopResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (activeResize.current?.pointerId !== event.pointerId) return;
+    activeResize.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const resizeWithKeyboard = (
+    side: ResizeSide,
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const step = event.shiftKey ? 40 : 20;
+    const direction = side === "navigation" ? 1 : -1;
+    const current = side === "navigation" ? navigationWidth : inspectorWidth;
+    let next = current;
+    if (event.key === "Home") next = side === "navigation" ? navigationMinWidth : inspectorMinWidth;
+    else if (event.key === "End") next = maximumWidth(side);
+    else if (event.key === "ArrowRight") next += direction * step;
+    else if (event.key === "ArrowLeft") next -= direction * step;
+    else return;
+    event.preventDefault();
+    next = boundedWidth(
+      next,
+      side === "navigation" ? navigationMinWidth : inspectorMinWidth,
+      maximumWidth(side),
+    );
+    if (side === "navigation") setNavigationWidth(next);
+    else {
+      setInspectorWidth(next);
+      setInspectorExpanded(false);
+    }
+  };
+  const toggleInspectorSize = () => {
+    if (inspectorExpanded) {
+      setInspectorWidth(previousInspectorWidth.current);
+      setInspectorExpanded(false);
+    } else {
+      previousInspectorWidth.current = inspectorWidth;
+      setInspectorWidth(
+        boundedWidth(maximumWidth("inspector"), inspectorMinWidth, 900),
+      );
+      setInspectorExpanded(true);
+    }
   };
   const runningSessions = snapshot.sessions.filter(
     (s) => getJob(getChatState(s.id).jobId)?.state === "running",
@@ -684,6 +826,12 @@ export default function App() {
     <div
       data-interface={mode}
       className={`ct-app ${sidebar ? "" : "ct-sidebar-collapsed"} ${mode === "workspace" ? "ct-workspace-mode" : ""}`}
+      style={
+        {
+          "--ct-navigation-width": `${navigationWidth}px`,
+          "--ct-inspector-width": `${inspectorWidth}px`,
+        } as CSSProperties
+      }
     >
       {mobileNav && (
         <button
@@ -720,7 +868,11 @@ export default function App() {
             <PanelLeftClose size={17} />
           </button>
         </div>
-        <button className="ct-new-thread" type="button" onClick={newSession}>
+        <button
+          className="ct-new-thread"
+          type="button"
+          onClick={() => setNewName("")}
+        >
           <Plus size={16} />
           New screening
         </button>
@@ -781,6 +933,24 @@ export default function App() {
               last while the local server runs.
             </Tooltip>
           </div>
+        </div>
+        <div
+          className="ct-resize-handle ct-resize-navigation"
+          role="separator"
+          aria-label="Resize navigation"
+          aria-orientation="vertical"
+          aria-valuemin={navigationMinWidth}
+          aria-valuemax={maximumWidth("navigation")}
+          aria-valuenow={navigationWidth}
+          tabIndex={0}
+          title="Drag to resize navigation, or use the arrow keys"
+          onPointerDown={(event) => startResize("navigation", event)}
+          onPointerMove={moveResize}
+          onPointerUp={stopResize}
+          onPointerCancel={stopResize}
+          onKeyDown={(event) => resizeWithKeyboard("navigation", event)}
+        >
+          <GripVertical size={14} />
         </div>
       </aside>
       <main className="ct-main">
@@ -989,6 +1159,24 @@ export default function App() {
                     : "Background runs"
               }
             >
+              <div
+                className="ct-resize-handle ct-resize-inspector"
+                role="separator"
+                aria-label="Resize side panel"
+                aria-orientation="vertical"
+                aria-valuemin={inspectorMinWidth}
+                aria-valuemax={maximumWidth("inspector")}
+                aria-valuenow={inspectorWidth}
+                tabIndex={0}
+                title="Drag to resize the panel, or use the arrow keys"
+                onPointerDown={(event) => startResize("inspector", event)}
+                onPointerMove={moveResize}
+                onPointerUp={stopResize}
+                onPointerCancel={stopResize}
+                onKeyDown={(event) => resizeWithKeyboard("inspector", event)}
+              >
+                <GripVertical size={14} />
+              </div>
               <div className="ct-inspector-head">
                 <h2>
                   {panel === "context"
@@ -997,15 +1185,26 @@ export default function App() {
                       ? "Files and results"
                       : "Background runs"}
                 </h2>
-                <button
-                  className="ct-icon-button"
-                  type="button"
-                  onClick={() => setPanel(null)}
-                  aria-label="Close panel"
-                  title="Close panel"
-                >
-                  <X size={16} />
-                </button>
+                <div className="ct-inspector-actions">
+                  <button
+                    className="ct-icon-button"
+                    type="button"
+                    onClick={toggleInspectorSize}
+                    aria-label={inspectorExpanded ? "Restore panel size" : "Expand panel"}
+                    title={inspectorExpanded ? "Restore panel size" : "Expand panel"}
+                  >
+                    {inspectorExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                  <button
+                    className="ct-icon-button"
+                    type="button"
+                    onClick={() => setPanel(null)}
+                    aria-label="Close panel"
+                    title="Close panel"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
               </div>
               {panel === "context" ? (
                 <div className="ct-context-content">
@@ -1179,6 +1378,45 @@ export default function App() {
         onClose={() => setLog(false)}
         onExport={exportLog}
       />
+      {newName !== undefined && (
+        <Modal title="New screening" onClose={() => setNewName(undefined)}>
+          <form
+            className="ct-rename-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const title = newName.trim();
+              if (title) newSession(title);
+            }}
+          >
+            <label>
+              Screening name
+              <input
+                value={newName}
+                onChange={(event) => setNewName(event.target.value)}
+                placeholder="e.g. Insurance claims software"
+                maxLength={160}
+                required
+              />
+            </label>
+            <div className="ct-dialog-actions">
+              <button
+                className="ct-ghost-button"
+                type="button"
+                onClick={() => setNewName(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                className="ct-solid-button"
+                type="submit"
+                disabled={!newName.trim()}
+              >
+                Create screening
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
       {rename !== undefined && (
         <Modal title="Rename screening" onClose={() => setRename(undefined)}>
           <form

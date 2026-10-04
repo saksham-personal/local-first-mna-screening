@@ -628,7 +628,8 @@ dd {
   position: absolute;
   z-index: 45;
   inset: 0 0 0 auto;
-  width: min(360px, 100%);
+  width: min(var(--ct-inspector-width, 420px), 100%);
+  max-width: 100%;
   box-shadow: -12px 0 38px var(--shadow-color);
 }
 .ct-chat-docked .ct-viewport {
