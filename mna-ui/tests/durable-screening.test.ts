@@ -13,9 +13,11 @@ const row = {
   provenance: {},
 };
 
-function fixture({ stale = false } = {}) {
+function fixture({ stale = false, model = "deployment", deployment = () => "" }: {
+  stale?: boolean; model?: string; deployment?: () => string;
+} = {}) {
   const calls: Array<{ tool: string; args: Record<string, any>; approved: boolean }> = [];
-  const config = { ...defaultScreeningConfig("copilot", "screening", "insurance"), model: "deployment" };
+  const config = { ...defaultScreeningConfig("copilot", "screening", "insurance"), model };
   const catalog = buildCatalog([row]);
   const frozen = projectRows([row], config)[0];
   const plan = {
@@ -37,8 +39,30 @@ function fixture({ stale = false } = {}) {
     if (tool === "get_prepared_plan") return plan;
     throw new Error(`Unexpected call ${tool}`);
   };
-  return { service: createDurableScreeningPreparation({ call, now: () => 10_000 }), calls, config };
+  return { service: createDurableScreeningPreparation({ call, now: () => 10_000, deployment }), calls, config };
 }
+
+test("automatic screening prepares without a deployment and keeps execution unavailable", async () => {
+  const f = fixture({ model: "" });
+  const { preview } = await f.service.preview({ runId: "run-1", config: f.config });
+  assert.equal(f.calls.find((entry) => entry.tool === "propose_prepared_plan")?.args.deployment, "automatic");
+  assert.deepEqual(preview.warnings, []);
+  const { prepared } = await f.service.approve({ runId: "run-1", config: f.config, fingerprint: preview.fingerprint, approved: true });
+  assert.equal(prepared.model, "automatic");
+  assert.equal(prepared.config.model, prepared.model);
+  assert.equal(prepared.executed, false);
+});
+
+test("configured automatic model is frozen in the approved proposal", async () => {
+  let configured = "configured-m365";
+  const f = fixture({ model: "", deployment: () => configured });
+  const { preview } = await f.service.preview({ runId: "run-1", config: f.config });
+  assert.equal(f.calls.find((entry) => entry.tool === "propose_prepared_plan")?.args.deployment, configured);
+  configured = "changed-after-preview";
+  const { prepared } = await f.service.approve({ runId: "run-1", config: f.config, fingerprint: preview.fingerprint, approved: true });
+  assert.equal(prepared.model, "configured-m365");
+  assert.equal(prepared.config.model, prepared.model);
+});
 
 test("durable preview uses the backend digest and approval returns the frozen prepared plan", async () => {
   const f = fixture();

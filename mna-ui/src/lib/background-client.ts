@@ -2,6 +2,8 @@ import type { BackgroundRunView } from "../screening/BackgroundRuns";
 import type { PreparedScreening } from "./screening-contract";
 import { artifactBase, getChatState, mirrorWorkspace, patchArtifact, saveArtifact, updateChatState } from "./chat-store";
 import { sessionStore } from "./session-store";
+import { refreshCompanyContext } from "./company-data-client";
+import { refreshShortlist } from "./review-client";
 
 type Trace = { id: string; tool: string; args: Record<string, unknown>; status: "running" | "success" | "error"; startedAt: string; finishedAt?: string; result?: unknown; error?: string };
 export type BackgroundJob = BackgroundRunView & { planId: string; runId: string; sessionId?: string; digest: string; executed: boolean; events?: Trace[] };
@@ -54,11 +56,12 @@ export async function backgroundAction(id: string, action: "pause" | "resume" | 
       for (const answer of result.answers ?? []) rows.push({ index: "", pk: "", "Company Name": "", Website: "", Answer: answer.answer });
       rows.sort((a, b) => Number(a.index) - Number(b.index));
       const existing = state.artifacts.find(a => a.type === "data-table" && a.planId === previous.planId);
-      const data = { rows, columns: [...new Set(rows.flatMap(row => Object.keys(row)))], note: `${result.job.completed} completed batches. These are accepted model assessments, separate from retrieval scores and verified evidence.`, planId: previous.planId };
+      const data = { rows, columns: [...new Set(rows.flatMap(row => Object.keys(row)))], note: `${result.job.completed} completed batches. Review scores to keep matches, then choose the output columns to reuse in future screening.`, planId: previous.planId, reviewable: true };
       if (existing) patchArtifact(sessionId, existing.id, data);
       const artifact = existing ? getChatState(sessionId).artifacts.find(a => a.id === existing.id) : saveArtifact(sessionId, { ...artifactBase("Screening results"), type: "data-table", ...data });
       const next = updateChatState(sessionId, s => ({ ...s, companies: s.companies.map(company => ({ ...company, enrichment: { ...company.enrichment, [`Assessment:${previous.planId}`]: assessments.filter(row => row.company_id === company.pk).map(row => row.result) } })) }));
       mirrorWorkspace(next);
+      if (state.backendRunId) { await refreshCompanyContext(sessionId, state.backendRunId); await refreshShortlist(sessionId, state.backendRunId); }
       if (artifact && (!existing || previous.staged !== result.job.staged)) {
         const messageId = crypto.randomUUID();
         updateChatState(sessionId, s => ({ ...s, branchMessageIds: [...s.branchMessageIds, messageId] }));

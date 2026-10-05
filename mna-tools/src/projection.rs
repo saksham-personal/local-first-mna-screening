@@ -185,11 +185,12 @@ pub fn snapshot_selected(
         )
         .optional()?;
     let mut candidate_stmt = connection.prepare(
-        "SELECT company_id,status,updated_at FROM candidates WHERE run_id=? ORDER BY company_id",
+        "SELECT company_id,status,updated_at,considered,consideration_reason FROM candidates WHERE run_id=? ORDER BY company_id",
     )?;
-    let candidates: Vec<Value> = candidate_stmt.query_map([run_id], |r| Ok(json!({"pk":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"updated_at":r.get::<_,String>(2)?})))?.collect::<std::result::Result<_,_>>()?;
+    let candidates: Vec<Value> = candidate_stmt.query_map([run_id], |r| Ok(json!({"pk":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"updated_at":r.get::<_,String>(2)?,"considered":r.get::<_,i64>(3)?!=0,"consideration_reason":r.get::<_,Option<String>>(4)?})))?.collect::<std::result::Result<_,_>>()?;
     let membership: BTreeSet<_> = candidates
         .iter()
+        .filter(|r| r["considered"] == true)
         .filter_map(|r| r["pk"].as_str().map(str::to_owned))
         .collect();
     let requested: BTreeSet<_> = company_ids.iter().cloned().collect();
@@ -202,7 +203,7 @@ pub fn snapshot_selected(
     let mut cursor: Option<String> = None;
     let mut bytes = 0;
     loop {
-        let page = candidate_source_page(connection, run_id, cursor.as_deref(), 100, false)?;
+        let page = candidate_source_page(connection, run_id, cursor.as_deref(), 100, false, false)?;
         for row in page["rows"]
             .as_array()
             .ok_or_else(|| Error::Internal("source page rows missing".into()))?
@@ -233,11 +234,24 @@ pub fn snapshot_selected(
         let record: Value = connection.query_row("SELECT name,website,description,metadata_json,updated_at FROM companies WHERE company_id=?", [row["pk"].as_str().expect("source pk")], |r| Ok(json!({"pk":row["pk"],"name":r.get::<_,String>(0)?,"website":r.get::<_,Option<String>>(1)?,"description":r.get::<_,Option<String>>(2)?,"metadata":r.get::<_,String>(3)?,"updated_at":r.get::<_,String>(4)?})))?;
         canonical.push(record);
     }
+    let review_columns = crate::review::review_columns(connection, run_id)?;
     let mut catalog = Vec::new();
-    for source in ["MID", "ISCC", "PB", "ROGO"] {
+    for source in ["MID", "ISCC", "PB", "ROGO", "RESULTS", "BING"] {
         let mut columns = BTreeMap::<String, (usize, Value)>::new();
+        // Analyst-selected result schemas remain usable after all companies
+        // with values are hidden. Remaining rows deliberately project nulls.
+        if source == "RESULTS" {
+            for (plan, selected) in &review_columns {
+                for column in selected {
+                    columns.insert(format!("{plan}:{column}"), (0, Value::Null));
+                }
+            }
+        }
         let mut source_count = 0;
-        for row in &raw {
+        for row in raw
+            .iter()
+            .filter(|r| membership.contains(r["pk"].as_str().unwrap_or_default()))
+        {
             if let Some(fields) = row["sources"][source].as_object() {
                 if fields.values().any(usable) {
                     source_count += 1;
@@ -253,18 +267,47 @@ pub fn snapshot_selected(
                 }
             }
         }
-        catalog.push(json!({"source":source,"available":source_count>0,"company_count":source_count,"total":raw.len(),"columns":columns.into_iter().map(|(name,(present,sample))| json!({"name":name,"present":present,"missing":raw.len()-present,"sample":sample})).collect::<Vec<_>>()}));
+        catalog.push(json!({"source":source,"available":source_count>0,"company_count":source_count,"total":membership.len(),"columns":columns.into_iter().map(|(name,(present,sample))| json!({"name":name,"present":present,"missing":membership.len()-present,"sample":sample})).collect::<Vec<_>>()}));
     }
     let mut source_fields = Vec::new();
     let mut seen = BTreeSet::new();
-    for field in selected {
+    let mut selected_columns = selected.to_vec();
+    if catalog.iter().any(|entry| {
+        entry["source"] == "BING"
+            && entry["columns"]
+                .as_array()
+                .is_some_and(|cols| cols.iter().any(|col| col["name"] == "Research"))
+    }) && !selected_columns
+        .iter()
+        .any(|field| field.source.eq_ignore_ascii_case("BING") && field.column == "Research")
+    {
+        selected_columns.push(SourceColumn {
+            source: "BING".into(),
+            column: "Research".into(),
+        });
+    }
+    for (plan, columns) in review_columns {
+        for column in columns {
+            let field = SourceColumn {
+                source: "RESULTS".into(),
+                column: format!("{plan}:{column}"),
+            };
+            if !selected_columns
+                .iter()
+                .any(|s| s.source.eq_ignore_ascii_case("RESULTS") && s.column == field.column)
+            {
+                selected_columns.push(field);
+            }
+        }
+    }
+    for field in &selected_columns {
         let source = field.source.to_ascii_uppercase();
-        if !["MID", "ISCC", "PB", "ROGO"].contains(&source.as_str())
+        if !["MID", "ISCC", "PB", "ROGO", "RESULTS", "BING"].contains(&source.as_str())
             || field.column.is_empty()
             || field.column.len() > 200
         {
             return Err(Error::Validation(
-                "select a valid MID, ISCC, PB, or ROGO source column".into(),
+                "select a valid MID, ISCC, PB, ROGO, RESULTS, or BING source column".into(),
             ));
         }
         let catalog_source = catalog
@@ -300,7 +343,7 @@ pub fn snapshot_selected(
         let pk = row["pk"]
             .as_str()
             .ok_or_else(|| Error::Internal("source row pk missing".into()))?;
-        if !requested.is_empty() && !requested.contains(pk) {
+        if !membership.contains(pk) || (!requested.is_empty() && !requested.contains(pk)) {
             continue;
         }
         let pb = &row["sources"]["PB"];
@@ -422,6 +465,6 @@ pub fn snapshot_selected(
     let config = crate::retrieval::RetrievalConfig::from_env()?.status();
     let retrieval_configuration = json!({"embedder":config["embedder"]["identity"],"reranker":config["reranker"],"retrieval_limit":1000,"rerank_limit":500,"embedding_endpoint_hash":digest(&json!(std::env::var("MNA_EMBED_ENDPOINT").unwrap_or_default()))?,"rerank_endpoint_hash":digest(&json!(std::env::var("MNA_RERANK_ENDPOINT").unwrap_or_default()))?});
     Ok(
-        json!({"run_id":run_id,"profile_version":profile.unwrap_or(0),"candidate_hash":digest(&json!(candidates))?,"data_hash":digest(&json!({"source_rows":raw,"canonical":canonical}))?,"input_hash":digest(&json!({"columns":input_columns,"rows":rows,"retrieval":retrieval_configuration}))?,"input_columns":input_columns,"rows":rows,"coverage":coverage,"selected_row_hashes":selected_hashes,"pb_linkedin_count":pb_linkedin_count,"catalog":catalog,"retrieval_configuration":retrieval_configuration,"executed":false,"implementation_status":"implemented"}),
+        json!({"run_id":run_id,"profile_version":profile.unwrap_or(0),"candidate_hash":digest(&json!({"candidates":candidates,"review":crate::review::selection_fingerprint(connection,run_id)?}))?,"data_hash":digest(&json!({"source_rows":raw,"canonical":canonical}))?,"input_hash":digest(&json!({"columns":input_columns,"rows":rows,"retrieval":retrieval_configuration}))?,"input_columns":input_columns,"rows":rows,"coverage":coverage,"selected_row_hashes":selected_hashes,"pb_linkedin_count":pb_linkedin_count,"catalog":catalog,"retrieval_configuration":retrieval_configuration,"executed":false,"implementation_status":"implemented"}),
     )
 }

@@ -50,14 +50,14 @@ import {
   patchArtifact,
   useChatState,
 } from "./lib/chat-store";
-import { reviseCriteria } from "./lib/chat-driver";
+import { reviseCriteria, completeFitExamples, addResearchToCriteria } from "./lib/chat-driver";
 import {
   getJob,
   startJobPolling,
   stopJob,
   subscribeJobs,
 } from "./lib/chat-jobs";
-import { commandPrompts } from "./lib/chat-policy";
+import { commandPrompts, consideredCompanies } from "./lib/chat-policy";
 import { downloadWorkbook } from "./lib/exports";
 import { downloadCompleteSession } from "./lib/session-export";
 import { sessionStore, useSessionSnapshot } from "./lib/session-store";
@@ -71,7 +71,10 @@ import PrepareMenu from "./screening/PrepareMenu";
 const SetupController = lazy(() => import("./screening/SetupController"));
 const BingResearchDialog = lazy(() => import("./screening/BingResearchDialog"));
 import BackgroundRuns from "./screening/BackgroundRuns";
-import ImportStaging from "./files/ImportStaging";
+import ScreeningInspector from "./chat/ScreeningInspector";
+import { stageUploads } from "./lib/tool-client";
+import { reviewShortlist, flushCriteriaDraft } from "./lib/review-client";
+import { generateDraft } from "./lib/conversation-client";
 import { backgroundAction, dismissBackground, getBackgroundJobs, startBackgroundPolling, startBackgroundScreening, subscribeBackground } from "./lib/background-client";
 import { previewBingResearch, runBingResearch } from "./lib/research-client";
 import { processStagedUploads } from "./lib/import-pipeline";
@@ -209,6 +212,7 @@ function CriteriaEditor({
               const job = getJob(state.jobId);
               if (job?.state === "running") await stopJob(job.id);
               reviseCriteria(sessionId, original, business);
+              await flushCriteriaDraft(sessionId);
               sessionStore.addEvent({
                 sessionId,
                 kind: "system",
@@ -229,7 +233,7 @@ function CriteriaEditor({
         }}
       >
         <label>
-          Original criteria
+          Screening brief
           <textarea
             value={original}
             onChange={(event) => setOriginal(event.target.value)}
@@ -463,13 +467,6 @@ export default function App() {
   const backgroundJobs = useSyncExternalStore(subscribeBackground, getBackgroundJobs, getBackgroundJobs);
   useEffect(startBackgroundPolling, []);
   useEffect(() => { void fetch("/api/health").then(r => r.json()).then(data => setBingConnected(data.providers?.bing === true)).catch(() => {}); }, []);
-  useEffect(() => {
-    const staged = (event: Event) => {
-      if ((event as CustomEvent).detail?.sessionId === session.id) setPanel("artifacts");
-    };
-    window.addEventListener("screening:files-staged", staged);
-    return () => window.removeEventListener("screening:files-staged", staged);
-  }, [session.id]);
   const openSetup = useCallback(
     (
       provider: ScreeningProvider,
@@ -478,6 +475,16 @@ export default function App() {
       initialConfig?: ScreeningConfig,
     ) => {
       setDialog(null);
+      if (screeningMode === "question") {
+        updateChatState(session.id, { model: provider });
+        setPanel(null);
+        if (mode === "workspace" && compact) changeMode("chat");
+        requestAnimationFrame(() => {
+          if (request?.trim()) composerRef.current?.setText(request);
+          document.querySelector<HTMLTextAreaElement>(".ct-composer textarea")?.focus();
+        });
+        return;
+      }
       setScreeningSetup({
         key: crypto.randomUUID(),
         sessionId: session.id,
@@ -487,7 +494,7 @@ export default function App() {
         initialConfig,
       });
     },
-    [session.id],
+    [session.id, mode, compact, changeMode],
   );
   useEffect(
     () => () => {
@@ -541,7 +548,7 @@ export default function App() {
       void composerRef.current?.addFiles(files).then((count) => {
         if (count)
           setToast(
-            `${count} file${count === 1 ? "" : "s"} added. Spreadsheets are checked and staged automatically.`,
+            `${count} file${count === 1 ? "" : "s"} attached to chat.`,
           );
       });
     },
@@ -614,12 +621,27 @@ export default function App() {
     [snapshot.activeId],
   );
   const onAction = useCallback(
-    (action: ArtifactAction) => {
+    async (action: ArtifactAction) => {
       const current = getChatState(session.id),
         artifact = current.artifacts.find((a) => a.id === action.artifactId);
       try {
-        if (action.type === "start-screening" && artifact?.type === "screening-setup") {
-          void startBackgroundScreening(session.id, artifact.prepared).then(job => setToast(job.state === "blocked" ? job.message ?? "Provider unavailable. Setup saved." : "Screening started in the background.")).catch(error => setToast(String(error)));
+        if (action.type === "save-examples") {
+          await completeFitExamples(session.id, action.artifactId, action.good, action.bad);
+        } else if (action.type === "upload-source") {
+          if (artifact?.type !== "enrichment-upload") throw new Error("Use a company-data upload card.");
+          await stageUploads(action.files, { sessionId: session.id, purpose: action.source, uploadArtifactId: artifact.id });
+          await processStagedUploads(session.id);
+        } else if (action.type === "toggle-file") {
+          updateChatState(session.id, state => ({ ...state, files: state.files.map(file => file.id === action.fileId ? { ...file, passToProvider: action.passToProvider } : file), artifacts: state.artifacts.map(item => item.type === "file" && item.file.id === action.fileId ? { ...item, file: { ...item.file, passToProvider: action.passToProvider } } : item) }));
+        } else if (action.type === "review-shortlist") {
+          await reviewShortlist(session.id, action.keepCompanyIds, action.planId, action.outputColumns);
+          setToast(`${consideredCompanies(getChatState(session.id)).length.toLocaleString()} companies kept. Recommendations updated.`);
+        } else if (action.type === "use-answer-in-criteria" && artifact?.type === "research-answer") {
+          await addResearchToCriteria(session.id, artifact.answer, artifact.question);
+          patchArtifact(session.id, artifact.id, { applied: true });
+        } else if (action.type === "start-screening" && artifact?.type === "screening-setup") {
+          const job = await startBackgroundScreening(session.id, artifact.prepared);
+          setToast(job.state === "blocked" ? job.message ?? "Provider unavailable. Setup saved." : "Screening started in the background.");
         } else if (action.type === "run-research") {
           setBingSetup({ sessionId: session.id, queries: artifact?.type === "research" ? artifact.questions : researchQuestions(current.definition) });
         } else if (action.type === "configure-screening") {
@@ -642,18 +664,19 @@ export default function App() {
         } else if (action.type === "choose-option" && action.option === "bing") {
           setBingSetup({ sessionId: session.id, queries: researchQuestions(current.definition) });
         } else if (action.type === "export" && artifact?.type === "companies") {
-          downloadWorkbook(action.format, artifact.companies);
+          const companies = artifact.backendRunId === current.backendRunId ? consideredCompanies(current) : artifact.companies;
+          downloadWorkbook(action.format, companies);
           sessionStore.addEvent({
             sessionId: session.id,
             kind: "artifact",
             status: "success",
             origin: "workspace",
-            title: `${action.format === "pitchbook" ? "PitchBook" : action.format === "llm" ? "LLM" : "Full data"} export`,
+            title: `${action.format === "pitchbook" ? "PitchBook" : action.format === "llm" ? "LLM Suite" : "Full data"} export`,
             result: {
               type: "generated-workbook",
               format: action.format,
-              companyIds: artifact.companies.map((c) => c.pk),
-              rows: artifact.companies.length,
+              companyIds: companies.map((c) => c.pk),
+              rows: companies.length,
               fromArtifact: artifact.id,
             },
           });
@@ -682,13 +705,6 @@ export default function App() {
             result: { artifactId: artifact.id, proceed: false },
           });
         } else if (action.type === "edit-criteria") {
-          if (
-            artifact?.type !== "criteria" ||
-            artifact.revision !== current.revision
-          )
-            throw new Error(
-              "Use the latest criteria card to edit this screening.",
-            );
           setDialog("criteria");
         } else if (action.type === "decline-criteria") {
           if (
@@ -719,10 +735,10 @@ export default function App() {
               ?.click(),
           );
         } else if (action.type === "approve-criteria")
-          send("Approve criteria and find companies", action);
+          send(artifact?.type === "criteria" && artifact.phase === "business" ? "Approve business criteria" : "Approve final criteria and find companies", action);
         else if (action.type === "choose-option")
           send(
-            `Choose ${action.option === "pitchbook" ? "PitchBook data" : action.option === "rogo" ? "ROGO data" : action.option === "bing" ? "Bing research" : action.option === "llm" ? "LLM screening" : "M365 screening"}`,
+            `Choose ${action.option === "pitchbook" ? "PitchBook data" : action.option === "rogo" ? "ROGO data" : action.option === "bing" ? "Bing research" : action.option === "llm" ? "LLM Suite screening" : "M365 screening"}`,
             action,
           );
         else if (action.type === "inspect-company")
@@ -731,6 +747,7 @@ export default function App() {
           send("/checkpoint", action);
       } catch (error) {
         setToast(error instanceof Error ? error.message : String(error));
+        if (["save-examples", "upload-source", "review-shortlist", "use-answer-in-criteria"].includes(action.type)) throw error;
       }
     },
     [session.id, send, openLog, compact, changeMode, mode, openSetup],
@@ -1010,7 +1027,7 @@ export default function App() {
                 {job?.state === "running"
                   ? "Searching companies"
                   : approved(state)
-                    ? `${state.companies.length} companies · criteria approved`
+                    ? `${consideredCompanies(state).length.toLocaleString()} ${consideredCompanies(state).length === 1 ? "company" : "companies"} · criteria approved`
                     : state.criteriaText
                       ? "Review criteria before searching"
                       : "Ready when you are"}
@@ -1211,7 +1228,7 @@ export default function App() {
                   {panel === "context"
                     ? "Screening context"
                     : panel === "artifacts"
-                      ? "Files and results"
+                      ? "Screening overview"
                       : "Background runs"}
                 </h2>
                 <div className="ct-inspector-actions">
@@ -1235,83 +1252,8 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {panel === "context" ? (
-                <div className="ct-context-content">
-                  <span className="ct-context-label">
-                    Current criteria · revision {state.revision}
-                  </span>
-                  <p>
-                    {state.definition ||
-                      "Set the business criteria in chat to begin."}
-                  </p>
-                  {state.criteriaText && (
-                    <button
-                      className="ct-ghost-button"
-                      type="button"
-                      onClick={() => setDialog("criteria")}
-                      disabled={busy}
-                    >
-                      <Pencil size={13} />
-                      Edit criteria
-                    </button>
-                  )}
-                  <dl>
-                    <div>
-                      <dt>Approval</dt>
-                      <dd>
-                        {approved(state) ? "Approved" : "Awaiting review"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Companies</dt>
-                      <dd>{state.companies.length}</dd>
-                    </div>
-                    <div>
-                      <dt>Files</dt>
-                      <dd>{state.files.length}</dd>
-                    </div>
-                    <div>
-                      <dt>Runtime</dt>
-                      <dd>Local tools</dd>
-                    </div>
-                  </dl>
-                  <h3>Included in this chat</h3>
-                  <p>
-                    Approved business criteria, saved company descriptions,
-                    uploaded data, tool results, and checkpoints.
-                  </p>
-                  <h3>Source scores</h3>
-                  <p>
-                    MID and ISCC use separate scoring methods. Their scores are
-                    shown separately and are not fit scores.
-                  </p>
-                  <h3>Reference details</h3>
-                  <p>
-                    Financials, size, geography, ownership, and industry codes
-                    are not discovery filters.
-                  </p>
-                  {state.ignored.map((item, i) => (
-                    <blockquote key={i}>{item}</blockquote>
-                  ))}
-                  <button
-                    className="ct-panel-link"
-                    type="button"
-                    onClick={() => send("/flow")}
-                  >
-                    Show the screening process
-                    <ArrowRight size={14} />
-                  </button>
-                </div>
-              ) : panel === "artifacts" ? (
-                <div className="ct-artifact-list">
-                  <ImportStaging files={state.files} summary={state.artifacts.slice().reverse().find(a => a.type === "handoff" && a.service === "Company data")?.type === "handoff" ? (state.artifacts.slice().reverse().find(a => a.type === "handoff" && a.service === "Company data") as Extract<import("./lib/chat-contract").ChatArtifact, { type: "handoff" }>).detail : undefined} onUpload={() => onAction({ type: "upload", artifactId: "company-data" })} onRetry={() => {
-                    updateChatState(session.id, current => ({ ...current, files: current.files.map(file => file.stagingStatus === "error" ? { ...file, stagingStatus: "checking" } : file) }));
-                    void processStagedUploads(session.id);
-                  }} />
-                  {state.artifacts.filter(a => a.type === "file" && !a.file.importable).slice(-6).reverse().map(artifact => <ArtifactCard key={artifact.id} artifact={artifact} onAction={onAction} />)}
-                  {state.artifacts.filter((a, index, all) => ["criteria", "checkpoint", "screening-setup", "handoff"].includes(a.type) && (a.type !== "handoff" || a.service !== "Company data") && !all.slice(index + 1).some(b => b.type === a.type && (a.type !== "screening-setup" || b.type !== "screening-setup" || a.prepared.provider === b.prepared.provider))).slice(-4).reverse().map(artifact => <ArtifactCard key={artifact.id} artifact={artifact} onAction={onAction} />)}
-                  <button type="button" className="ct-panel-link" onClick={() => send("/data")}>View company data in chat<ArrowRight size={14} /></button>
-                </div>
+              {panel === "context" || panel === "artifacts" ? (
+                <ScreeningInspector state={state} criteriaFirst={panel === "context"} send={send} edit={() => setDialog("criteria")} preview={artifactId => { void onAction({ type: "preview-file", artifactId }); }} />
               ) : (
                 <div className="ct-background-list">
                   {snapshot.sessions.flatMap((s) => {
@@ -1374,7 +1316,7 @@ export default function App() {
                   <div className="ct-background-note">
                     <h3>Agent workers</h3>
                     <p>
-                      The local job runs the tools shown in its timeline. LLM
+                      The local job runs the tools shown in its timeline. LLM Suite
                       subagents and handoffs become available when orchestration
                       is connected.
                     </p>
@@ -1385,6 +1327,7 @@ export default function App() {
             </aside>
           )}
         </FileDropArea>
+        <BackgroundRuns jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"}` }))} onDismiss={dismissBackground} onAction={(id, action) => { void backgroundAction(id, action).then(() => setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated.")).catch(error => setToast(String(error))); }} />
       </main>
       <SessionLog
         open={log}
@@ -1500,8 +1443,7 @@ export default function App() {
           />
         </Suspense>
       )}
-      {bingSetup && <Suspense fallback={<div className="ct-toast" role="status">Opening web research…</div>}><BingResearchDialog key={bingSetup.sessionId} companies={getChatState(bingSetup.sessionId).companies} initialQueries={bingSetup.queries} connected={bingConnected} onClose={() => setBingSetup(undefined)} onPreview={input => previewBingResearch(bingSetup.sessionId, input)} onRun={token => runBingResearch(bingSetup.sessionId, token)} /></Suspense>}
-      <BackgroundRuns jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLMSuite" : "Copilot"}` }))} onDismiss={dismissBackground} onAction={(id, action) => { void backgroundAction(id, action).then(() => setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated.")).catch(error => setToast(String(error))); }} />
+      {bingSetup && <Suspense fallback={<div className="ct-toast" role="status">Opening web research…</div>}><BingResearchDialog key={bingSetup.sessionId} companies={consideredCompanies(getChatState(bingSetup.sessionId))} initialQueries={bingSetup.queries} connected={bingConnected} onClose={() => setBingSetup(undefined)} onPreview={input => previewBingResearch(bingSetup.sessionId, input)} onGenerateTemplates={() => generateDraft(bingSetup.sessionId, "bing-templates")} onRun={(token, options) => runBingResearch(bingSetup.sessionId, token, options)} /></Suspense>}
       {toast && (
         <div className="ct-toast" role="status">
           <Check size={15} />

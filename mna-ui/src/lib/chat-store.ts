@@ -17,7 +17,6 @@ function validSetupConfig(value: unknown): boolean {
     ["llm_suite", "copilot"].includes(String(value.provider)) &&
     ["screening", "question"].includes(String(value.mode)) &&
     typeof value.model === "string" &&
-    !!value.model.trim() &&
     value.model.length <= 160 &&
     typeof value.prompt === "string" &&
     !!value.prompt.trim() &&
@@ -122,6 +121,12 @@ function validArtifact(value: unknown): boolean {
     }
     case "file":
       return validFile(value.file);
+    case "fit-examples":
+      return count(value.revision) && typeof value.good === "string" && typeof value.bad === "string";
+    case "research-answer":
+      return typeof value.provider === "string" && typeof value.question === "string" && typeof value.answer === "string";
+    case "enrichment-upload":
+      return ["pitchbook", "rogo"].includes(String(value.source)) && Array.isArray(value.files) && value.files.every(validFile);
     case "data-table":
       return Array.isArray(value.rows) && value.rows.every(record) && strings(value.columns) && (value.planId === undefined || typeof value.planId === "string");
     case "criteria":
@@ -144,9 +149,7 @@ function validArtifact(value: unknown): boolean {
       );
     case "options":
       return (
-        ["pitchbook", "rogo", "llm", "copilot", "bing"].includes(
-          String(value.recommended),
-        ) &&
+        (Array.isArray(value.recommended) ? value.recommended.every(item => ["pitchbook", "rogo", "llm", "copilot", "bing"].includes(String(item))) : ["pitchbook", "rogo", "llm", "copilot", "bing"].includes(String(value.recommended))) &&
         (value.selected === undefined || strings(value.selected)) &&
         (value.dismissed === undefined ||
           typeof value.dismissed === "boolean") &&
@@ -427,7 +430,7 @@ export function mirrorWorkspace(state: ChatState): void {
         : "",
     criteriaApproved: isApproved,
     uploads: Array.isArray(existing.uploads) ? existing.uploads : [],
-    counts: isApproved ? state.counts : emptyCounts,
+    counts: state.counts,
     moreRequested:
       same && count(existing.moreRequested) ? existing.moreRequested : 0,
     linkedinOverrides: record(existing.linkedinOverrides)
@@ -455,7 +458,7 @@ export function mirrorWorkspace(state: ChatState): void {
     `screening-workspace-v3:${state.sessionId}`,
     JSON.stringify(workspace),
   );
-  if (state.backendRunId && isApproved)
+  if (state.backendRunId)
     localStorage.setItem(
       `screening-executed-v1:${state.sessionId}`,
       JSON.stringify({
@@ -507,11 +510,12 @@ export function syncWorkspaceIntoChat(sessionId: string): void {
         definition: workspace.definition,
         revision: state.revision + 1,
         approvedRevision: undefined,
-        companies: [],
-        counts: { ...emptyCounts },
-        backendRunId: undefined,
+        durableCriteria: undefined,
+        lastCriteria: state.revision ? { text: state.criteriaText, definition: state.definition, revision: state.revision } : undefined,
+        examplesCompleteRevision: state.examplesCompleteRevision || state.approvedRevision ? state.revision + 1 : undefined,
         criteriaMessageId: undefined,
       });
+      void import("./review-client").then(({ persistCriteriaDraft }) => persistCriteriaDraft(sessionId)).catch(error => updateChatState(sessionId, { criteriaSaveError: String(error.message ?? error) }));
       if (validApproval) {
         sessionStore.addEvent({
           sessionId,
@@ -544,7 +548,6 @@ export function syncWorkspaceIntoChat(sessionId: string): void {
       localStorage.getItem(`screening-executed-v1:${sessionId}`) || "null",
     );
     if (
-      approved(state) &&
       record(executed) &&
       executed.criteriaText === state.criteriaText &&
       executed.definition === state.definition &&
@@ -558,7 +561,7 @@ export function syncWorkspaceIntoChat(sessionId: string): void {
       Object.values(executed.counts).reduce(
         (n: number, value) => n + Number(value),
         0,
-      ) === executed.companies.length
+      ) === executed.companies.filter((company: { considered?: boolean }) => company.considered !== false).length
     ) {
       const changed =
         state.backendRunId !== executed.backendRunId ||

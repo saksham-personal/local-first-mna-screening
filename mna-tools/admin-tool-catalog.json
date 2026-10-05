@@ -691,5 +691,216 @@
       "type": "object"
     },
     "name": "rebuild_embedding_index"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/shortlist-review",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "expected_selection_revision": {
+          "default": null,
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "keep_company_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_columns": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": null,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "keep_company_ids"
+      ],
+      "title": "ReviewArgs",
+      "type": "object"
+    },
+    "name": "review_shortlist"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/criteria-save",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "bad_fit_examples": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "business_definition": {
+          "type": "string"
+        },
+        "criteria_text": {
+          "type": "string"
+        },
+        "good_fit_examples": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "criteria_text",
+        "business_definition"
+      ],
+      "title": "SaveCriteriaArgs",
+      "type": "object"
+    },
+    "name": "save_criteria_revision"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/criteria-approve",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "approved_by": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "revision",
+        "digest",
+        "approved_by"
+      ],
+      "title": "ApproveCriteriaArgs",
+      "type": "object"
+    },
+    "name": "approve_criteria_revision"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/provider-text",
+    "input_schema": {
+      "$defs": {
+        "TextAttachment": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "content"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "A direct analyst message or an explicitly requested drafting operation.\nBatch scoring continues to use immutable prepared plans.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/TextAttachment"
+          },
+          "type": "array"
+        },
+        "deployment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "prompt"
+      ],
+      "title": "ProviderTextRequest",
+      "type": "object"
+    },
+    "name": "dispatch_provider_text"
   }
 ]

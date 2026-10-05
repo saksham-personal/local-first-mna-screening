@@ -217,6 +217,14 @@ impl WorkflowService {
     }
 
     pub fn require_approved_criteria(&self, run_id: &str) -> Result<i64> {
+        let pending = self.store.with_connection(|conn| {
+            Ok(conn.query_row("SELECT COUNT(*) FROM criteria_revisions c WHERE c.run_id=? AND c.revision=(SELECT MAX(revision) FROM criteria_revisions WHERE run_id=?) AND NOT EXISTS(SELECT 1 FROM criteria_revision_approvals a WHERE a.revision_id=c.revision_id)",params![run_id,run_id],|row|row.get::<_,i64>(0))? > 0)
+        })?;
+        if pending {
+            return Err(Error::Conflict(
+                "Review and approve the latest criteria before searching or screening".into(),
+            ));
+        }
         let context = self
             .store
             .execute("get_run_context", &json!({"run_id":run_id}))?;
@@ -305,7 +313,7 @@ impl WorkflowService {
             if !ids.insert(step.step_id.clone()) {
                 return Err(Error::Validation("Duplicate step_id".into()));
             }
-            if step.depends_on.len() > 20 || step.company_ids.len() > 2000 {
+            if step.depends_on.len() > 20 || step.company_ids.len() > 250_000 {
                 return Err(Error::Validation("Step scope exceeds limits".into()));
             }
             if !step.parameters.is_null() && !step.parameters.is_object() {
@@ -327,7 +335,7 @@ impl WorkflowService {
                 iscc += 1;
             }
             if step.kind == ActionKind::BingResearch {
-                let min = if step.company_ids.is_empty() { 1 } else { 3 };
+                let min = 1;
                 if !(min..=5).contains(&step.query_templates.len()) {
                     return Err(Error::Validation(format!(
                         "This Bing research scope requires {min}..=5 approved query templates"
@@ -400,8 +408,8 @@ impl WorkflowService {
             visit(id, &by_id, &mut HashSet::new(), &mut HashSet::new())?;
         }
         let encoded = serde_json::to_string(&args.steps)?;
-        if encoded.len() > 200000 {
-            return Err(Error::Validation("Plan exceeds 200000 bytes".into()));
+        if encoded.len() > 900_000 {
+            return Err(Error::Validation("This research scope exceeds the local plan capacity. No companies were removed; use a durable scope reference for a larger run".into()));
         }
         let plan_id = format!("PLAN-{}", Uuid::new_v4());
         self.store.with_connection(|conn| {
@@ -456,6 +464,11 @@ impl WorkflowService {
             .into_iter()
             .find(|s| s.step_id == step_id)
             .ok_or_else(|| Error::NotFound("Action step not found".into()))?;
+        if !step.company_ids.is_empty()
+            || matches!(step.kind, ActionKind::SearchMid | ActionKind::SearchIscc)
+        {
+            self.require_approved_criteria(run_id)?;
+        }
         let completed: HashSet<&str> = plan["completed_steps"]
             .as_array()
             .into_iter()
@@ -586,12 +599,22 @@ impl WorkflowService {
         }
         let ids = self.scope(&step, &args.company_ids, 100)?;
         let mut queries = Vec::new();
+        let placeholders =
+            regex::Regex::new(r"(?i)\{company\}|\{website\}|<company>").expect("constant regex");
         for id in ids {
             let company = self.hydrated_company(&args.run_id, &id)?["company"].clone();
             let name = preferred(&company, "PB_Name", "name");
             let website = preferred(&company, "PB_Website", "website");
             for (index, template) in step.query_templates.iter().enumerate() {
-                queries.push(json!({"company_id":id,"question_index":index+1,"query":template.replace("<company>",&format!("{name}; {website}")).replace("{company}",name).replace("{website}",website)}));
+                let expanded = placeholders.replace_all(
+                    template,
+                    |capture: &regex::Captures<'_>| match capture[0].to_ascii_lowercase().as_str() {
+                        "{company}" => name.to_string(),
+                        "{website}" => website.to_string(),
+                        _ => format!("{name}; {website}"),
+                    },
+                );
+                queries.push(json!({"company_id":id,"question_index":index+1,"query":expanded}));
             }
         }
         Ok(

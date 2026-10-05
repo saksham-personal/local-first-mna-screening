@@ -28,11 +28,16 @@ import {
 } from "./chat-jobs";
 import {
   draftCriteria,
+  discoveryRequest,
+  nextStepsRequest,
+  providerRequestMode,
   exampleCriteria,
   exampleDefinition,
   screeningDiagram,
   nextStepOptions as options,
   recommendedStep,
+  nextStepRecommendations,
+  consideredCompanies,
 } from "./chat-policy";
 import { sessionStore } from "./session-store";
 import { attachmentAccept, attachmentError } from "./attachment-policy";
@@ -44,6 +49,8 @@ import {
 
 import { companyDataRows, refreshCompanyContext } from "./company-data-client";
 import { processStagedUploads } from "./import-pipeline";
+import { approveDurableCriteria, persistCriteriaDraft, flushCriteriaDraft, refreshShortlist } from "./review-client";
+import { askProvider, generateDraft } from "./conversation-client";
 
 type Part = ThreadAssistantMessagePart;
 export function transcriptFor(sessionId: string): ThreadMessageLike[] {
@@ -114,6 +121,8 @@ export function criteriaArtifact(
         definition: state.definition,
         ignored: state.ignored,
         revision: state.revision,
+        phase: state.examplesCompleteRevision === state.revision ? "final" : "business",
+        lastCriteria: state.lastCriteria?.definition,
         decision: approved(state) ? "approved" : "pending",
       },
       turnId,
@@ -134,16 +143,57 @@ export function reviseCriteria(
     ignored,
     revision: old.revision + 1,
     approvedRevision: undefined,
-    companies: [],
-    counts: { midOnly: 0, isccOnly: 0, both: 0 },
-    backendRunId: undefined,
+    lastCriteria: old.revision ? { text: old.criteriaText, definition: old.definition, revision: old.revision } : undefined,
+    criteriaHistory: [...(old.criteriaHistory ?? []), ...(old.revision ? [{ text: old.criteriaText, definition: old.definition, revision: old.revision, good: old.goodFitExamples ?? "", bad: old.badFitExamples ?? "" }] : [])],
+    durableCriteria: undefined,
+    criteriaSaveError: undefined,
+    examplesCompleteRevision: old.examplesCompleteRevision || old.approvedRevision ? old.revision + 1 : undefined,
     criteriaMessageId,
   });
   for (const artifact of old.artifacts)
     if (artifact.type === "criteria" && artifact.decision === "pending")
       patchArtifact(sessionId, artifact.id, { decision: "declined" });
   mirrorWorkspace(next);
+  void persistCriteriaDraft(sessionId).catch(error => {
+    if (getChatState(sessionId).revision === next.revision) updateChatState(sessionId, { criteriaSaveError: String(error.message ?? error) });
+    sessionStore.addEvent({ sessionId, kind: "system", status: "error", origin: "workspace", title: "Criteria draft could not be saved", text: String(error.message ?? error) });
+  });
   return criteriaArtifact(sessionId);
+}
+
+export async function completeFitExamples(sessionId: string, artifactId: string, good: string, bad: string) {
+  const state = getChatState(sessionId), artifact = state.artifacts.find(item => item.id === artifactId);
+  if (artifact?.type !== "fit-examples" || artifact.revision !== state.revision || artifact.completed) throw new Error("Use the latest examples card.");
+  const originalRevision = state.revision;
+  good = good.trim(); bad = bad.trim();
+  updateChatState(sessionId, { goodFitExamples: good, badFitExamples: bad });
+  let definition = state.definition, note = "Review the final criteria, then approve the search.";
+  if (good || bad) {
+    const result = await generateDraft(sessionId, "criteria", { request: "Adjust only the core-business criteria using the analyst's good-fit and bad-fit references. Preserve deferred financial, geography, ownership and size conditions as analyst review notes." });
+    if (getChatState(sessionId).revision !== originalRevision) throw new Error("Criteria changed while examples were being reviewed. Use the current criteria.");
+    if (result.executed && result.text) definition = result.text;
+    else note = "Examples are saved with the criteria. LLM Suite is not connected to interpret them yet; edit the definition if needed, then approve.";
+  }
+  patchArtifact(sessionId, artifactId, { completed: true, good, bad });
+  updateChatState(sessionId, { examplesCompleteRevision: originalRevision });
+  const next = reviseCriteria(sessionId, state.criteriaText, definition, state.ignored);
+  await flushCriteriaDraft(sessionId);
+  updateChatState(sessionId, { businessReviewedRevision: getChatState(sessionId).revision });
+  const messageId = crypto.randomUUID();
+  updateChatState(sessionId, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
+  sessionStore.addEvent({ sessionId, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Final criteria", text: note, content: [{ type: "text", text: note }, artifactPart(next)] });
+}
+export async function addResearchToCriteria(sessionId: string, answer: string, question: string) {
+  const state = getChatState(sessionId);
+  if (!answer.trim()) throw new Error("There is no research result to add.");
+  const research = `Research question: ${question}\nResearch result (requires analyst review):\n${answer}`;
+  const result = await generateDraft(sessionId, "criteria", { request: `Propose revised core-business criteria using this analyst-selected research. Keep unsupported claims and non-business conditions as review notes. Do not treat research leads as verified facts.\n${research}` });
+  if (getChatState(sessionId).revision !== state.revision) throw new Error("Criteria changed during this request. Add the answer to the latest criteria instead.");
+  const next = reviseCriteria(sessionId, `${state.criteriaText}\n\n${research}`, result.executed && result.text ? result.text : `${state.definition}\n\nAnalyst-selected research to review:\n${answer}`, state.ignored);
+  await flushCriteriaDraft(sessionId);
+  const messageId = crypto.randomUUID();
+  updateChatState(sessionId, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
+  sessionStore.addEvent({ sessionId, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Criteria draft updated", text: "The research is in a new criteria draft. Review and approve it before the next search or screening.", content: [{ type: "text", text: "Review the updated criteria before continuing." }, artifactPart(next)] });
 }
 export function approveCriteria(sessionId: string, artifactId?: string): void {
   const state = getChatState(sessionId);
@@ -186,7 +236,9 @@ function nextOptions(sessionId: string, turnId: string): ChatArtifact {
     {
       ...artifactBase("Choose the next step"),
       type: "options",
-      recommended: recommendedStep(state.companies.length),
+      recommended: nextStepRecommendations(state).recommended,
+      companyCount: consideredCompanies(state).length,
+      hydrated: nextStepRecommendations(state).hydrated,
       options,
     },
     turnId,
@@ -222,27 +274,20 @@ export function createFileAdapter(sessionId: string): AttachmentAdapter {
     async add({ file }) {
       const error = attachmentError(file);
       if (error) throw new Error(error);
-      if (/\.(csv|xlsx)$/i.test(file.name)) {
-        const [staged] = await stageUploads([file], { sessionId });
+      {
+        const [staged] = await stageUploads([file], { sessionId, purpose: "chat" });
         stagedFiles.set(file, staged);
-        return { id: staged.id, name: file.name, file, type: "document", contentType: file.type, status: { type: "requires-action", reason: "composer-send" }, content: [{ type: "data", name: "staged-company-file", data: { fileId: staged.id } }] };
+        return { id: staged.id, name: file.name, file, type: "document", contentType: file.type, status: { type: "requires-action", reason: "composer-send" }, content: [{ type: "data", name: "staged-chat-file", data: { fileId: staged.id } }] };
       }
-      return {
-        id: crypto.randomUUID(),
-        name: file.name,
-        file,
-        type: "document",
-        contentType: file.type,
-        status: { type: "requires-action", reason: "composer-send" },
-      };
     },
     async remove() {},
     async send(attachment, { signal } = {}) {
       const cached = stagedFiles.get(attachment.file);
-      if (cached) return { ...attachment, id: cached.id, status: { type: "complete" }, content: [{ type: "data", name: "staged-company-file", data: { fileId: cached.id } }] };
+      if (cached) return { ...attachment, id: cached.id, status: { type: "complete" }, content: [{ type: "data", name: "staged-chat-file", data: { fileId: cached.id } }] };
       const [file] = await stageUploads([attachment.file], {
         sessionId,
         signal,
+        purpose: "chat",
       });
       const artifact = getChatState(sessionId).artifacts.find(
         (a) => a.type === "file" && a.file.id === file.id,
@@ -301,6 +346,7 @@ export function createChatAdapter(
           prior.ignored,
           user.id,
         );
+        await flushCriteriaDraft(sessionId);
         sessionStore.addEvent({
           sessionId,
           turnId,
@@ -381,7 +427,7 @@ export function createChatAdapter(
       };
       try {
         let state = getChatState(sessionId);
-        const submittedFiles = attachmentParts
+        const submittedFiles = [...attachmentParts
           .flatMap((p) =>
             p.type === "data" && p.name === "screening-artifact"
               ? [
@@ -396,28 +442,27 @@ export function createChatAdapter(
             (a): a is Extract<ChatArtifact, { type: "file" }> =>
               a?.type === "file",
           )
-          .map((a) => a.file);
+          .map((a) => a.file), ...attachmentParts.flatMap(part => part.type === "data" && ["staged-chat-file", "staged-company-file"].includes(part.name) ? state.files.filter(file => file.id === (part.data as { fileId: string }).fileId) : [])];
         const tabular = submittedFiles.filter((f) => f.importable);
-        const stagedTabular = attachmentParts.filter(p => p.type === "data" && p.name === "staged-company-file");
-        if (stagedTabular.length) { await processStagedUploads(sessionId); state = getChatState(sessionId); }
-        if (stagedTabular.length && (!text || !/^\/|^(?:find|screen|look for|identify|target|update|revise|change)\b|\b(?:run|screening|llmsuite|bing|copilot)\b/i.test(text))) {
-          content.push({ type: "text", text: "Your spreadsheets are staged in Files and results. Recognized data is added automatically when companies are available. Use /data to view the latest company table." });
-        } else if (
+        if (
           action?.type === "approve-criteria" ||
           /^(?:approve(?: the)? criteria(?: and (?:find companies|search))?|approve and search)$/i.test(
             text,
           )
         ) {
-          approveCriteria(sessionId, action?.artifactId);
-          state = getChatState(sessionId);
-          jobId = (
-            await startDiscovery(
-              sessionId,
-              callbacks.title(),
-              turnId,
-              messageId,
-            )
-          ).id;
+          const card = action?.artifactId ? state.artifacts.find(item => item.id === action.artifactId) : criteriaArtifact(sessionId);
+          if (card?.type !== "criteria" || card.revision !== state.revision) throw new Error("Review the latest criteria card.");
+          if (card.phase === "business" && state.examplesCompleteRevision !== state.revision) {
+            updateChatState(sessionId, { businessReviewedRevision: state.revision });
+            patchArtifact(sessionId, card.id, { decision: "approved" });
+            add(saveArtifact(sessionId, { ...artifactBase("Examples · optional"), type: "fit-examples", revision: state.revision, good: state.goodFitExamples ?? "", bad: state.badFitExamples ?? "" }, turnId));
+            content.push({ type: "text", text: "Add a few good-fit or bad-fit examples, or skip this step. You’ll approve the final criteria before discovery." });
+          } else {
+            await approveDurableCriteria(sessionId);
+            approveCriteria(sessionId, action?.artifactId);
+            state = getChatState(sessionId);
+            jobId = (await startDiscovery(sessionId, callbacks.title(), turnId, messageId)).id;
+          }
         } else if (
           /^\/example$|^(?:start|run)(?: the)? (?:local |screening )?example$/i.test(
             text,
@@ -436,6 +481,7 @@ export function createChatAdapter(
                   user.id,
                 ),
           );
+          await flushCriteriaDraft(sessionId);
           content.push({
             type: "text",
             text: "This example uses fictional companies and working tools. Review the business criteria above, then approve the search. MID is available locally; ISCC and model services are not connected.",
@@ -458,12 +504,14 @@ export function createChatAdapter(
               text: "Describe the company’s core products or services, or attach your DDI. I’ll show a draft for your review.",
             });
         } else if (
-          /^\/(?:companies|data)$|^(?:show|review)(?: the)? (?:companies|company data)$/i.test(text)
+          /^\/(?:companies|data|review)$|^(?:show|review)(?: the)? (?:companies|company data|shortlist)$/i.test(text)
         ) {
           if (state.backendRunId) {
+            await refreshShortlist(sessionId, state.backendRunId);
             const rows = await refreshCompanyContext(sessionId, state.backendRunId);
-            const data = companyDataRows(rows);
-            add(saveArtifact(sessionId, { ...artifactBase("Current company data"), type: "data-table", rows: data, columns: [...new Set(data.flatMap(row => Object.keys(row)))], note: "Current saved sources. Company name and website prefer PitchBook independently; descriptions keep their source labels." }, turnId));
+            const latest = getChatState(sessionId), byId = new Map(latest.companies.map(company => [company.pk, company]));
+            const data = companyDataRows(rows).map(row => ({ ...row, Considered: byId.get(String(row.pk))?.considered !== false ? "Yes" : "Hidden" }));
+            add(saveArtifact(sessionId, { ...artifactBase("Review company data"), type: "data-table", rows: data, columns: [...new Set(data.flatMap(row => Object.keys(row)))], reviewable: true, note: "Keep the companies you want to consider. Hidden companies and their data remain saved." }, turnId));
           }
           else
             content.push({
@@ -558,15 +606,14 @@ export function createChatAdapter(
             action?.type === "inspect-company"
               ? state.artifacts.find((a) => a.id === action.artifactId)
               : undefined;
-          const list =
-            clicked?.type === "companies" ? clicked.companies : state.companies;
+          const list = clicked?.type === "companies" ? clicked.companies : state.companies;
           const target =
             action?.type === "inspect-company"
               ? action.companyId
               : text.startsWith("@")
                 ? text.slice(1).split(/\s/)[0]
                 : undefined;
-          const company = target ? list.find((c) => c.pk === target) : list[0];
+          const company = target ? list.find((c) => c.pk === target) : consideredCompanies(state)[0];
           const runId =
             clicked?.type === "companies"
               ? clicked.backendRunId
@@ -575,7 +622,7 @@ export function createChatAdapter(
             !company ||
             !runId ||
             (action?.type === "inspect-company" &&
-              clicked?.type !== "companies")
+              clicked?.type !== "companies" && clicked?.type !== "data-table")
           )
             content.push({
               type: "text",
@@ -620,9 +667,9 @@ export function createChatAdapter(
             );
           }
         } else if (
-          /^\/(?:llm|copilot|screen)(?:\s|$)|\b(?:ask|screen|screening|question|evaluate|analyse|analyze)\b[\s\S]*\b(?:llmsuite|llm suite|llm|m365|copilot)\b|\b(?:llmsuite|llm suite|llm|m365|copilot)\b[\s\S]*\?/i.test(
+          !action && !discoveryRequest.test(text) && !nextStepsRequest.test(text) && ((state.model !== "local" && !text.startsWith("/") && !/^(?:find|update|revise|change)\s+(?:the\s+)?criteria/i.test(text)) || /^\/(?:llm|copilot|screen)(?:\s|$)|\b(?:ask|screen|screening|question|evaluate|analyse|analyze)\b[\s\S]*\b(?:llmsuite|llm suite|llm|m365|copilot)\b|\b(?:llmsuite|llm suite|llm|m365|copilot)\b[\s\S]*\?/i.test(
             text,
-          ) &&
+          )) &&
           !/\b(?:populate|upload|add)\b[\s\S]{0,35}\b(?:pitch\s?book|rogo)\b|\b(?:run|do)\s+(?:a\s+)?(?:bing|web research)\b/i.test(
             text,
           )
@@ -631,15 +678,24 @@ export function createChatAdapter(
           if (/\bllm(?:\s?suite)?\b|^\/screen/i.test(text))
             providers.push("llm_suite");
           if (/m365|copilot/i.test(text)) providers.push("copilot");
-          if (!providers.length) providers.push("llm_suite");
-          const mode = /^\/screen|\b(?:screen|screening|fit scores?)\b/i.test(
-            text,
-          )
-            ? "screening"
-            : "question";
+          if (!providers.length) providers.push(state.model === "copilot" ? "copilot" : "llm_suite");
+          const mode = providerRequestMode(text);
           const request = text
             .replace(/^\/(?:llm|copilot|screen)\s*/i, "")
             .trim();
+          if (mode === "question") {
+            for (const provider of providers) {
+              if (!request) {
+                updateChatState(sessionId, { model: provider });
+                content.push({ type: "text", text: `Ask ${provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} a question in the message box. Attached files are included unless you turn them off.` });
+              } else {
+                const response = await askProvider(sessionId, provider, request, submittedFiles, `${user.id}-${provider}`);
+                content.push({ type: "text", text: response.text ?? response.message ?? "The service has no answer yet." });
+                if (response.executed && response.text) add(saveArtifact(sessionId, { ...artifactBase("Use this answer"), type: "research-answer", provider: provider === "llm_suite" ? "LLM Suite" : "M365 Copilot", question: request, answer: response.text }, turnId));
+                if (!response.executed) add(saveArtifact(sessionId, { ...artifactBase(provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"), type: "handoff", service: provider === "llm_suite" ? "LLM Suite" : "M365 Copilot", state: "unavailable", detail: "Executed: no · service not connected" }, turnId));
+              }
+            }
+          } else {
           for (const provider of providers)
             add(
               saveArtifact(
@@ -660,8 +716,9 @@ export function createChatAdapter(
             );
           content.push({
             type: "text",
-            text: "Review the inputs, prompt, and output columns in the setup. Saving it does not send a provider request.",
+            text: "Review the inputs, prompt, and output columns before starting batch screening.",
           });
+          }
         } else if (
           action?.type === "choose-option" ||
           (/\b(?:populate|add|run|research)\b|^\/bing\b/i.test(text) &&
@@ -702,7 +759,7 @@ export function createChatAdapter(
                   sessionId,
                   {
                     ...artifactBase(
-                      step === "llm" ? "LLMSuite setup" : "M365 Copilot setup",
+                      step === "llm" ? "LLM Suite screening" : "M365 Copilot screening",
                     ),
                     type: "screening-request",
                     provider: step === "llm" ? "llm_suite" : "copilot",
@@ -723,7 +780,7 @@ export function createChatAdapter(
                       state.definition || "the approved business criteria",
                     ),
                     state: "draft",
-                    companies: state.companies.slice(0, 100).map((c) => ({
+                    companies: consideredCompanies(state).map((c) => ({
                       name: c.name,
                       website: c.pbWebsite || c.website,
                     })),
@@ -737,41 +794,21 @@ export function createChatAdapter(
                   sessionId,
                   {
                     ...artifactBase(options.find((o) => o.id === step)!.label),
-                    type: "handoff",
-                    service:
-                      step === "pitchbook"
-                        ? "PitchBook"
-                        : step === "rogo"
-                          ? "ROGO"
-                          : step === "llm"
-                            ? "LLMSuite"
-                            : "M365 Copilot",
-                    state:
-                      step === "pitchbook" || step === "rogo"
-                        ? "awaiting-files"
-                        : "unavailable",
-                    detail:
-                      step === "pitchbook"
-                        ? "Attach a mapping CSV and PitchBook data workbook(s). Headers identify the file roles; filenames do not."
-                        : step === "rogo"
-                          ? "Attach ROGO workbook(s) with a Website column. PitchBook website is preferred for matching."
-                          : step === "llm"
-                            ? "LLMSuite is not connected. Export the LLM workbook to continue in your screening system."
-                            : "M365 is not connected. LinkedIn is optional when preparing a question or screening.",
+                    type: "enrichment-upload",
+                    source: step as "pitchbook" | "rogo",
+                    files: [],
                   },
                   turnId,
                 ),
               );
           }
         } else if (
-          /^\/plan$|next steps?|recommend|^continue$/i.test(text) &&
+          nextStepsRequest.test(text) &&
           state.companies.length
         ) {
           add(nextOptions(sessionId, turnId));
         } else if (
-          /^(?:find companies|start search|search companies|search again|find more companies|broaden the search)$/i.test(
-            text,
-          )
+          discoveryRequest.test(text)
         ) {
           if (!approved(state)) {
             if (state.criteriaText) add(criteriaArtifact(sessionId, turnId));
@@ -835,6 +872,7 @@ export function createChatAdapter(
                     user.id,
                   ),
             );
+            if (!samePrompt) await flushCriteriaDraft(sessionId);
             content.push({
               type: "text",
               text:

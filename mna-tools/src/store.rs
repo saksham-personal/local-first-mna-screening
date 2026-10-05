@@ -21,6 +21,7 @@ const WORKFLOW_MIGRATION: &str = include_str!("../migrations/003_workflow.sql");
 const EXECUTION_MIGRATION: &str = include_str!("../migrations/004_execution.sql");
 const TRUST_MIGRATION: &str = include_str!("../migrations/005_trust.sql");
 const RETRIEVAL_RECOVERY_MIGRATION: &str = include_str!("../migrations/006_retrieval_recovery.sql");
+const SHORTLIST_REVIEW_MIGRATION: &str = include_str!("../migrations/007_shortlist_review.sql");
 const MAX_TEXT: usize = 100_000;
 const MAX_LIST: usize = 1_000;
 
@@ -36,7 +37,7 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(Error::Conflict(
                 "Database schema is newer than this service supports".into(),
             ));
@@ -63,6 +64,22 @@ impl Store {
         }
         transaction.execute_batch(TRUST_MIGRATION)?;
         transaction.execute_batch(RETRIEVAL_RECOVERY_MIGRATION)?;
+        let shortlist_columns:(i64,i64)=transaction.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('candidates') WHERE name='considered'),EXISTS(SELECT 1 FROM pragma_table_info('candidates') WHERE name='consideration_reason')",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        match shortlist_columns {
+            (0, 0) => transaction.execute_batch(SHORTLIST_REVIEW_MIGRATION)?,
+            (1, 1) => {
+                let complete:i64=transaction.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('shortlist_reviews','shortlist_review_columns','criteria_revisions','criteria_revision_approvals','source_change_counter')",[],|r|r.get(0))?;
+                if complete != 5 {
+                    return Err(Error::Conflict("incomplete shortlist review schema".into()));
+                }
+                transaction.pragma_update(None, "user_version", 7)?;
+            }
+            _ => {
+                return Err(Error::Conflict(
+                    "incomplete candidate consideration schema".into(),
+                ))
+            }
+        }
         transaction.commit()?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -176,8 +193,15 @@ impl Store {
         if !arguments.is_object() {
             return Err(Error::Validation("tool arguments must be an object".into()));
         }
-        if serde_json::to_vec(arguments)?.len() > 1_000_000 {
-            return Err(Error::Validation("arguments exceed 1 MB".into()));
+        let max_arguments = if tool == "review_shortlist" {
+            16_000_000
+        } else {
+            1_000_000
+        };
+        if serde_json::to_vec(arguments)?.len() > max_arguments {
+            return Err(Error::Validation(format!(
+                "arguments exceed {max_arguments} bytes"
+            )));
         }
         for key in [
             "run_id",
@@ -219,6 +243,11 @@ impl Store {
             "update_candidate_status" => self.update_candidate(parse(tool, arguments)?),
             "get_candidate_set" => self.get_candidates(parse(tool, arguments)?),
             "get_run_context" => self.get_run_context(parse(tool, arguments)?),
+            "get_shortlist_context"
+            | "review_shortlist"
+            | "save_criteria_revision"
+            | "approve_criteria_revision"
+            | "get_criteria_history" => crate::review::execute(self, tool, arguments),
             "save_checkpoint" => self.save_checkpoint(parse(tool, arguments)?),
             "get_checkpoint" => self.get_checkpoint(parse(tool, arguments)?),
             _ => Err(Error::Validation(format!("unknown state tool: {tool}"))),
@@ -1646,6 +1675,8 @@ struct CandidateFilters {
 struct CandidateSetArgs {
     run_id: String,
     #[serde(default)]
+    include_hidden: bool,
+    #[serde(default)]
     statuses: Option<Vec<String>>,
     #[serde(default)]
     filters: CandidateFilters,
@@ -1821,8 +1852,8 @@ impl Store {
             ignored.push("revenue_max");
         }
         let conn = self.conn()?;
-        let mut stmt=conn.prepare("SELECT x.run_id,x.company_id,x.status,x.reason,x.discovered_at,x.updated_at,c.name,c.website,c.industry,c.country,c.revenue FROM candidates x JOIN companies c ON c.company_id=x.company_id WHERE x.run_id=? ORDER BY x.updated_at DESC,x.company_id")?;
-        let rows=stmt.query_map([&args.run_id],|r|Ok(json!({"run_id":r.get::<_,String>(0)?,"company_id":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"reason":r.get::<_,Option<String>>(3)?,"discovered_at":r.get::<_,String>(4)?,"updated_at":r.get::<_,String>(5)?,"company":{"company_id":r.get::<_,String>(1)?,"name":r.get::<_,String>(6)?,"website":r.get::<_,Option<String>>(7)?,"industry":r.get::<_,Option<String>>(8)?,"country":r.get::<_,Option<String>>(9)?,"revenue":r.get::<_,Option<f64>>(10)?}})))?;
+        let mut stmt=conn.prepare("SELECT x.run_id,x.company_id,x.status,x.reason,x.discovered_at,x.updated_at,c.name,c.website,c.industry,c.country,c.revenue,x.considered,x.consideration_reason FROM candidates x JOIN companies c ON c.company_id=x.company_id WHERE x.run_id=? AND (? OR x.considered=1) ORDER BY x.updated_at DESC,x.company_id")?;
+        let rows=stmt.query_map(params![args.run_id,args.include_hidden],|r|Ok(json!({"run_id":r.get::<_,String>(0)?,"company_id":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"reason":r.get::<_,Option<String>>(3)?,"discovered_at":r.get::<_,String>(4)?,"updated_at":r.get::<_,String>(5)?,"considered":r.get::<_,i64>(11)?!=0,"consideration_reason":r.get::<_,Option<String>>(12)?,"company":{"company_id":r.get::<_,String>(1)? ,"name":r.get::<_,String>(6)? ,"website":r.get::<_,Option<String>>(7)? ,"industry":r.get::<_,Option<String>>(8)? ,"country":r.get::<_,Option<String>>(9)? ,"revenue":r.get::<_,Option<f64>>(10)?}})))?;
         let mut out = Vec::new();
         for row in rows {
             let row = row?;
@@ -1866,6 +1897,11 @@ impl Store {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         let profile_version:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM screening_profiles WHERE run_id=? AND status='APPROVED'",[&args.run_id],|r|r.get(0))?;
+        let (candidate_total, considered_total): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*),COALESCE(SUM(considered),0) FROM candidates WHERE run_id=?",
+            [&args.run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         let mut counts = Map::new();
         for candidate_status in [
             "DISCOVERED",
@@ -1905,7 +1941,7 @@ impl Store {
             event_types: None,
         })?;
         Ok(
-            json!({"run_id":args.run_id,"objective":objective,"status":status,"active_criteria_version":criteria_version,"active_profile_version":profile_version,"candidate_counts":counts,"open_questions":open,"recent_major_events":events}),
+            json!({"run_id":args.run_id,"objective":objective,"status":status,"active_criteria_version":criteria_version,"active_profile_version":profile_version,"candidate_counts":counts,"candidate_total":candidate_total,"considered_total":considered_total,"hidden_total":candidate_total-considered_total,"candidate_counts_scope":"historical_all_candidates","open_questions":open,"recent_major_events":events}),
         )
     }
 }

@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod providers;
 pub mod result_parser;
 pub mod retrieval;
+pub mod review;
 pub mod runtime;
 pub mod search;
 pub mod store;

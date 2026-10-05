@@ -81,7 +81,7 @@ const actionLabels: Record<ResearchAction, string> = {
   pitchbook: "PitchBook",
   rogo: "ROGO",
   bing: "Bing research",
-  llm: "LLM screening",
+  llm: "LLM Suite screening",
   copilot: "Copilot screening",
 };
 

@@ -11,7 +11,7 @@ export async function readCompanySources(sessionId: string, runId: string): Prom
   let size = 100;
   let total: number | undefined;
   do {
-    const args: ToolResult = { run_id: runId, limit: size, ...(cursor ? { after_company_id: cursor } : {}) };
+    const args: ToolResult = { run_id: runId, include_hidden: true, limit: size, ...(cursor ? { after_company_id: cursor } : {}) };
     const receipt = sessionStore.startTool("get_candidate_source_data", args, { sessionId, title: "Read company sources" });
     let page: ToolResult;
     try {
@@ -42,7 +42,7 @@ function refreshCompany(company: Company, row: ScreeningSourceRow): Company {
     rawIscc: Object.keys(row.sources.ISCC).length ? textRecord(row.sources.ISCC) : undefined,
     pbId: usableText(row.PBId) || undefined, pbWebsite: usableText(pb.PB_Website ?? pb.Website) || undefined,
     linkedin: usableText(pb["PB_LinkedIn URL"] ?? pb["LinkedIn URL"]) || undefined,
-    enrichment: { ...company.enrichment, ...pb, ROGO: row.sources.ROGO } };
+    enrichment: { ...company.enrichment, ...pb, ROGO: row.sources.ROGO, RESULTS: row.sources.RESULTS ?? {}, BING: row.sources.BING ?? {} } };
 }
 
 export async function refreshCompanyContext(sessionId: string, runId: string): Promise<ScreeningSourceRow[]> {

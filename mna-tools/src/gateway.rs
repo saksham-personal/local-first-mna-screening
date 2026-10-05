@@ -17,6 +17,310 @@ use uuid::Uuid;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct TextAttachment {
+    pub name: String,
+    pub media_type: Option<String>,
+    pub content: String,
+}
+
+/// A direct analyst message or an explicitly requested drafting operation.
+/// Batch scoring continues to use immutable prepared plans.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderTextRequest {
+    pub run_id: Option<String>,
+    pub provider: String,
+    pub deployment: Option<String>,
+    pub prompt: String,
+    pub request_id: Option<String>,
+    pub expected_format: Option<String>,
+    pub purpose: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<TextAttachment>,
+}
+
+pub fn text_input_schema() -> Value {
+    serde_json::to_value(schemars::schema_for!(ProviderTextRequest)).expect("schema serializes")
+}
+
+/// Strict finite text contracts keep generated drafts separate from tool
+/// commands. A draft cannot execute tools or make a company identity decision.
+pub fn parse_text_output(format: &str, response: &str) -> Result<Value> {
+    let response = response.trim().trim_start_matches('\u{feff}').trim();
+    if response.is_empty() || response.len() > 200_000 {
+        return Err(Error::Validation("Empty or oversized provider text".into()));
+    }
+    if format == "text" {
+        return Ok(json!({"text":response}));
+    }
+    let (start, end) = match format {
+        "query_templates" => ("BEGIN_QUERIES", "END_QUERIES"),
+        "criteria" => ("BEGIN_CRITERIA", "END_CRITERIA"),
+        "screening_prompt" => ("BEGIN_PROMPT", "END_PROMPT"),
+        _ => return Err(Error::Validation("Unknown provider text format".into())),
+    };
+    let body = response
+        .strip_prefix(start)
+        .and_then(|value| value.strip_suffix(end))
+        .ok_or_else(|| {
+            Error::Validation(format!(
+                "Return only {start} and {end} with the requested content between them"
+            ))
+        })?
+        .trim();
+    if body.is_empty() || body.contains(start) || body.contains(end) {
+        return Err(Error::Validation(
+            "Missing or duplicate output block".into(),
+        ));
+    }
+    if format != "query_templates" {
+        if body.len() > 60_000 {
+            return Err(Error::Validation(
+                "Generated draft exceeds 60000 bytes".into(),
+            ));
+        }
+        return Ok(json!({"text":body}));
+    }
+    let mut templates = Vec::new();
+    let unknown = regex::Regex::new(r"\{[^{}]*\}|<[^<>]*>").expect("constant regex");
+    for line in body.lines().filter(|line| !line.trim().is_empty()) {
+        let query = line
+            .trim()
+            .strip_prefix("QUERY:")
+            .map(str::trim)
+            .filter(|query| !query.is_empty() && query.len() <= 2000)
+            .ok_or_else(|| {
+                Error::Validation("Each query must be one QUERY: line of at most 2000 bytes".into())
+            })?;
+        let lower = query.to_lowercase();
+        if !["{company}", "{website}", "<company>"]
+            .iter()
+            .any(|token| lower.contains(token))
+            || unknown.find_iter(query).any(|token| {
+                !["{company}", "{website}", "<company>"]
+                    .contains(&token.as_str().to_lowercase().as_str())
+            })
+            || templates
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(query))
+        {
+            return Err(Error::Validation(
+                "Use distinct queries with only {company}, {website}, or <company> placeholders"
+                    .into(),
+            ));
+        }
+        templates.push(query.to_owned());
+    }
+    if !(1..=5).contains(&templates.len()) {
+        return Err(Error::Validation(
+            "Return one to five query templates".into(),
+        ));
+    }
+    Ok(json!({"text":templates.join("\n"),"templates":templates}))
+}
+
+pub async fn provider_text(store: Store, args: ProviderTextRequest) -> Result<Value> {
+    if !matches!(args.provider.as_str(), "llm_suite" | "copilot")
+        || args.prompt.trim().is_empty()
+        || args.prompt.len() > 60_000
+        || args.attachments.len() > 8
+        || args.attachments.iter().any(|file| {
+            file.name.is_empty() || file.name.len() > 255 || file.content.len() > 120_000
+        })
+        || args
+            .attachments
+            .iter()
+            .map(|file| file.content.len())
+            .sum::<usize>()
+            > 600_000
+    {
+        return Err(Error::Validation("Use a supported provider, a prompt of at most 60000 bytes, and up to eight bounded attachments".into()));
+    }
+    if let Some(run_id) = &args.run_id {
+        store.execute("get_run_context", &json!({"run_id":run_id}))?;
+    }
+    let format = args.expected_format.as_deref().unwrap_or("text");
+    if !matches!(
+        format,
+        "text" | "query_templates" | "criteria" | "screening_prompt"
+    ) {
+        return Err(Error::Validation("Unknown provider text format".into()));
+    }
+    let purpose = args.purpose.as_deref().unwrap_or("question");
+    if !matches!(purpose, "question" | "orchestrator" | "subagent") {
+        return Err(Error::Validation("Unknown provider text purpose".into()));
+    }
+    let deployment = args
+        .deployment
+        .clone()
+        .filter(|value| !value.trim().is_empty() && value != "automatic")
+        .or_else(|| {
+            std::env::var(if args.provider == "llm_suite" {
+                "MNA_LLMSUITE_DEPLOYMENT"
+            } else {
+                "MNA_M365_DEPLOYMENT"
+            })
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        });
+    let (endpoint, token) = match configured(&args.provider) {
+        Ok(value) => value,
+        Err(Error::ProviderUnavailable(_)) => {
+            return Ok(
+                json!({"executed":false,"message":format!("{} is not connected yet.",if args.provider=="llm_suite" {"LLM Suite"}else{"M365 Copilot"})}),
+            )
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(deployment) = deployment.filter(|value| value.len() <= 160) else {
+        return Ok(
+            json!({"executed":false,"message":"The service is waiting for its configured model."}),
+        );
+    };
+    let request_id = args
+        .request_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    if request_id.is_empty()
+        || request_id.len() > 160
+        || !request_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(Error::Validation("Invalid provider request ID".into()));
+    }
+    let payload = json!({"contract_version":2,"deployment":deployment,"prompt":args.prompt,"attachments":args.attachments.iter().map(|file|json!({"name":file.name,"media_type":file.media_type,"content":file.content})).collect::<Vec<_>>(),"expected_format":format,"run_id":args.run_id});
+    let payload_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(
+            &json!({"provider":args.provider,"endpoint":endpoint.as_str(),"purpose":purpose,"payload":payload})
+        )?)
+    );
+    let previous = store.with_connection(|connection| {
+        use rusqlite::OptionalExtension;
+        Ok(connection
+            .query_row(
+                "SELECT payload_json FROM agent_events WHERE event_id=?",
+                [format!("text:{request_id}:completed")],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    })?;
+    if let Some(previous) = previous {
+        let value: Value = serde_json::from_str(&previous)?;
+        if value["payload_hash"] != payload_hash {
+            return Err(Error::Conflict(
+                "Request ID belongs to different input".into(),
+            ));
+        }
+        return Ok(value["result"].clone());
+    }
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(90))
+        .build()?;
+    let service = ExecutionService::new(store.clone());
+    let mut repair = String::new();
+    for attempt in 0..=2 {
+        let key = format!("text:{request_id}:{attempt}");
+        let already_sent = store.with_connection(|connection| {
+            Ok(connection.query_row(
+                "SELECT COUNT(*) FROM execution_provider_audit WHERE request_key=?",
+                [&key],
+                |row| row.get::<_, i64>(0),
+            )? > 0)
+        })?;
+        if already_sent {
+            return Err(Error::Conflict("This provider request may already have been sent. Inspect its receipt before retrying".into()));
+        }
+        if args.provider == "llm_suite" {
+            invoke(
+                &service,
+                "consume_llmsuite_slot",
+                json!({"purpose":if attempt==0{purpose}else{"repair"},"request_key":key}),
+            )
+            .await?;
+        }
+        store.with_connection(|connection| {
+            connection.execute("INSERT INTO execution_provider_audit(audit_id,job_id,provider,purpose,request_key,payload_hash,recorded_at) VALUES(?,NULL,?,?,?,?,?)",rusqlite::params![Uuid::new_v4().to_string(),args.provider,purpose,key,payload_hash,chrono::Utc::now().to_rfc3339()])?;
+            Ok(())
+        })?;
+        let mut body = payload.clone();
+        if !repair.is_empty() {
+            body["prompt"] = json!(format!(
+                "{}\n\nCorrect the output format: {}",
+                args.prompt, repair
+            ));
+        }
+        let response = client
+            .post(endpoint.clone())
+            .bearer_auth(&token)
+            .header("Idempotency-Key", &key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| {
+                Error::Conflict(
+                    "Provider receipt is uncertain. Verify the request before retrying".into(),
+                )
+            })?;
+        if !response.status().is_success() {
+            return Err(Error::Conflict(format!(
+                "Provider returned HTTP {}; no answer was accepted",
+                response.status().as_u16()
+            )));
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| {
+                Error::Conflict("Provider reply was interrupted; inspect its receipt".into())
+            })?;
+            if bytes.len() + chunk.len() > 2_000_000 {
+                return Err(Error::Validation("Provider reply exceeded 2 MB".into()));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        // The receipt precedes even envelope parsing: malformed JSON and missing
+        // response_text are still exact, durable evidence of a sent request.
+        let mut response_bytes_hex = String::with_capacity(bytes.len() * 2);
+        use std::fmt::Write as _;
+        for byte in &bytes {
+            write!(&mut response_bytes_hex, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        store.with_connection(|connection| {
+            connection.execute("INSERT INTO agent_events(event_id,run_id,event_type,payload_json,major,created_at) VALUES(?,?,'PROVIDER_TEXT_RECEIPT',?,0,?)",rusqlite::params![format!("text:{request_id}:receipt:{attempt}"),args.run_id,json!({"request_id":request_id,"provider":args.provider,"attempt":attempt,"payload_hash":payload_hash,"response_hash":format!("{:x}",Sha256::digest(&bytes)),"response_bytes_hex":response_bytes_hex}).to_string(),chrono::Utc::now().to_rfc3339()])?;
+            Ok(())
+        })?;
+        let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| {
+            Error::Validation("Provider response does not match the text adapter contract".into())
+        })?;
+        let response_text = envelope["response_text"].as_str().ok_or_else(|| {
+            Error::Validation("Provider response does not match the text adapter contract".into())
+        })?;
+        let parsed = parse_text_output(format, response_text);
+        match parsed {
+            Ok(mut result) => {
+                result["executed"] = json!(true);
+                result["request_id"] = json!(request_id);
+                store.with_connection(|connection| {
+                    connection.execute("INSERT INTO agent_events(event_id,run_id,event_type,payload_json,major,created_at) VALUES(?,?,'PROVIDER_TEXT_COMPLETED',?,0,?)",rusqlite::params![format!("text:{request_id}:completed"),args.run_id,json!({"payload_hash":payload_hash,"result":result}).to_string(),chrono::Utc::now().to_rfc3339()])?;
+                    Ok(())
+                })?;
+                return Ok(result);
+            }
+            Err(error) if attempt < 2 => repair = error.to_string(),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(Error::Internal(
+        "Provider text repair state exhausted".into(),
+    ))
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DispatchRequest {
     pub job_id: String,
     pub controller_id: String,

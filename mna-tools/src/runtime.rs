@@ -51,6 +51,8 @@ pub struct ToolDefinition {
 
 pub fn tool_definitions() -> Vec<ToolDefinition> {
     let groups: &[(&str, &str, &str, bool)] = &[
+        ("get_shortlist_context", "Read considered companies, hidden count, source coverage and chosen results for this screening run", "review", false),
+        ("get_criteria_history", "Read every criteria revision and its analyst approval; the previous revision is the last criteria", "review", false),
         (
             "search_companies",
             "Search canonical core-business descriptions; report non-core filters as unused",
@@ -414,6 +416,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     .or_else(|| crate::workflow::input_schema(name))
                     .or_else(|| crate::projection::input_schema(name))
                     .or_else(|| crate::execution::input_schema(name))
+                    .or_else(|| crate::review::input_schema(name))
                     .unwrap_or_else(|| json!({"type":"object","additionalProperties":false})),
             },
         )
@@ -494,6 +497,11 @@ impl Runtime {
             match arguments["run_id"].as_str() {
                 Some(run_id) => workflow.require_approved_criteria(run_id).map(|_| ()),
                 None => Err(Error::Validation("run_id is required for discovery".into())),
+            }
+        } else if tool == "propose_prepared_plan" && arguments["mode"] == "screening" {
+            match arguments["run_id"].as_str() {
+                Some(run_id) => workflow.require_approved_criteria(run_id).map(|_| ()),
+                None => Err(Error::Validation("run_id is required for screening".into())),
             }
         } else if tool == "m365_research" {
             workflow
@@ -664,7 +672,10 @@ pub fn router(runtime: Runtime, api_key: String, analyst_key: Option<String>) ->
         .route("/agent/commands", post(agent_command))
         .route("/tools/batch", post(batch))
         .route("/tools/{tool}", post(direct))
-        .route("/admin/{operation}", post(admin))
+        .route(
+            "/admin/{operation}",
+            post(admin).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
         .route("/admin/tools", get(admin_discover))
         .route("/admin/profiles/approve", post(approve))
         .route("/admin/actions/approve", post(approve_action))
@@ -818,6 +829,10 @@ async fn admin(
             | "execution-dispatch"
             | "llmsuite-slot"
             | "llmsuite-consume"
+            | "provider-text"
+            | "shortlist-review"
+            | "criteria-save"
+            | "criteria-approve"
     );
     if if controller_operation {
         !authenticated_controller(&headers, &state)
@@ -840,6 +855,16 @@ async fn admin(
             Err(error) => error.into_response(),
         };
     }
+    if operation == "provider-text" {
+        let args = match serde_json::from_value(arguments) {
+            Ok(args) => args,
+            Err(error) => return Error::Validation(error.to_string()).into_response(),
+        };
+        return match crate::gateway::provider_text(state.runtime.store.clone(), args).await {
+            Ok(result) => Json(result).into_response(),
+            Err(error) => error.into_response(),
+        };
+    }
     let tool = match operation.as_str() {
         "companies" => "ingest_companies",
         "runs" => "create_run",
@@ -858,6 +883,9 @@ async fn admin(
         "llmsuite-consume" => "consume_llmsuite_slot",
         "embedding-index" => "rebuild_embedding_index",
         "evidence-review" => "review_evidence_claim",
+        "shortlist-review" => "review_shortlist",
+        "criteria-save" => "save_criteria_revision",
+        "criteria-approve" => "approve_criteria_revision",
         _ => return Error::NotFound("Unknown admin operation".into()).into_response(),
     };
     match state.runtime.dispatch(tool, arguments, true).await {
@@ -929,7 +957,11 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("reconcile_execution_job", "/admin/execution-reconcile"), ("record_execution_failure", "/admin/execution-failure"), ("retry_execution_job", "/admin/execution-retry"),
         ("consume_llmsuite_slot", "/admin/llmsuite-consume"), ("dispatch_execution_job", "/admin/execution-dispatch"),
         ("rebuild_embedding_index", "/admin/embedding-index"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name))}})).collect();
+        ("review_shortlist", "/admin/shortlist-review"),
+        ("save_criteria_revision", "/admin/criteria-save"),
+        ("approve_criteria_revision", "/admin/criteria-approve"),
+        ("dispatch_provider_text", "/admin/provider-text"),
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 

@@ -17,6 +17,7 @@ import type {
   ArtifactAction,
   ChatArtifact,
   ResearchStep,
+  ChatState,
 } from "../lib/chat-contract";
 import type { Company, ExportKind } from "../lib/contracts";
 import { productCopy } from "../lib/product-copy";
@@ -25,23 +26,29 @@ import { useTheme } from "../lib/theme-store";
 import { renderDiagram } from "../lib/mermaid-renderer";
 import "./artifacts.css";
 const DataTable = lazy(() => import("./DataTable"));
+const ShortlistReview = lazy(() => import("./ShortlistReview"));
+import FitExamples from "./FitExamples";
+import NextStepsCard from "./NextStepsCard";
+import EnrichmentUpload from "./EnrichmentUpload";
+import { consideredCompanies } from "../lib/chat-policy";
 
 type Props = {
   artifact: ChatArtifact;
-  onAction: (action: ArtifactAction) => void;
+  onAction: (action: ArtifactAction) => void | Promise<void>;
+  context?: ChatState;
 };
 
 const exportNames: Record<ExportKind, string> = {
   pitchbook: "PitchBook",
-  llm: "LLM",
+  llm: "LLM Suite",
   full: "Full data",
 };
 const stepNames: Record<ResearchStep, string> = {
   pitchbook: "PitchBook",
   rogo: "ROGO",
   bing: "Bing research",
-  llm: "LLM screening",
-  copilot: "Copilot screening",
+  llm: "LLM Suite screening",
+  copilot: "M365 Copilot screening",
 };
 const number = new Intl.NumberFormat();
 
@@ -232,7 +239,11 @@ function PlanDiagram({ source }: { source: string }) {
   );
 }
 
-function ArtifactBody({ artifact, onAction }: Props) {
+function ResearchAnswer({ artifact, onAction }: { artifact: Extract<ChatArtifact, { type: "research-answer" }>; onAction: Props["onAction"] }) {
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  return <><p className="ca-note">{artifact.applied ? "Added to a new criteria draft for your approval." : "This answer is saved in chat. Add it to the criteria only if it changes what you want to find."}</p>{!artifact.applied && <button type="button" className="ca-secondary-action" disabled={busy} onClick={() => { setBusy(true); setError(""); void Promise.resolve(onAction({ type: "use-answer-in-criteria", artifactId: artifact.id })).catch(caught => setError(String(caught.message ?? caught))).finally(() => setBusy(false)); }}>{busy ? "Preparing criteria…" : "Use answer in criteria"}</button>}{error && <p role="alert" className="ca-error-detail">{error}</p>}</>;
+}
+function ArtifactBody({ artifact, onAction, context }: Props) {
   switch (artifact.type) {
     case "screening-request":
       return (
@@ -315,7 +326,13 @@ function ArtifactBody({ artifact, onAction }: Props) {
       );
     }
     case "data-table":
-      return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}<Suspense fallback={<p className="ca-note" role="status">Opening table…</p>}><DataTable rows={artifact.rows} columns={artifact.columns} label={artifact.title} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} /></Suspense></>;
+      return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}<Suspense fallback={<p className="ca-note" role="status">Opening table…</p>}>{artifact.reviewable && context ? <ShortlistReview rows={artifact.rows} columns={artifact.columns} context={context} planId={artifact.planId} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} onApply={async (keepCompanyIds, outputColumns) => { await onAction({ type: "review-shortlist", artifactId: artifact.id, keepCompanyIds, outputColumns, planId: artifact.planId }); }} /> : <DataTable rows={artifact.rows} columns={artifact.columns} label={artifact.title} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} />}</Suspense></>;
+    case "fit-examples":
+      return <FitExamples artifact={artifact} onAction={onAction} />;
+    case "research-answer":
+      return <ResearchAnswer artifact={artifact} onAction={onAction} />;
+    case "enrichment-upload":
+      return <EnrichmentUpload artifact={artifact} context={context} onAction={onAction} />;
     case "file": {
       const file = artifact.file;
       const href = `/api/files/${encodeURIComponent(file.id)}`;
@@ -326,7 +343,7 @@ function ArtifactBody({ artifact, onAction }: Props) {
             ? `${(file.bytes / 1024).toFixed(1)} KB`
             : `${(file.bytes / (1024 * 1024)).toFixed(1)} MB`;
       return (
-        <div className="ca-file-line">
+        <><div className="ca-file-line">
           <span className="ca-type-icon">
             <FileText size={18} />
           </span>
@@ -361,7 +378,7 @@ function ArtifactBody({ artifact, onAction }: Props) {
           >
             <ArrowDownToLine size={16} />
           </a>
-        </div>
+        </div>{(file.purpose === "chat" || !file.purpose) && <label className="ca-file-provider"><input type="checkbox" role="switch" checked={file.passToProvider !== false} onChange={event => onAction({ type: "toggle-file", artifactId: artifact.id, fileId: file.id, passToProvider: event.target.checked })} /><span>Include when asking LLM Suite or M365 Copilot</span></label>}</>
       );
     }
     case "criteria":
@@ -370,17 +387,18 @@ function ArtifactBody({ artifact, onAction }: Props) {
           <div className="ca-criteria-decision" role="status">
             <span className={`ca-state-dot ca-state-${artifact.decision}`} />
             {artifact.decision === "approved"
-              ? `Approved · revision ${artifact.revision}`
+              ? `${artifact.phase === "business" ? "Business criteria reviewed" : "Approved"} · revision ${artifact.revision}`
               : artifact.decision === "declined"
                 ? `Declined · revision ${artifact.revision}`
                 : `Awaiting approval · revision ${artifact.revision}`}
           </div>
           <p className="ca-criteria-definition">{artifact.definition}</p>
-          {artifact.criteriaText && (
+          {context?.criteriaSaveError && artifact.revision === context.revision && <p className="sf-upload-error" role="alert">The criteria could not be saved: {context.criteriaSaveError}. Edit the criteria or try approval again.</p>}
+          {artifact.lastCriteria && (
             <details className="ca-criteria-original">
-              <summary>Original criteria</summary>
+              <summary>Last criteria</summary>
               <blockquote className="ca-criteria-text">
-                {artifact.criteriaText}
+                {artifact.lastCriteria}
               </blockquote>
             </details>
           )}
@@ -405,7 +423,7 @@ function ArtifactBody({ artifact, onAction }: Props) {
                   }
                 >
                   <Check size={14} />
-                  Approve criteria
+                  {artifact.phase === "business" ? "Approve business criteria" : "Approve and search"}
                 </button>
                 <button
                   className="ca-secondary-action"
@@ -436,71 +454,8 @@ function ArtifactBody({ artifact, onAction }: Props) {
       );
     case "companies":
       return <Companies artifact={artifact} onAction={onAction} />;
-    case "options": {
-      const selected = new Set(artifact.selected ?? []);
-      if (artifact.dismissed)
-        return (
-          <p className="ca-note">
-            Next steps deferred. Ask for next steps whenever you are ready.
-          </p>
-        );
-      return (
-        <div className="ca-options">
-          {artifact.options.map((option) => {
-            const chosen = selected.has(option.id);
-            return (
-              <div
-                className={`ca-option${option.id === artifact.recommended ? " is-recommended" : ""}`}
-                key={option.id}
-              >
-                <span className="ca-option-copy">
-                  <strong>{option.label}</strong>
-                  <small>{option.description}</small>
-                  {option.id === artifact.recommended && <em>Recommended</em>}
-                </span>
-                {chosen ? (
-                  <span className="ca-option-status">
-                    <Check size={13} />
-                    Added
-                  </span>
-                ) : option.available ? (
-                  <button
-                    type="button"
-                    className="ca-secondary-action"
-                    onClick={() =>
-                      onAction({
-                        type: "choose-option",
-                        artifactId: artifact.id,
-                        option: option.id,
-                      })
-                    }
-                  >
-                    {option.id === "bing"
-                      ? "Draft questions"
-                      : option.id === "llm" || option.id === "copilot"
-                        ? "Configure"
-                        : "Proceed"}
-                  </button>
-                ) : (
-                  <span className="ca-option-status ca-muted">
-                    Not connected
-                  </span>
-                )}
-              </div>
-            );
-          })}
-          <button
-            className="ca-text-action"
-            type="button"
-            onClick={() =>
-              onAction({ type: "dismiss-options", artifactId: artifact.id })
-            }
-          >
-            Not now
-          </button>
-        </div>
-      );
-    }
+    case "options":
+      return <NextStepsCard artifact={artifact} context={context} onAction={onAction} />;
     case "plan":
       return (
         <>
@@ -709,7 +664,11 @@ function ArtifactBody({ artifact, onAction }: Props) {
   }
 }
 
-export default function ArtifactCard({ artifact, onAction }: Props) {
+export default function ArtifactCard({ artifact, onAction, context }: Props) {
+  if (artifact.type === "companies" && context?.backendRunId === artifact.backendRunId) {
+    const companies = consideredCompanies(context);
+    artifact = { ...artifact, title: `${companies.length.toLocaleString()} ${companies.length === 1 ? "company" : "companies"} considered`, companies, counts: context.counts };
+  }
   const createdAt = new Date(artifact.createdAt);
   const timeLabel = Number.isNaN(createdAt.getTime())
     ? ""
@@ -737,7 +696,7 @@ export default function ArtifactCard({ artifact, onAction }: Props) {
         )}
       </header>
       <div className="ca-artifact-body">
-        <ArtifactBody artifact={artifact} onAction={onAction} />
+        <ArtifactBody artifact={artifact} onAction={onAction} context={context} />
       </div>
     </article>
   );

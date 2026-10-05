@@ -31,21 +31,21 @@ Normalize whitespace, case and null markers such as blank, `-`, `0`, `NA`, `N/A`
 
 Discovery uses descriptions, products, services, core-business keywords and examples. Financial, employee-size, geography, ownership and source industry-classification fields are **recorded but never used to search or filter**. Only approved `core_business_exclusions` may filter discovery. Accepted legacy filters are named in `ignored_search_filters`; show that notice to the analyst. The service cannot reliably infer every non-core condition from free text: the orchestrator must extract and record `unused_criteria` and keep generated queries qualitative.
 
-A new run starts with a proposed profile. Core-business criteria and exclusions require actual analyst approval before MID/ISCC/similarity discovery. `find_company`, working criteria packets and an approved literal Bing clarification plan can help interpret examples before that approval. `label_company` is reserved for analyst-supplied feedback. Retrieval scores, reranker scores, model assessments and verified evidence are separate records.
+A new run starts with a proposed profile. The UI also saves each criteria edit as a durable revision, including separate optional good-fit and bad-fit examples. Only the latest approved criteria revision can authorize new search or screening; a later edit requires another approval. `get_criteria_history` shows older versions without reactivating them. `find_company`, working criteria packets and an approved literal Bing clarification plan can help interpret examples. `label_company` is reserved for analyst-supplied feedback. Retrieval scores, reranker scores, provider assessments and verified evidence are separate records.
 
-Companies, exact identifiers, source rows and compact enrichment are global. Candidate status, labels, evidence, questions, screening results, plans and checkpoints are run-scoped. `get_previous_research` and `get_source_rows` explicitly permit broader inspection; other scoped tools do not silently reuse another run's conclusions.
+Companies, exact identifiers, source rows and compact PB/ROGO enrichment are global. Candidate status, considered/hidden selection, criteria revisions, labels, evidence, questions, screening results, plans and checkpoints are run-scoped. By default candidate readers and exports use the considered set; `get_shortlist_context` can page hidden history. `get_previous_research` and `get_source_rows` explicitly permit broader inspection; other scoped tools do not silently reuse another run's conclusions. Saved RESULTS and BING fields can be selected as labeled context for a later screening.
 
 ## Tool index
 
 - [Company discovery and retrieval](#company-discovery-and-retrieval): `search_mid`, `search_companies`, `find_company`, `find_similar_companies`, `find_similar_to_examples`, `search_iscc`, `get_iscc_score_samples`, `get_retrieval_config`, `embed_texts`, `rerank_candidates`
 - [Identity and source context](#identity-and-source-context): `get_company`, `get_company_identifiers`, `get_source_rows`, `get_candidate_source_data`, `get_run_source_projection`, `get_source_field_catalog`
 - [Scoped context](#scoped-context): `get_company_context`, `get_candidate_context`, `get_candidate_batch_context`, `build_context_packet`
-- [Screening criteria and profile lineage](#screening-criteria-and-profile-lineage): `get_run_context`, `get_original_criteria`, `get_active_screening_profile`, `get_screening_profile_version`, `compare_profile_versions`, `propose_screening_profile`, `get_search_policy`
+- [Screening criteria and profile lineage](#screening-criteria-and-profile-lineage): `get_run_context`, `get_original_criteria`, `get_criteria_history`, `get_active_screening_profile`, `get_screening_profile_version`, `compare_profile_versions`, `propose_screening_profile`, `get_search_policy`
 - [Analyst examples](#analyst-examples): `label_company`, `get_labelled_examples`, `get_representative_examples`
 - [Evidence](#evidence): `save_evidence`, `get_evidence`, `get_missing_evidence`
 - [Research](#research): `bing_search`, `m365_research`, `fetch_url`, `extract_url_context`
 - [Durable memory](#durable-memory): `search_research_memory`, `get_previous_research`, `get_recent_agent_events`, `get_search_history`, `get_open_questions`, `add_open_question`, `resolve_open_question`
-- [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `update_candidate_status`, `get_discovery_summary`
+- [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `update_candidate_status`, `get_discovery_summary`
 - [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `export_candidate_set`
 - [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_progress`, `get_execution_job`, `get_model_assessments`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
 - [Recovery](#recovery): `save_checkpoint`, `get_checkpoint`
@@ -399,15 +399,16 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 **Purpose:** Read all selectable source columns for a paged candidate scope.
 
-**How it works:** Requires a saved run. Keyset order is company_id ascending; limit defaults to 50 and accepts 1–100. after_company_id, if supplied, must be a candidate in that run. MID observations are company-global, while ISCC observations must belong to this run. Columns use the latest nonblank value per source and preserve empty source headers. Missing sources stay empty; there is no canonical-field substitution. PitchBook includes the seven compact PB_ fields and original wide columns read from stored Parquet below the configured export root. Missing or corrupt Parquet fails visibly. ROGO exposes hydrated dynamic fields. PB/ROGO enrichment currently remains company-global because the existing schema has no run-specific enrichment revision. A page over 2 MB fails; retry a smaller page. The complete set is obtained by following next_cursor, never by assuming the first page is the universe.
+**How it works:** Requires a saved run. By default reads considered candidates only; set include_hidden=true for saved history. Keyset order is company_id ascending; limit defaults to 50 and accepts 1–100. after_company_id, if supplied, must be a candidate in that scope. MID observations are company-global; ISCC and BING research are run-scoped. Columns use the latest nonblank value per source and preserve empty source headers. PitchBook includes compact PB_ fields and wide columns from Parquet; missing or corrupt Parquet fails visibly. ROGO exposes hydrated fields. RESULTS exposes saved screening output columns for later context, and BING exposes saved grounded observations. PB/ROGO enrichment remains company-global. A page over 2 MB fails; retry a smaller page. Follow next_cursor to read the complete selected scope.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `after_company_id` | No | string or null | `null` |
+| `include_hidden` | No | boolean | `false` |
 | `limit` | No | integer or null | `null` |
 | `run_id` | Yes | string | — |
 
-**Returned data and effects:** run_id, total, rows containing pk, PBId, sources MID/ISCC/PB/ROGO and source-row/hash/enrichment provenance, plus next_cursor. Read-only. This prepares a source-aware input projection; it does not approve or execute screening.
+**Returned data and effects:** run_id, total, rows containing pk, PBId, sources MID/ISCC/PB/ROGO/RESULTS/BING and source provenance, plus next_cursor. Read-only; no screening approval or execution occurs.
 
 **Example arguments:**
 
@@ -422,7 +423,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 **Purpose:** Preview selected source fields as a frozen, run-scoped input table.
 
-**How it works:** Reads all candidates when company_ids is empty or the exact supplied subset otherwise. Select identity fallbacks independently for name, website and description; custom data columns use SOURCE:Field labels in input_columns and matching {source,column} entries in selected_source_columns. index is supplied first and is immutable. PB LinkedIn values must be genuine /company/ pages. This is a read-only preview; propose_prepared_plan creates the authoritative immutable snapshot and digest.
+**How it works:** Reads all considered candidates when company_ids is empty or the exact supplied considered subset otherwise. Select identity fallbacks independently for name, website and description; custom data columns use SOURCE:Field labels in input_columns and matching {source,column} entries in selected_source_columns. RESULTS and BING are selectable saved-context sources for later passes, alongside MID, ISCC, PB and ROGO. index is supplied first and is immutable. PB LinkedIn values must be genuine /company/ pages. This is a read-only preview; propose_prepared_plan creates the authoritative immutable snapshot and digest.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -483,7 +484,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 **Purpose:** List fields available for a run's source-column picker.
 
-**How it works:** Uses the same run-scoped source snapshot and field availability counts as get_run_source_projection. Page through candidate_source_data when assembling a custom input; absent source fields remain visibly empty. This catalog is guidance only; the prepared-plan digest is authoritative.
+**How it works:** Uses the same considered run scope and field availability counts as get_run_source_projection. Includes hydrated RESULTS and BING fields when they exist, so an analyst can choose prior model output or grounded observations as labeled input for another pass. Page through get_candidate_source_data when assembling custom input; absent source fields remain empty. The prepared-plan digest is authoritative.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -670,7 +671,27 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 23. `get_active_screening_profile`
+### 23. `get_criteria_history`
+
+**Purpose:** Read every saved criteria revision and the latest approval state.
+
+**How it works:** Use when an analyst returns to criteria after discovery, enrichment, or screening. Revisions keep criteria text, business definition, separate good-fit and bad-fit examples, digest, time and approver. last_criteria is the newest revision, even when unapproved. Do not infer approval from an older version; search and screening require the latest revision's approval. This read does not edit criteria or restore an old plan.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** run_id, ordered revisions, last_criteria and count. Each revision reports approved, approved_by and approved_at when available.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42"
+}
+```
+
+### 24. `get_active_screening_profile`
 
 **Purpose:** Read the latest analyst-approved interpretation of the screening criteria.
 
@@ -690,7 +711,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 24. `get_screening_profile_version`
+### 25. `get_screening_profile_version`
 
 **Purpose:** Inspect a specific proposed, approved or historical profile.
 
@@ -712,7 +733,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 25. `compare_profile_versions`
+### 26. `compare_profile_versions`
 
 **Purpose:** Show what changed between two interpretations of the same screening criteria.
 
@@ -736,7 +757,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 26. `propose_screening_profile`
+### 27. `propose_screening_profile`
 
 **Purpose:** Save a revised qualitative interpretation for analyst review.
 
@@ -775,7 +796,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 27. `get_search_policy`
+### 28. `get_search_policy`
 
 **Purpose:** Make the qualitative discovery policy visible to the analyst and agent.
 
@@ -797,7 +818,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Analyst examples
 
-### 28. `label_company`
+### 29. `label_company`
 
 **Purpose:** Record an analyst label explicitly supplied by the caller.
 
@@ -823,7 +844,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 29. `get_labelled_examples`
+### 30. `get_labelled_examples`
 
 **Purpose:** Retrieve the analyst's actual examples for this run.
 
@@ -851,7 +872,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 30. `get_representative_examples`
+### 31. `get_representative_examples`
 
 **Purpose:** Select a small balanced context sample of labelled examples.
 
@@ -880,7 +901,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Evidence
 
-### 31. `save_evidence`
+### 32. `save_evidence`
 
 **Purpose:** Save a scoped claim or research observation with provenance.
 
@@ -923,7 +944,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 32. `get_evidence`
+### 33. `get_evidence`
 
 **Purpose:** Read evidence for one company in one run.
 
@@ -953,7 +974,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 33. `get_missing_evidence`
+### 34. `get_missing_evidence`
 
 **Purpose:** Find qualitative attributes that still need research.
 
@@ -983,11 +1004,11 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Research
 
-### 34. `bing_search`
+### 35. `bing_search`
 
 **Purpose:** Execute one approved grounded research query.
 
-**How it works:** The dispatcher requires run_id, plan_id and step_id even though legacy DTO fields are optional. The plan must be approved at the current profile version and its dependencies complete. A criteria-clarification step can approve 1–5 literal queries with no company scope before final criteria approval. A company step requires 3–5 templates and company_id; the submitted query must exactly match an expanded approved template. max_results defaults to 20, maximum 100. Provider enablement and endpoint configuration are separate deployment prerequisites. Company-scoped responses automatically save bounded low-confidence bing_research_observation evidence; evidence confidence is a lead-quality indicator, not verification. Claims remain UNKNOWN until reviewed by an analyst.
+**How it works:** The dispatcher requires run_id, plan_id and step_id even though legacy DTO fields are optional. The plan must be approved at the current profile version and its dependencies complete. A criteria-clarification step can approve 1–5 literal queries with no company scope before final criteria approval. A company step approves 1–5 templates and company_id; the submitted query must exactly match an expanded approved template. The UI applies approved templates to every considered company, in pages of at most 100 sends with automatic continuation. max_results defaults to 20, maximum 100. Provider enablement and endpoint configuration are separate deployment prerequisites; disconnected approval is unexecuted. Company-scoped responses save bounded low-confidence bing_research_observation evidence. It is an unverified research lead until analyst review.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -1013,11 +1034,11 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 35. `m365_research`
+### 36. `m365_research`
 
 **Purpose:** Request an approved grounded research answer from a configured M365 gateway.
 
-**How it works:** Requires run_id, plan_id and step_id at dispatch. The matching m365_research plan step must approve the literal question and have completed dependencies. For a company-scoped step, company_ids contains 1–100 distinct run candidates within the approved scope. The service derives gateway companies as preferred name; preferred website [canonical company_id]. Omit companies or supply exactly that derived list; unrelated names cannot replace the approved scope. Local run/plan/step fields and the structured company_ids array are not forwarded; the derived company text includes its canonical ID. For criteria-only steps, company_ids is empty and companies must match any approved literal list. required_fields has at most 100 entries. Completion requires every approved company/question pair, including questions shared by several companies. This adapter is separate from Copilot batch screening. Use propose_prepared_plan with provider=copilot for scoring. Genuine PitchBook LinkedIn pages are optional, but must be included in the selected input columns whenever any are available. Store research leads with save_evidence; analyst verification is a separate action.
+**How it works:** Requires run_id, plan_id and step_id at dispatch. The matching m365_research plan step must approve the literal question and have completed dependencies. For a company-scoped step, company_ids contains 1–100 distinct considered run candidates within the approved scope. The service derives gateway companies as preferred name; preferred website [canonical company_id]. Omit companies or supply exactly that derived list; unrelated names cannot replace the approved scope. Local run/plan/step fields and structured company_ids are not forwarded; derived text includes canonical IDs. For criteria-only steps, company_ids is empty. required_fields has at most 100 entries. Completion requires every approved company/question pair. This adapter is separate from Copilot batch screening: use propose_prepared_plan with provider=copilot for scoring. For that scoring path, genuine PB LinkedIn must be selected when available. Store research leads with save_evidence; analyst verification is separate.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -1049,7 +1070,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 36. `fetch_url`
+### 37. `fetch_url`
 
 **Purpose:** Fetch a public page into a controlled local artifact cache.
 
@@ -1077,7 +1098,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 37. `extract_url_context`
+### 38. `extract_url_context`
 
 **Purpose:** Extract bounded relevant text from a supplied page or fetched artifact.
 
@@ -1113,7 +1134,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Durable memory
 
-### 38. `search_research_memory`
+### 39. `search_research_memory`
 
 **Purpose:** Find saved research before repeating a search or asking an answered question.
 
@@ -1139,7 +1160,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 39. `get_previous_research`
+### 40. `get_previous_research`
 
 **Purpose:** Explicitly retrieve a company's research from earlier or other runs.
 
@@ -1161,7 +1182,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 40. `get_recent_agent_events`
+### 41. `get_recent_agent_events`
 
 **Purpose:** Recover meaningful run events and decisions.
 
@@ -1188,7 +1209,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 41. `get_search_history`
+### 42. `get_search_history`
 
 **Purpose:** Inspect durable query inputs, results and retrieval provenance.
 
@@ -1212,7 +1233,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 42. `get_open_questions`
+### 43. `get_open_questions`
 
 **Purpose:** Read unresolved screening criteria ambiguities or company research gaps.
 
@@ -1238,7 +1259,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 43. `add_open_question`
+### 44. `add_open_question`
 
 **Purpose:** Persist a relevant ambiguity without guessing an answer.
 
@@ -1263,7 +1284,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 44. `resolve_open_question`
+### 45. `resolve_open_question`
 
 **Purpose:** Record an explicit answer and link the evidence that supports it.
 
@@ -1289,7 +1310,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Candidate funnel
 
-### 45. `add_candidates`
+### 46. `add_candidates`
 
 **Purpose:** Form the unique broad funnel while preserving every retrieval path.
 
@@ -1326,20 +1347,21 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 46. `get_candidate_set`
+### 47. `get_candidate_set`
 
 **Purpose:** Read a bounded page of run candidates and their discovery history.
 
-**How it works:** Optional statuses narrows workflow state; filters.company_ids narrows identity. Legacy geography, industry classification, revenue, employee-size and ownership filter fields are ignored and reported because they must not narrow the qualitative funnel. limit defaults to 100, maximum 1,000. count is the returned page count, not the entire run population; use get_discovery_summary for full metrics. This API does not provide offset pagination; use explicit ID chunks for known larger sets or exports for the complete set.
+**How it works:** By default, reads only considered candidates. Set include_hidden=true to inspect saved companies that are outside the working scope; their considered flag and reason remain visible. Optional statuses narrows workflow state; filters.company_ids narrows identity. Legacy geography, industry classification, revenue, employee-size and ownership filter fields are ignored and reported because they must not narrow discovery. limit defaults to 100, maximum 1,000; count is the returned page count, not the full run. This tool has no cursor. Use get_shortlist_context to page all saved companies, then get_candidate_set for bounded discovery detail.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `filters` | No | CandidateFilters | — |
+| `include_hidden` | No | boolean | `false` |
 | `limit` | No | integer or null | `null` |
 | `run_id` | Yes | string | — |
 | `statuses` | No | array or null | `null` |
 
-**Returned data and effects:** candidates with compact company fields, status/reason and discovery observations; count, search_scope, ignored_search_filters and criteria_notice.
+**Returned data and effects:** candidates with considered/status/reason and discovery observations; count, search_scope, ignored_search_filters and criteria_notice. No hidden row is deleted by a read.
 
 **Example arguments:**
 
@@ -1354,7 +1376,32 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 47. `update_candidate_status`
+### 48. `get_shortlist_context`
+
+**Purpose:** Page the current considered selection or complete saved candidate history.
+
+**How it works:** Use after discovery, PitchBook mapping, or manual shortlist review. include_hidden=false reads the active considered set; true includes hidden history with status, considered and consideration_reason. Keyset pages are ordered by company_id. Follow next_after_company_id while has_more, up to 1,000 rows per call; do not assume the first page is the whole run. Compare total, considered_count, selection_revision, criteria_revision and source_hash between pages and retry if they change. Preferred name/website and PB/ROGO/Bing coverage help decide the next action. This is a read, not an approval or a restore operation.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `after_company_id` | No | string or null | `null` |
+| `include_hidden` | No | boolean | `false` |
+| `limit` | No | integer or null | `null` |
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** run_id, total, considered_count, hidden_count, candidates, has_more, next_after_company_id, selection_revision, criteria_revision, source_hash, review_columns and considered-only hydration coverage.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42",
+  "include_hidden": true,
+  "limit": 500
+}
+```
+
+### 49. `update_candidate_status`
 
 **Purpose:** Record a considered funnel state and supporting reason.
 
@@ -1380,17 +1427,17 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 48. `get_discovery_summary`
+### 50. `get_discovery_summary`
 
 **Purpose:** Report the full unique funnel and the next-step default.
 
-**How it works:** Counts all current candidate memberships. mid_only means a retained MID source record exists; iscc_only means an ISCC observation exists in this run; both means both conditions. These measure source coverage, not the number of independent retrieval queries. other makes legacy manually-ingested rows with no raw MID/ISCC source visible. The invariant is total_unique = mid_only + iscc_only + both + other. Fewer than 2,000 recommends PITCHBOOK_ENRICHMENT; exactly 2,000 and above recommends LLM_SCREENING. A recommendation does not execute work.
+**How it works:** Counts considered candidate memberships; hidden rows remain saved but do not enter active source counts. mid_only means a retained MID source record exists; iscc_only means an ISCC observation exists in this run; both means both. These measure source coverage, not the number of retrieval queries. other identifies a candidate without either raw source. total_unique = mid_only + iscc_only + both + other. Strict suggestions use considered n: PitchBook and Bing for 0<n<1000, ROGO for 500<n<2000, LLMSuite for n>2000, and M365 for 0<n<250 with PB coverage. Research opens first for n>5000, any PB/ROGO/Bing hydration, or 0<n<500. No suggestion executes work.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `run_id` | Yes | string | — |
 
-**Returned data and effects:** total_unique, mid_only, iscc_only, both, other, status_counts and recommended_next_step. The UI should show approved criteria, these metrics, alternate actions and Export.
+**Returned data and effects:** Considered total_unique and source/status counts, saved_total, hidden_total, PB/ROGO/Bing coverage, recommended_steps and research_open. Use get_shortlist_context for all saved rows and review flags.
 
 **Example arguments:**
 
@@ -1402,7 +1449,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Enrichment and exports
 
-### 49. `inspect_enrichment_files`
+### 51. `inspect_enrichment_files`
 
 **Purpose:** Identify staged spreadsheet roles before hydration or run selection.
 
@@ -1425,14 +1472,15 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 50. `import_enrichment_files`
+### 52. `import_enrichment_files`
 
 **Purpose:** Classify and join a mixed analyst upload into compact company context.
 
-**How it works:** files contains 1–32 local files below MNA_IMPORT_DIR; relative paths are preferred. Role detection uses headers and sheets, not filenames. Mapping headers must be in row 1 and include all eight documented columns. Only Company Profile=Yes adds PBId. PitchBook data requires a detected Company ID/Companies header with Description or HQ Location and removes year-flexible copyright text. It joins only candidates in this run via registered PBId, stores seven compact PB_ fields and preserves all wide columns in real columnar Parquet. ROGO detects the topmost Website/website/websites header, never PBId. Website joins prefer usable PB_Website; a different original website is not used as a competing fallback. Ambiguous joins are quarantined. All mappings are processed before PB data and ROGO regardless of upload order. A parse/transaction failure returns an error; row-level join misses are reported separately.
+**How it works:** files contains 1–32 local files below MNA_IMPORT_DIR; relative paths are preferred. Role detection uses headers and sheets, not filenames. Mapping headers must be in row 1 and include all eight documented columns. Only Company Profile=Yes adds PBId. Explicit No or unmapped mapping rows hide that candidate without erasing history; a later eligible mapping can restore mapping-hidden rows, not manually hidden ones. Set exclude_unmapped=true with a mapping sheet to hide every still-unmapped candidate in this run; it is rejected without a mapping sheet. ROGO-only imports do not reapply an old PB exclusion. PitchBook data joins candidates through PBId, stores seven compact PB_ fields and preserves wide columns in Parquet. ROGO joins by the topmost website header, prefers a usable PB_Website, and quarantines ambiguous matches. All mappings run before PB data and ROGO regardless of upload order. The upload adds context only; it does not start screening.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
+| `exclude_unmapped` | No | boolean | `false` |
 | `files` | Yes | array of string | — |
 | `run_id` | Yes | string | — |
 
@@ -1444,18 +1492,19 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 {
   "run_id": "R42",
   "files": [
-    "upload-a.xlsx",
-    "upload-b.csv",
-    "upload-c.xlsx"
-  ]
+    "pitchbook-mapping.csv",
+    "pitchbook-data.xlsx",
+    "rogo.xlsx"
+  ],
+  "exclude_unmapped": true
 }
 ```
 
-### 51. `export_candidate_set`
+### 53. `export_candidate_set`
 
 **Purpose:** Create one of the analyst's three exact workbook formats.
 
-**How it works:** export_type is PITCHBOOK, LLM or FULL (case-insensitive). Exports all current candidates of the run, across statuses. file_name is optional, must end in .xlsx and stay below MNA_EXPORT_DIR. Existing files are never overwritten; a repeated fixed name returns CONFLICT. The default is a fresh UUID filename. PitchBook and LLM contain one canonical row per candidate and prefer MID fields for both-source entities. Full has MID and ISCC sheets with pk first and the union of all original source columns; ISCC rows are restricted to this run, so another run's pull cannot leak. Repeated query observations can legitimately make Full row counts exceed unique company counts. Text resembling formulas is escaped for safe spreadsheet use.
+**How it works:** export_type is PITCHBOOK, LLM or FULL (case-insensitive). Exports considered candidates across their statuses; hidden history stays in the run but outside the workbook. file_name is optional, must end in .xlsx and stay below MNA_EXPORT_DIR. Existing files are never overwritten; the default is a fresh UUID filename. PitchBook and LLM contain one canonical row per considered candidate and prefer MID fields for both-source entities. Full has MID and ISCC sheets with pk first and original source columns; ISCC rows are restricted to this run. Repeated source observations can make Full row counts exceed the considered company count. Formula-like text is escaped for spreadsheet safety.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -1477,11 +1526,11 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Approved action graphs and screening
 
-### 52. `propose_action_plan`
+### 54. `propose_action_plan`
 
 **Purpose:** Turn an interpreted analyst request into a durable dependency graph.
 
-**How it works:** The agent writes the typed plan; Rust does not interpret the natural-language instruction itself. steps contains 1–20 distinct step IDs, at most 2,000 company IDs per step, and no cycles or unknown dependencies. Each kind is search_mid, search_iscc, import_pitchbook, import_rogo, bing_research, llm_screening, m365_screening, m365_research or export. The llm_screening/m365_screening kinds remain for legacy compatibility; current screening and provider questions use propose_prepared_plan and the controller-only execution lifecycle. A plan can contain at most five ISCC steps. search steps need parameters.query; import steps need parameters.files; export needs parameters.export_type. Company Bing steps need 3–5 query_templates; criteria-only Bing can use 1–5 literal queries with company_ids=[]. M365 research needs an approved literal question. Known credential keys are rejected from parameters. The serialized step graph is capped at 200,000 bytes. Use multiple plans/scope chunks for a larger funnel.
+**How it works:** The agent writes the typed plan; Rust does not interpret natural-language instructions. steps contains 1–20 distinct step IDs, at most 2,000 company IDs per step, and no cycles or unknown dependencies. Kinds include search_mid, search_iscc, import_pitchbook, import_rogo, bing_research, llm_screening, m365_screening, m365_research and export. The llm_screening/m365_screening kinds remain for legacy compatibility; current scored screening uses propose_prepared_plan, while a direct chat question uses dispatch_provider_text through the controller. A plan can contain at most five ISCC steps. Search steps need parameters.query; import steps need parameters.files; export needs parameters.export_type. Bing steps need 1–5 query_templates; company research applies them to considered scoped IDs. M365 research needs an approved literal question. Known credential keys are rejected. Use multiple scope chunks for a larger funnel.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -1524,7 +1573,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 53. `get_action_plan`
+### 55. `get_action_plan`
 
 **Purpose:** Read a plan, its approval metadata and completed dependencies.
 
@@ -1546,11 +1595,11 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 54. `propose_prepared_plan`
+### 56. `propose_prepared_plan`
 
 **Purpose:** Freeze an immutable version-2 screening or question handoff.
 
-**How it works:** Builds a content-addressed snapshot of exact selected source rows, global indices, input/output columns, root-compiled prompt, provider, deployment, batch size, model options and adapter/retrieval configuration. input_columns starts with immutable index; output_columns excludes index. An empty company_ids selects every candidate in the run; screening requires at least one candidate after scope expansion and approved criteria. Questions can return an unscored table for company rows. When the run has no company rows, output_columns=[] gives a direct answer. Copilot requires the genuine PB LinkedIn URL column whenever at least one valid PB /company/ page exists. Proposal status is PROPOSED and executed=false; the model cannot approve or dispatch it. Batch size is 1–200.
+**How it works:** Builds a content-addressed snapshot of exact selected source rows, global indices, input/output columns, compiled prompt, provider, deployment, batch size, model options and adapter/retrieval configuration. input_columns starts with immutable index; output_columns excludes index. An empty company_ids selects every considered candidate; hidden rows are excluded. Screening needs a nonempty approved scope. QUESTIONS can return an unscored company table or a direct answer when no rows and output_columns=[]. Direct chat questions use the separate controller-only dispatch_provider_text route without setup. A blank deployment in this Rust proposal is an unconfigured placeholder; the UI resolves its automatic choice to a configured provider deployment or the literal plan value automatic. Neither blank nor automatic is an external deployment. Copilot screening must include genuine PB LinkedIn URL when available; the UI locks that source input after PB hydration. Proposal status is PROPOSED, executed=false; only a trusted controller can approve and dispatch. Batch size is 1–200. Chosen RESULTS or BING fields can be inputs for a later pass.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -1579,7 +1628,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
   "run_id": "R42",
   "mode": "screening",
   "provider": "llm_suite",
-  "deployment": "",
+  "deployment": "automatic",
   "prompt": "For each indexed company, assess core-business product fit. Return one table with Fit Score and Rationale; use CHECK when evidence is insufficient.",
   "company_ids": [],
   "source_columns": [
@@ -1628,7 +1677,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 55. `get_prepared_plan`
+### 57. `get_prepared_plan`
 
 **Purpose:** Read a frozen handoff, its approval state and durable batch jobs.
 
@@ -1648,7 +1697,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 56. `get_execution_progress`
+### 58. `get_execution_progress`
 
 **Purpose:** Poll approval freshness and durable batch progress without large frozen inputs.
 
@@ -1668,7 +1717,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 57. `get_execution_job`
+### 59. `get_execution_job`
 
 **Purpose:** Inspect a durable provider batch and its parser or dispatch state.
 
@@ -1688,11 +1737,11 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 58. `get_model_assessments`
+### 60. `get_model_assessments`
 
 **Purpose:** Read accepted provider assessments separately from retrieval and evidence.
 
-**How it works:** Supply run_id and optionally plan_id or company_id. Returns accepted assessments and direct question answers for the requested scope. Provider assessments are model output, not analyst labels or verified claims; they do not change candidate status automatically.
+**How it works:** Supply run_id and optionally plan_id or company_id. Returns accepted assessments and direct question answers for the requested scope. Keep each provider/pass score separate from MID/ISCC retrieval rank. Declared score columns can contain 0–10 or CHECK; use CHECK for further review, not as a numeric score. An analyst may select saved RESULTS columns as source context for a later prepared plan. Provider assessments are not analyst labels or verified claims and do not change considered status automatically.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -1711,7 +1760,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 59. `prepare_screening_batch`
+### 61. `prepare_screening_batch`
 
 **Purpose:** Legacy compatibility handoff for scored screening batches.
 
@@ -1750,11 +1799,11 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 60. `prepare_bing_queries`
+### 62. `prepare_bing_queries`
 
 **Purpose:** Expand approved fit questions using the best available company identity.
 
-**How it works:** Requires an approved bing_research step with completed dependencies. company_ids contains 1–100 run candidates within the approved step scope. Templates support <company> as 'preferred name; preferred website', {company} as name and {website} as website. PB_Name/PB_Website are preferred when usable. The orchestrator generates criterion-specific templates; this tool deterministically expands them. Call bing_search for each returned query with the same plan/step/company scope.
+**How it works:** Requires an approved bing_research step with completed dependencies. company_ids contains 1–100 considered run candidates within the approved step scope. The UI pages every considered company into this bound and continues until all approved company/query pairs are sent. Templates support <company> as 'preferred name; preferred website', {company} as name and {website} as website. PB_Name/PB_Website are preferred when usable. The tool deterministically expands one to five analyst-approved templates; it does not invent questions or send requests. Call bing_search for each exact returned query with the same plan/step/company scope.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
@@ -1779,7 +1828,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 61. `save_screening_results`
+### 63. `save_screening_results`
 
 **Purpose:** Legacy compatibility endpoint for batch scores.
 
@@ -1813,7 +1862,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 62. `get_screening_results`
+### 64. `get_screening_results`
 
 **Purpose:** Read a company's external screening history within the current run.
 
@@ -1837,7 +1886,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 63. `complete_action_step`
+### 65. `complete_action_step`
 
 **Purpose:** Release dependent graph work only after successful operations are proven.
 
@@ -1867,7 +1916,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Recovery
 
-### 64. `save_checkpoint`
+### 66. `save_checkpoint`
 
 **Purpose:** Persist the orchestrator's restart state with optimistic concurrency.
 
@@ -1900,7 +1949,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 65. `get_checkpoint`
+### 67. `get_checkpoint`
 
 **Purpose:** Resume from the latest or a named historical checkpoint.
 
@@ -1931,7 +1980,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 | `LLM` | `LLM` | `index`, `pk`, `Company Name`, `Website`, `Source`, `Description` |
 | `FULL` | `MID`, `ISCC` | `pk` first, then all original source columns |
 
-`Source` is `MID`, `ISCC` or literal `both`; legacy records with no retained source are explicit `UNKNOWN`. LLM `index` runs from 1 to n. Full Export unions source headers in deterministic order and retains original source observations, so it can have multiple rows for one pk. Original formula-like strings are escaped in Excel cells. Exports use a consistent SQLite snapshot while holding the store connection, so a large export can briefly delay writes.
+Exports include considered companies only; hidden rows remain in saved history and can be restored. `Source` is `MID`, `ISCC` or literal `both`; legacy records with no retained source are explicit `UNKNOWN`. LLM `index` runs from 1 to n. Full Export unions source headers in deterministic order and retains original source observations, so it can have multiple rows for one pk. Original formula-like strings are escaped in Excel cells. Exports use a consistent SQLite snapshot while holding the store connection, so a large export can briefly delay writes.
 
 The PitchBook mapping list must contain these headers in its **first row**, in any order:
 
@@ -1939,7 +1988,7 @@ The PitchBook mapping list must contain these headers in its **first row**, in a
 pk | PBId | Firm Name from PitchBook | Website from PitchBook | Company Profile | Investor Profile | Limited Partner Profile | Service Provider Profile
 ```
 
-Only `Company Profile = Yes` creates PBId. The PitchBook data header contains `Company ID`, `Companies`, and at least one of `Description` or `HQ Location`; it can follow a preamble within the first 1,000 rows. Remove `© PitchBook Data, Inc. YYYY` wherever it occurs, independent of the year. These compact fields are retained:
+Only `Company Profile = Yes` creates PBId. An explicit `No` or unmapped row can hide a candidate in that run; `exclude_unmapped=true` with a current mapping sheet also hides still-unmapped candidates. A later eligible mapping can restore a mapping-hidden row, but cannot restore a row manually hidden by an analyst. A ROGO-only import does not reapply an old PB mapping exclusion. The PitchBook data header contains `Company ID`, `Companies`, and at least one of `Description` or `HQ Location`; it can follow a preamble within the first 1,000 rows. Remove `© PitchBook Data, Inc. YYYY` wherever it occurs, independent of the year. These compact fields are retained:
 
 | PitchBook source | Compact field |
 |---|---|
@@ -1957,7 +2006,7 @@ ROGO contains a topmost `Website`, `website` or `websites` header with variable 
 
 ## Administrator operations
 
-These operations are excluded from the model tool catalog. Analyst-facing routes require service and analyst authentication; lease, dispatch, reconciliation and failure routes are controller-only. A model can propose a prepared plan, but cannot approve, lease, dispatch, reconcile or fail provider work.
+These operations are excluded from the model tool catalog. The criteria, shortlist and provider-text routes are controller-only; the UI obtains the analyst's decision before calling them. Other analyst-facing routes require service and analyst authentication. A model can propose a prepared plan but cannot approve, lease, dispatch, reconcile or fail provider work.
 
 | Operation | Endpoint | Behavior |
 |---|---|---|
@@ -1966,12 +2015,16 @@ These operations are excluded from the model tool catalog. Analyst-facing routes
 | `create_run` | `/admin/runs` | Create immutable original criteria and a PROPOSED initial profile. Active approved profile remains 0 until human approval. |
 | `sync_search_index` | `/admin/index` | Configure/index the optional qualitative Meilisearch projection in bounded keyset batches. No embedding inference. |
 | `approve_screening_profile` | `/admin/profiles/approve` | Approve one PROPOSED version, supersede the old active version and record the approver. |
+| `save_criteria_revision` | `/admin/criteria-save` | Controller-only save of text, business definition and separate good/bad example lists before discovery or after an edit. A new revision makes the last approval stale. |
+| `approve_criteria_revision` | `/admin/criteria-approve` | Controller-only approval of the latest revision by exact revision number and digest; creates a new approved screening profile. |
+| `review_shortlist` | `/admin/shortlist-review` | Controller-only analyst selection: keep named IDs, hide others, and save chosen result columns. Require the current selection revision when available. History is retained. |
 | `approve_action_plan` | `/admin/actions/approve` | Approve or reject an immutable proposal at its original profile version; stale proposals must be rebuilt. |
 | `approve_prepared_plan` | `/admin/prepared-plan-approve` | Approve a version-2 plan by its exact backend digest; creates durable jobs but leaves `executed=false`. |
 | `cancel_prepared_plan` | `/admin/prepared-plan-cancel` | Cancel an undispatched prepared plan through the controller. |
 | `lease_execution_job` | `/admin/execution-lease` | Controller-only lease for one eligible durable job. |
 | `mark_execution_dispatch` | `/admin/execution-mark` | Controller-only record that a provider request is about to be sent. |
 | `dispatch_execution_job` | `/admin/execution-dispatch` | Controller-only provider dispatch using the leased immutable payload. External execution occurs only here. |
+| `dispatch_provider_text` | `/admin/provider-text` | Controller-only direct LLMSuite/M365 question or bounded draft request, without scored-screening setup. Strict output blocks, request-key replay protection, at most two repairs and the shared LLMSuite seven-send gate apply. Disconnected service returns `executed:false`. |
 | `record_execution_response` | `/admin/execution-response` | Controller-only save of the actual provider response for strict parsing. |
 | `reconcile_execution_job` | `/admin/execution-reconcile` | Controller-only recovery of ambiguous external outcomes. |
 | `record_execution_failure` | `/admin/execution-failure` | Controller-only record of a confirmed dispatch failure. |
@@ -1984,17 +2037,25 @@ For `retry_execution_job`, send `{"job_id":"JOB-returned-id","attempt":1,"reason
 
 The [background screening and upload flow](../mna-ui/BACKGROUND_SCREENING.md) describes the implemented controller, pause/recovery, partial staging, automatic spreadsheet detection and approved Bing grounding. Live corporate providers remain disabled unless configured and explicitly approved.
 
-Create and approve criteria:
+Create a run before discovery:
 
 ```json
 {"run_id":"R42","objective":"Find insurance workflow product vendors","original_criteria":{"text":"Policy and claims software businesses; India preferred","geography":"India"},"initial_profile":{"core_business_query":"insurance policy administration and claims workflow software","core_business_criteria":["Owns an insurer workflow software product"],"unused_criteria":[{"criterion":"India preferred","reason":"Geography is recorded but not used for discovery"}]}}
 ```
 
-Post to `/admin/runs`, review profile version 1, then post this **actual human approval** to `/admin/profiles/approve`:
+Post to `/admin/runs`. Save the reviewed criteria and optional example boxes to `/admin/criteria-save`:
 
 ```json
-{"run_id":"R42","version":1,"approved_by":"authenticated analyst"}
+{"run_id":"R42","criteria_text":"Policy and claims software businesses; India preferred","business_definition":"Owns insurer policy administration or claims workflow software","good_fit_examples":["A vendor with an owned policy administration product"],"bad_fit_examples":["A consulting firm that only implements other products"]}
 ```
+
+After showing the saved revision to the analyst, send the exact returned revision and digest to `/admin/criteria-approve`:
+
+```json
+{"run_id":"R42","revision":1,"digest":"DIGEST-returned-by-criteria-save","approved_by":"authenticated analyst"}
+```
+
+When criteria change later, save another revision and approve that latest digest before more discovery or execution. `get_criteria_history` reads all versions. This route creates the next approved screening profile. The older `/admin/profiles/approve` route remains for a separately proposed structured profile.
 
 MID import after files are staged:
 
@@ -2008,18 +2069,32 @@ Action approval at `/admin/actions/approve`:
 {"run_id":"R42","plan_id":"PLAN-returned-id","approved_by":"authenticated analyst","approve":true}
 ```
 
+After reviewing scores, use `/admin/shortlist-review` to keep matches and CHECK cases, hide the rest, and select result columns for a later pass:
+
+```json
+{"run_id":"R42","keep_company_ids":["100-101","200-202"],"expected_selection_revision":3,"review_columns":{"PPLAN-returned-id":["Fit Score","Rationale"]},"reason":"Analyst kept matches and CHECK cases"}
+```
+
+For a direct chat question, the controller can call `/admin/provider-text` without a prepared screening plan:
+
+```json
+{"run_id":"R42","provider":"llm_suite","prompt":"Which product evidence is missing for the current shortlist?","request_id":"question-1","expected_format":"text","purpose":"question","attachments":[]}
+```
+
+Omit `deployment` to use the configured provider deployment. A request with no configured connection or deployment returns `executed:false`. For generated Bing query chips, use `expected_format:"query_templates"`; Rust requires one to five distinct `QUERY:` lines inside the exact `BEGIN_QUERIES`/`END_QUERIES` block. Criteria and screening-prompt drafts have their own exact blocks. Each malformed response has at most two repairs under the same LLMSuite send gate. These examples describe input shapes and do not assert that a live provider ran.
+
 The free-text `approved_by` is audit metadata; production user authentication belongs to the controller. Do not expose the analyst key to the LLM. On migration, legacy profiles auto-approved as `system_initialization` are returned to PROPOSED, requiring actual approval; existing human approvals are retained.
 
 ## Worked orchestration example
 
-1. Stage/import MID, create the run from DDI extraction or plain text, and build `CRITERIA_ANALYSIS` context with no subjects. Keep unclear terms as open questions. A cited unknown company can use `find_company` and an analyst-authorized literal Bing clarification plan.
-2. Propose a structured qualitative profile, show the original/deferred criteria, and obtain analyst approval through `/admin/profiles/approve`.
+1. Create a run from DDI extraction or plain text. Review the core business, then optional good-fit and bad-fit boxes. Save each criteria revision with `save_criteria_revision`; approve the final digest with `approve_criteria_revision`. Keep unclear terms as open questions. The local UI does not extract PDF/DOCX text automatically.
+2. Read `get_criteria_history` and the approved profile before searching. A later edit creates a new revision and requires another approval. Earlier approved execution plans become stale. A separately proposed structured profile can still use `/admin/profiles/approve`.
 3. Run `search_mid` and `search_iscc` independently. Use `get_iscc_score_samples` to inspect deciles 0.9–0.3 and choose broad relevant rows. Record why a threshold around 0.45 was widened or narrowed. Add selected IDs in chunks with their source/query IDs.
-4. Read `get_discovery_summary` and show the criteria accordion, source overlap and candidate count. Recommend PitchBook below 2,000 or LLM screening at 2,000 and above. Show enrichment, Bing, Copilot/M365, screening and the three exports as alternatives. The UI handles the popup and file upload/download.
+4. Read considered source counts from `get_discovery_summary`, then page `get_shortlist_context` with include_hidden=true to show every saved company and its review flag. Suggest PitchBook/Bing at 0<n<1000, ROGO at 500<n<2000, LLMSuite at n>2000, and M365 at 0<n<250 with PB context. Both enrichment and research accordions remain available; these suggestions do not filter or execute work.
 5. Interpret “Populate PitchBook and ROGO, then screen” into the plan example above. Record the human's explicit request through the controller approval route once. Import all available files; processing mapping before PB data before ROGO can satisfy the sequence in a single import call. Preserve and claim that operation's receipt only for the plan step whose input parameters match; do not reuse one receipt to pretend two separate steps ran.
-6. For retrieval, request up to 1,000 candidates. An optional local reranker may reorder only the first 500 from one source/query group; preserve the remaining tail and keep rerank scores separate from MID/ISCC retrieval scores. For new LLMSuite/Copilot screening or questions, propose a version-2 prepared plan with frozen rows, global index, columns, prompt, provider, deployment, batch size and configuration. Show a bounded preview but retain the service digest. After actual analyst approval of that exact digest, only the controller may lease, dispatch, parse and record provider responses. Prepared or approved plans remain `executed=false` until controller dispatch. General questions can produce a direct answer with no company rows and no output columns; company questions can produce an unscored indexed table. Genuine PB LinkedIn pages are optional for M365, but must remain selected when available.
-7. For Bing research, propose 3–5 fit templates such as “Does <company> build policy administration software?”, “Which insurance-carrier workflows does <company> automate?”, and “Does <company> sell owned software or primarily consulting?”. After approval, expand questions in chunks, invoke each exact query with company_id, and complete only after every company/question pair has a receipt. Company observations automatically enter run memory as research leads.
-8. Show hydration and screening metrics. Record further actual analyst labels, update candidate statuses with evidence, export the requested format and save a checkpoint after each loop boundary. Resume by checking current profile version, completed receipts and saved batches before repeating work.
+6. For retrieval, request up to 1,000 hits per query. An optional local reranker may reorder only the first 500 from one source/query group; preserve the remaining tail. A run may hold more than 1,000 candidates. For scored LLMSuite/Copilot work, propose a version-2 prepared plan with frozen considered rows, global index, columns, prompt, provider, deployment and batch size. An automatic model choice resolves to configured deployment or remains a non-dispatched placeholder. Show a bounded preview and retain the Rust digest. The controller alone may approve, lease and dispatch. A direct LLMSuite/M365 chat question instead uses `dispatch_provider_text`, with no screening setup. Genuine PB LinkedIn pages must be included for Copilot screening when available.
+7. For Bing research, approve one to five fit templates such as “Does <company> build policy administration software?” The UI expands them for all considered companies, prepares and sends in bounded pages, and continues through the approved request list. Every saved observation is an unverified research lead until analyst review.
+8. Review fit scores and CHECK rows, then call `review_shortlist` to keep desired IDs and hide others. Select useful RESULTS columns for another pass. Export considered rows only. Save a checkpoint after each loop boundary and check criteria revision, shortlist revision, completed receipts and saved jobs before repeating work.
 
 ## Loops, graphs and implementation boundaries
 
@@ -2027,7 +2102,7 @@ Use loops for screening-criteria clarification, purposeful MID/ISCC query variat
 
 The Rust layer implements deterministic APIs, persistence, parsers, joins, Parquet/XLSX generation, policy/approval validation, local HTTP model adapters and durable execution state. The optional local embedding worker runs CPU ONNX inference only when explicitly configured with supplied model and tokenizer files; it never downloads assets. Endpoint configuration is reported as configured-but-unverified until inference succeeds. Rust does not implement DDI interpretation, chat/HITL widgets, live corporate CDP authentication, a scheduler, or LLMSuite/Copilot inference. Provider/network execution remains disabled unless explicitly enabled and is dispatched only by the controller. No live corporate integration is implied by local mock tests.
 
-The durable job ledger, leases, dispatch records, response parser and reconciliation states are implemented in SQLite. They support recovery and auditable retries, but cannot guarantee exactly-once delivery by an external provider; ambiguous outcomes require controller reconciliation. Candidate-set versioning, complete artifact manifests and file/sheet/row locators for every raw company row remain future extensions. Query/evidence/receipt records are durable; retrieval caches remain implementation-dependent. Default exports create fresh artifacts, so the orchestrator should reuse saved receipts/checkpoints on recovery rather than assume an export retry is automatically deduplicated.
+The durable job ledger, leases, dispatch records, response parser and reconciliation states are implemented in SQLite. They support recovery and auditable retries, but cannot guarantee exactly-once delivery by an external provider; ambiguous outcomes require controller reconciliation. Current shortlist revisions and selection history are durable. Full historical candidate-set snapshots, complete artifact manifests and file/sheet/row locators for every raw company row remain future extensions. Query/evidence/receipt records are durable; retrieval caches remain implementation-dependent. Default exports create fresh artifacts, so the orchestrator should reuse saved receipts/checkpoints on recovery rather than assume an export retry is automatically deduplicated.
 
 ## Errors and recovery rules
 

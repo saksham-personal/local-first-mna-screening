@@ -27,6 +27,8 @@ import type { ArtifactAction, JobSnapshot } from "../src/lib/chat-contract";
 import { sessionStore } from "../src/lib/session-store";
 import { buildSessionArchive } from "../src/lib/session-export";
 import { strFromU8, unzipSync } from "fflate";
+import { flushCriteriaDraft } from "../src/lib/review-client";
+import { companies as exampleCompanies } from "../src/lib/fixtures";
 // @ts-expect-error The production scheduler is plain server-only Node ESM.
 import { createJobRegistry } from "../server/jobs.mjs";
 
@@ -99,32 +101,52 @@ test("workspace setup and upload messages reach the live branch once, without re
   updateChatState(id, { branchMessageIds: ["existing", "upload"] });
   assert.deepEqual(pendingWorkspaceMessages(id, ["existing", "upload"]), []);
 });
-test("provider questions prepare attributed setups without clearing criteria or inventing calls", async () => {
-  const id = session();
-  reviseCriteria(id, "Claims software", "Claims software");
-  approveCriteria(id);
-  const revision = getChatState(id).revision;
-  await reply(id, [
-    user(
-      "provider-request",
-      "Ask LLMSuite and M365 Copilot which business questions matter?",
-    ),
-  ]);
-  const cards = getChatState(id).artifacts.filter(
-    (a) => a.type === "screening-request",
-  );
-  assert.equal(cards.length, 2);
-  assert.deepEqual(
-    cards.map((a) => a.type === "screening-request" && a.provider),
-    ["llm_suite", "copilot"],
-  );
-  assert.ok(
-    cards.every((a) => a.type === "screening-request" && a.mode === "question"),
-  );
-  assert.equal(getChatState(id).revision, revision);
-  assert.equal(approved(getChatState(id)), true);
-  assert.ok(!events(id).some((e) => e.kind === "tool"));
+test("direct provider questions use chat without a setup and preserve the criteria", async () => {
+  const id = session(), prior = globalThis.fetch;
+  reviseCriteria(id, "Claims software", "Claims software"); approveCriteria(id);
+  const revision = getChatState(id).revision, sent: any[] = [];
+  globalThis.fetch = async (url, init) => {
+    const payload = JSON.parse(String(init?.body));
+    if (String(url) === '/api/conversation/ask') { sent.push(payload); return new Response(JSON.stringify({ executed: false, message: 'Not connected', calls: [] })); }
+    return new Response(JSON.stringify({ ok: true, result: { run_id: 'run-direct', revision: 1, digest: 'draft' } }));
+  };
+  try {
+    await flushCriteriaDraft(id);
+    await reply(id, [user("provider-request", "Ask LLM Suite and M365 Copilot which business questions matter?")]);
+    assert.deepEqual(sent.map(request => request.provider), ['llm_suite', 'copilot']);
+    assert.ok(sent.every(request => /^[A-Za-z0-9._-]+$/.test(request.requestId)));
+    assert.ok(!getChatState(id).artifacts.some(artifact => artifact.type === 'screening-request' || artifact.type === 'screening-setup'));
+    assert.equal(getChatState(id).revision, revision);
+    assert.equal(approved(getChatState(id)), true);
+    assert.ok(!events(id).some(event => event.toolName === 'dispatch_provider_text'));
+  } finally { globalThis.fetch = prior; }
 });
+
+test('selected providers preserve workflow commands and answer questions about screening directly', async () => {
+  const id = session(), prior = globalThis.fetch, asks: any[] = [];
+  globalThis.fetch = async (url, init) => {
+    const request = JSON.parse(String(init?.body));
+    if (url === '/api/conversation/ask') { asks.push(request); return new Response(JSON.stringify({ executed: false, message: 'Not connected', calls: [] })); }
+    return new Response(JSON.stringify({ ok: true, result: request.tool === 'create_run' ? { run_id: 'routing-run' } : { revision: 1, digest: 'draft' } }));
+  };
+  try {
+    reviseCriteria(id, 'Claims software', 'Claims software'); await flushCriteriaDraft(id);
+    updateChatState(id, { model: 'llm_suite', companies: exampleCompanies.slice(0, 1) });
+    await reply(id, [user('search-request', 'find companies')]);
+    assert.equal(asks.length, 0);
+    assert.ok(!getChatState(id).artifacts.some(artifact => artifact.type === 'screening-request'));
+    await reply(id, [user('steps-request', 'next steps')]);
+    assert.equal(asks.length, 0);
+    assert.ok(getChatState(id).artifacts.some(artifact => artifact.type === 'options'));
+    await reply(id, [user('criteria-question', '/llm What screening criteria do we use?')]);
+    await reply(id, [user('result-question', 'Explain the screening results')]);
+    assert.equal(asks.length, 2);
+    assert.ok(!getChatState(id).artifacts.some(artifact => artifact.type === 'screening-request'));
+    await reply(id, [user('batch-request', '/screen Score these companies')]);
+    assert.ok(getChatState(id).artifacts.some(artifact => artifact.type === 'screening-request'));
+  } finally { globalThis.fetch = prior; }
+});
+
 test("a provider screening step does not swallow earlier PitchBook and ROGO instructions", async () => {
   const id = session();
   await reply(id, [
@@ -136,9 +158,9 @@ test("a provider screening step does not swallow earlier PitchBook and ROGO inst
   const artifacts = getChatState(id).artifacts;
   assert.deepEqual(
     artifacts
-      .filter((a) => a.type === "handoff")
-      .map((a) => a.type === "handoff" && a.service),
-    ["PitchBook", "ROGO"],
+      .filter((a) => a.type === "enrichment-upload")
+      .map((a) => a.type === "enrichment-upload" && a.source),
+    ["pitchbook", "rogo"],
   );
   assert.ok(
     artifacts.some(
@@ -180,14 +202,17 @@ async function reply(
 test("/data reads current source context without revising criteria or starting another search", async () => {
   const id = session();
   reviseCriteria(id, "Insurance software", "Insurance software", []);
-  updateChatState(id, { backendRunId: "run-data", approvedRevision: getChatState(id).revision });
+  updateChatState(id, { companies: [{ ...exampleCompanies[0], pk: "A-1" }], backendRunId: "run-data", approvedRevision: getChatState(id).revision });
   const revision = getChatState(id).revision, prior = globalThis.fetch;
   const calls: string[] = [];
   globalThis.fetch = async (_url, init) => {
     const request = JSON.parse(String(init?.body)); calls.push(request.tool);
+    if (request.tool === 'save_criteria_revision') return new Response(JSON.stringify({ ok: true, result: { revision: 1, digest: 'draft' } }));
+    if (request.tool === 'get_shortlist_context') return new Response(JSON.stringify({ ok: true, result: { total: 1, considered_count: 1, candidates: [{ company_id: 'A-1', considered: true }], selection_revision: 0, source_hash: 'stable', has_more: false, review_columns: {}, coverage: { PB: 1, ROGO: 1, BING: 0 } } }));
     return new Response(JSON.stringify({ ok: true, result: { total: 1, next_cursor: null, rows: [{ pk: "A-1", PBId: "PB-1", sources: { MID: { "Company Name": "MID name", Website: "mid.example", Description: "MID business" }, ISCC: {}, PB: { PB_Name: "PB name", PB_Website: "", PB_Description: "PB business" }, ROGO: { Notes: "Extra context" } }, provenance: {} }] } }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   try {
+    await flushCriteriaDraft(id); calls.length = 0;
     await reply(id, [user("current-data", "/data")]);
     const table = getChatState(id).artifacts.find(a => a.type === "data-table");
     assert.ok(table?.type === "data-table");
@@ -196,7 +221,7 @@ test("/data reads current source context without revising criteria or starting a
     assert.equal(table.rows[0]["ROGO: Notes"], "Extra context");
     assert.equal(getChatState(id).revision, revision);
     assert.equal(approved(getChatState(id)), true);
-    assert.deepEqual(calls, ["get_candidate_source_data"]);
+    assert.deepEqual(calls, ["get_shortlist_context", "get_candidate_source_data"]);
   } finally { globalThis.fetch = prior; }
 });
 function completed(
@@ -271,7 +296,7 @@ test("unapproved search is rejected before a request and stale criteria approval
   assert.equal(events(id).filter((e) => e.kind === "approval").length, 0);
 });
 
-test("criteria changes invalidate approval and results without changing another screening", () => {
+test("criteria changes revoke approval while preserving the saved run and other screenings", () => {
   const a = session(),
     b = session();
   reviseCriteria(a, "Claims software", "Claims software");
@@ -281,7 +306,7 @@ test("criteria changes invalidate approval and results without changing another 
   updateChatState(a, { backendRunId: "old-rust" });
   reviseCriteria(a, "Policy software", "Policy software");
   assert.equal(approved(getChatState(a)), false);
-  assert.equal(getChatState(a).backendRunId, undefined);
+  assert.equal(getChatState(a).backendRunId, "old-rust");
   assert.equal(approved(getChatState(b)), true);
   assert.equal(getChatState(b).definition, "Payroll software");
 });
@@ -329,7 +354,14 @@ test("a completed job from old criteria remains an artifact but cannot replace c
 });
 
 test("editing a criteria user message into a command invalidates the original criteria approval", async () => {
-  const id = session();
+  const id = session(), prior = globalThis.fetch;
+  const saved: any[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    saved.push(request);
+    return new Response(JSON.stringify({ ok: true, result: request.tool === 'create_run' ? { run_id: 'edited-run' } : { revision: saved.length, digest: 'current-draft' } }));
+  };
+  try {
   await reply(
     id,
     [user("original-criteria-message", "Claims software")],
@@ -344,6 +376,9 @@ test("editing a criteria user message into a command invalidates the original cr
   );
   assert.equal(approved(getChatState(id)), false);
   assert.ok(getChatState(id).revision > revision);
+  assert.ok(saved.filter(request => request.tool === 'save_criteria_revision').length >= 2);
+  assert.equal(saved.at(-1).arguments.business_definition, getChatState(id).definition);
+  } finally { globalThis.fetch = prior; }
 });
 
 test("a new review command appended to the existing branch preserves valid approval", async () => {

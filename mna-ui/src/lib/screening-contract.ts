@@ -2,11 +2,11 @@ export type ScreeningProvider = "llm_suite" | "copilot";
 export type ScreeningSourceRow = {
   pk: string;
   PBId: string | null;
-  sources: Record<DataSource, Record<string, unknown>>;
+  sources: Record<Exclude<DataSource, "RESULTS" | "BING">, Record<string, unknown>> & Partial<Record<"RESULTS" | "BING", Record<string, unknown>>>;
   provenance: Record<string, unknown>;
 };
 export type ScreeningMode = "screening" | "question";
-export type DataSource = "MID" | "ISCC" | "PB" | "ROGO";
+export type DataSource = "MID" | "ISCC" | "PB" | "ROGO" | "RESULTS" | "BING";
 export type IdentitySources = {
   name: DataSource[];
   website: DataSource[];

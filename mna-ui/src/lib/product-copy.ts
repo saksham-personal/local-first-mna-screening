@@ -1,6 +1,7 @@
 /** Presentation only: historical assistant receipts retain their original exported text. */
 export function productCopy(text: string) {
   return text
+    .replace(/\bLLM\b(?!\s+Suite\b)/gi, "LLM Suite")
     .replace(/real Rust tools/gi, "working tools")
     .replace(/Real Rust results/gi, "Saved results")
     .replace(/local Rust tools/gi, "local tools")

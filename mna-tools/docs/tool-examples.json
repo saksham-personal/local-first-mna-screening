@@ -169,6 +169,9 @@
   "get_search_policy": {
     "run_id": "R42"
   },
+  "get_criteria_history": {
+    "run_id": "R42"
+  },
   "label_company": {
     "run_id": "R42",
     "company_id": "100-101",
@@ -338,6 +341,11 @@
     ],
     "limit": 1000
   },
+  "get_shortlist_context": {
+    "run_id": "R42",
+    "include_hidden": true,
+    "limit": 500
+  },
   "update_candidate_status": {
     "run_id": "R42",
     "company_id": "100-101",
@@ -350,10 +358,11 @@
   "import_enrichment_files": {
     "run_id": "R42",
     "files": [
-      "upload-a.xlsx",
-      "upload-b.csv",
-      "upload-c.xlsx"
-    ]
+      "pitchbook-mapping.csv",
+      "pitchbook-data.xlsx",
+      "rogo.xlsx"
+    ],
+    "exclude_unmapped": true
   },
   "export_candidate_set": {
     "run_id": "R42",
@@ -486,7 +495,7 @@
     "run_id": "R42",
     "mode": "screening",
     "provider": "llm_suite",
-    "deployment": "",
+    "deployment": "automatic",
     "prompt": "For each indexed company, assess core-business product fit. Return one table with Fit Score and Rationale; use CHECK when evidence is insufficient.",
     "company_ids": [],
     "source_columns": [

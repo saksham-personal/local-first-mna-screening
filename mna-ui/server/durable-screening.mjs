@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { buildCatalog, projectRows, validateConfig } from "../shared/screening.mjs";
+import { buildCatalog, validateConfig } from "../shared/screening.mjs";
 
 const MAX_PREVIEWS = 4;
 const PREVIEW_TTL = 15 * 60_000;
@@ -9,7 +9,8 @@ const SAFE_RUN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 /** UI adapter for Rust's immutable prepared-plan lifecycle. Rust owns source
  * freshness, snapshots, and approval digests; this module only holds short-lived
  * references needed to bind an approval to the exact preview shown in the UI. */
-export function createDurableScreeningPreparation({ call, now = () => Date.now() }) {
+export function createDurableScreeningPreparation({ call, now = () => Date.now(), deployment = (provider) =>
+  process.env[provider === "llm_suite" ? "MNA_LLMSUITE_DEPLOYMENT" : "MNA_M365_DEPLOYMENT"] ?? "" }) {
   const previews = new Map();
   const approvals = new Map();
 
@@ -98,6 +99,13 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
     return { rows, catalog: buildCatalog(rows) };
   }
 
+  function resolvedModel(config) {
+    const configured = config.model && config.model !== "automatic" ? config.model : deployment(config.provider)?.trim();
+    if (typeof configured !== "string" || configured.length > 160)
+      throw new Error("The configured model name is invalid.");
+    return configured || "automatic";
+  }
+
   function rustArgs(config, run, sourceRows) {
     const selected = config.inputColumns.filter((column) => column !== "index");
     const source_columns = selected.flatMap((label) => {
@@ -108,7 +116,7 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
       run_id: run,
       mode: config.mode,
       provider: config.provider,
-      deployment: config.model,
+      deployment: resolvedModel(config),
       prompt: config.prompt,
       ...(config.mode === "question" ? { question: config.prompt } : {}),
       company_ids: sourceRows.map((row) => row.pk),
@@ -142,12 +150,6 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
       const config = validateConfig(input.config, data.catalog);
       if (config.mode === "screening" && (!id || !data.rows.length))
         throw new Error("Choose an approved screening run with companies before preparing scored screening.");
-      if (config.provider === "copilot" && data.rows.some((row) => {
-        const value = projectRows([row], { ...config, inputColumns: ["index", "LinkedIn URL"] })[0]["LinkedIn URL"];
-        return Boolean(value);
-      }) && !config.inputColumns.includes("LinkedIn URL"))
-        throw new Error("Copilot preparation must include LinkedIn URL when PitchBook has hydrated company LinkedIn pages.");
-
       if (!id) {
         id = `QUESTION-${randomUUID()}`;
         await traceCall(calls, signal)("create_run", {
@@ -168,14 +170,8 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
         columns.map((column) => [column, column === "index" ? (row.index ?? offset + 1) : row[column] ?? ""]),
       ));
       const batches = Math.max(1, Math.ceil(frozenRows.length / config.batchSize));
-      const warnings = ["This saves an immutable prepared plan only. No information will be sent to a provider."];
-      if (!config.model) warnings.push("Deployment names are not configured. Enter one before approving.");
+      const warnings = [];
       if (!frozenRows.length) warnings.push("No company list is selected. This will be a single general question, without company results.");
-      if (config.provider === "llm_suite") warnings.push("The shared seven-message limit includes reasoning, subagents, questions, retries, and screening. Other work and provider response time can add delays.");
-      for (const column of config.inputColumns.filter((column) => column !== "index")) {
-        const blank = frozenRows.filter((row) => !String(row[column] ?? "").trim()).length;
-        if (blank) warnings.push(`${column} is blank for ${blank} of ${frozenRows.length} companies.`);
-      }
       const publicPreview = {
         columns, rows, prompt: proposed.snapshot.compiled_prompt ?? config.prompt, outputColumns: config.outputColumns,
         companyCount: frozenRows.length, batches,
@@ -199,7 +195,7 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
       const requestedRun = runId(input.runId);
       if (requestedRun !== cached.requestedRunId)
         throw new Error("The preview belongs to a different screening.");
-      const config = validateConfig(input.config, cached.catalog, true);
+      const config = validateConfig(input.config, cached.catalog);
       if (JSON.stringify(config) !== JSON.stringify(cached.config))
         throw new Error("The setup changed after preview. Preview it again before approving.");
       if (approvals.has(input.fingerprint)) return approvals.get(input.fingerprint);
@@ -218,10 +214,10 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
           planId: approved.plan_id,
           schemaVersion: approved.schema_version,
           title: config.mode === "screening" ? "Screening setup" : "Question setup",
-          provider: config.provider, mode: config.mode, model: config.model,
+          provider: config.provider, mode: config.mode, model: cached.args.deployment,
           companyCount: approved.snapshot?.rows?.length ?? cached.preview.companyCount,
           batches: Math.max(1, Math.ceil((approved.snapshot?.rows?.length ?? cached.preview.companyCount) / config.batchSize)),
-          status: "prepared", executed: false, config, fingerprint: approved.digest,
+          status: "prepared", executed: false, config: { ...config, model: cached.args.deployment }, fingerprint: approved.digest,
           savedAt: new Date(now()).toISOString(), jobs: approved.jobs ?? [],
         };
         return { prepared, calls };

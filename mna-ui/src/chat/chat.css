@@ -18,6 +18,7 @@
   --ct-accent: #8f5a39;
   display: grid;
   grid-template-columns: var(--ct-navigation-width, 236px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
   background: var(--surface-raised);

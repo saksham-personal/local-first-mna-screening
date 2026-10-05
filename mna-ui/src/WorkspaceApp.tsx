@@ -37,6 +37,7 @@ import type {
 } from "./lib/chat-contract";
 import type { Company, ExportKind, Source } from "./lib/contracts";
 import { approved } from "./lib/chat-store";
+import { consideredCompanies } from "./lib/chat-policy";
 import "./workspace/workspace.css";
 import ImportStaging from "./files/ImportStaging";
 import { processStagedUploads, retryStagedUploads } from "./lib/import-pipeline";
@@ -264,17 +265,17 @@ function Overview({
             (artifact) => artifact.type === "job" && artifact.jobId === job.id,
           )
       : undefined;
-  const total = state.companies.length;
+  const total = consideredCompanies(state).length;
   return (
     <div className="ws-overview">
       <section className="ws-summary-grid">
         <StatCard
-          label="Companies"
+          label="Shortlist"
           value={total}
           tone="accent"
           detail={
             total
-              ? "Unique companies in this screening"
+              ? "Companies currently under consideration"
               : "Run search after approval"
           }
         />
@@ -570,6 +571,7 @@ function Companies({
   const rows = useMemo(
     () =>
       state.companies.filter((company) => {
+        if (company.considered === false) return false;
         const matchesSource =
           source === "all" ||
           company.source === source ||
@@ -632,24 +634,24 @@ function Companies({
           <div className="ws-export-actions">
             <button
               type="button"
-              title="Export the full company set for PitchBook"
-              disabled={!result || !state.companies.length}
+              title="Export the current shortlist for PitchBook"
+              disabled={!result || !consideredCompanies(state).length}
               onClick={() => exportResult("pitchbook")}
             >
               <Download size={14} /> PitchBook
             </button>
             <button
               type="button"
-              title="Export the full company set for LLM screening"
-              disabled={!result || !state.companies.length}
+              title="Export the current shortlist for LLM Suite screening"
+              disabled={!result || !consideredCompanies(state).length}
               onClick={() => exportResult("llm")}
             >
-              <Download size={14} /> LLM
+              <Download size={14} /> LLM Suite
             </button>
             <button
               type="button"
-              title="Export the full company set with original source columns"
-              disabled={!result || !state.companies.length}
+              title="Export the current shortlist with original source columns"
+              disabled={!result || !consideredCompanies(state).length}
               onClick={() => exportResult("full")}
             >
               <Download size={14} /> Full data
@@ -658,8 +660,8 @@ function Companies({
         </div>
         <div className="ws-table-summary">
           <span>
-            <strong>{displayedCount}</strong> of {state.companies.length}{" "}
-            companies
+            <strong>{displayedCount}</strong> of {consideredCompanies(state).length}{" "}
+            in shortlist{state.companies.length > consideredCompanies(state).length ? ` · ${state.companies.length - consideredCompanies(state).length} hidden` : ""}
           </span>
           <span>
             MID and ISCC scores use different methods and stay separate.
@@ -875,7 +877,7 @@ export default function WorkspaceApp(props: Props) {
             ["overview", "Overview"],
             [
               "companies",
-              `Companies${state.companies.length ? ` · ${state.companies.length}` : ""}`,
+              `Companies${state.companies.length ? ` · ${consideredCompanies(state).length}` : ""}`,
             ],
             [
               "files",

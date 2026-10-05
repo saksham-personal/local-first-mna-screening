@@ -38,6 +38,7 @@ export type SearchRow = {
   company: Record<string, unknown>;
   score?: number;
   rank?: number;
+  considered?: boolean;
 };
 export function searchRows(result: ToolResult): SearchRow[] {
   if (!Array.isArray(result.results))
@@ -97,6 +98,7 @@ export function companyFromRust(
   });
   return {
     pk,
+    considered: row.considered ?? original?.considered ?? true,
     ecid: identifier("ECID"),
     cid: identifier("CID"),
     name: identity.name,
@@ -113,12 +115,12 @@ export function companyFromRust(
     pbId: identifier("PBID") ?? undefined,
     pbWebsite: usableText(enriched.PB_Website) || undefined,
     linkedin: usableText(enriched["PB_LinkedIn URL"]) || undefined,
-    enrichment: Object.fromEntries(
+    enrichment: { ...original?.enrichment, ...Object.fromEntries(
       Object.entries(enriched).filter(
         ([key, item]) =>
           (key.startsWith("PB_") || key === "ROGO") && item != null,
       ),
-    ),
+    ) },
     rawIscc,
     rawMid: rawMid
       ? {
@@ -142,6 +144,8 @@ export async function stageUploads(
     sessionId: string;
     signal?: AbortSignal;
     workspaceMessage?: boolean;
+    purpose?: StagedFile["purpose"];
+    uploadArtifactId?: string;
   },
 ): Promise<StagedFile[]> {
   if (
@@ -169,13 +173,14 @@ export async function stageUploads(
     method: "POST",
     signal: options.signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ files: payload }),
+    body: JSON.stringify({ files: payload, sessionId: options.sessionId, purpose: options.purpose ?? "company-data" }),
   });
   const parsed = await staged.json();
   if (!staged.ok)
     throw new Error(parsed.error ?? "Files could not be uploaded.");
-  const stagedFiles = (parsed.files as StagedFile[]).map(file => ({ ...file, ...(file.importable ? { stagingStatus: "checking" as const, stagingMessage: "Identifying spreadsheet headers…" } : {}) }));
-  const artifacts = stagedFiles.map((file) =>
+  const purpose = options.purpose ?? "company-data";
+  const stagedFiles = (parsed.files as StagedFile[]).map(file => ({ ...file, purpose, passToProvider: purpose === "chat", uploadArtifactId: options.uploadArtifactId, ...(file.importable ? { stagingStatus: "checking" as const, stagingMessage: "Checking spreadsheet…" } : {}) }));
+  const artifacts = (purpose === "chat" ? stagedFiles : []).map((file) =>
     saveArtifact(options.sessionId, {
       ...artifactBase(file.name),
       type: "file",
@@ -187,11 +192,15 @@ export async function stageUploads(
     ...state,
     files: [...state.files, ...stagedFiles],
   }));
+  if (options.uploadArtifactId) {
+    const upload = getChatState(options.sessionId).artifacts.find(artifact => artifact.id === options.uploadArtifactId);
+    if (upload?.type === "enrichment-upload") patchArtifact(options.sessionId, upload.id, { files: [...upload.files, ...stagedFiles] });
+  }
   if (stagedFiles.some(file => file.importable)) {
-    window.dispatchEvent(new CustomEvent("screening:files-staged", { detail: { sessionId: options.sessionId } }));
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("screening:files-staged", { detail: { sessionId: options.sessionId, purpose } }));
     void import("./import-pipeline").then(({ processStagedUploads }) => processStagedUploads(options.sessionId));
   }
-  if (options.workspaceMessage && stagedFiles.some(file => !file.importable)) {
+  if (options.workspaceMessage && purpose === "chat") {
     const messageId = crypto.randomUUID();
     updateChatState(options.sessionId, (state) => ({
       ...state,

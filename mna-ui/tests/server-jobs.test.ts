@@ -15,6 +15,22 @@ const input = {
   definition,
 };
 
+function shortlistPage(candidates: { company_id: string; name: string; considered: boolean; website?: string }[], args: Record<string, unknown>, sourceHash = "stable-source") {
+  const cursor = String(args.after_company_id ?? "");
+  const remaining = candidates.filter(candidate => candidate.company_id > cursor);
+  const size = Number(args.limit);
+  const page = remaining.slice(0, size);
+  return {
+    total: candidates.length,
+    considered_count: candidates.filter(candidate => candidate.considered).length,
+    source_hash: sourceHash,
+    selection_revision: 1,
+    candidates: page,
+    has_more: remaining.length > page.length,
+    next_after_company_id: remaining.length > page.length ? page.at(-1)?.company_id : null,
+  };
+}
+
 type Call = (
   tool: string,
   args: Record<string, unknown>,
@@ -43,6 +59,7 @@ test('example discovery searches positive business text and passes only approved
       queries.push(args);
       return {query_id: 'positive-query', results: []};
     }
+    if (tool === 'get_shortlist_context') return shortlistPage([], args);
     if (tool === 'get_candidate_set') return {candidates: []};
     if (tool === 'get_discovery_summary') return {mid_only: 0, iscc_only: 0, both: 0, total_unique: 0};
     return response(tool, args);
@@ -102,10 +119,13 @@ function response(
           {
             company_id: "MID-A",
             company: { company_id: "MID-A", name: "Alpha" },
+            considered: true,
             discovery: [{ source: "MID", retrieval_score: 1.37, rank: 1 }],
           },
         ],
       };
+    case "get_shortlist_context":
+      return shortlistPage([{ company_id: "MID-A", name: "Alpha", considered: true }], args);
     case "get_company":
       return {
         company_id: "MID-A",
@@ -153,6 +173,7 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
   assert.deepEqual(completed.result.companies[0], {
     row: {
       company: { company_id: "MID-A", name: "Alpha" },
+      considered: true,
       score: 1.37,
       rank: 1,
     },
@@ -182,6 +203,7 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
       names.indexOf("get_discovery_summary"),
   );
   assert.equal(names.at(-1), "save_checkpoint");
+  assert.equal(calls.find((call) => call.tool === "get_candidate_set")?.args.include_hidden, true);
   assert.equal(
     calls.find((call) => call.tool === "create_run")?.approved,
     true,
@@ -212,6 +234,82 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
   }
   assert.equal(jobs.get(started.id)?.state, "completed");
   assert.equal(jobs.list()[0].id, started.id);
+});
+
+test("discovery uses the approved criteria run and retains hidden candidates after another search", async () => {
+  const calls: { tool: string; args: Record<string, unknown> }[] = [];
+  const jobs = registry(async (tool, args) => {
+    calls.push({ tool, args });
+    if (tool === "get_shortlist_context") return shortlistPage([
+      { company_id: "MID-A", name: "Alpha", considered: true },
+      { company_id: "MID-HIDDEN", name: "Original hidden company", considered: false },
+    ], args);
+    if (tool === "get_candidate_set") return {
+      candidates: [
+        { company_id: "MID-A", considered: true, company: { company_id: "MID-A", name: "Alpha" }, discovery: [{ source: "MID", retrieval_score: 1.37 }] },
+        { company_id: "MID-HIDDEN", considered: false, company: { company_id: "MID-HIDDEN", name: "Original hidden company" }, discovery: [{ source: "MID", retrieval_score: 0.91 }] },
+      ],
+    };
+    if (tool === "get_discovery_summary") return { mid_only: 1, iscc_only: 0, both: 0, other: 0, total_unique: 1 };
+    if (tool === "get_company") return { company_id: args.company_id, name: args.company_id === "MID-HIDDEN" ? "Original hidden company" : "Alpha", description: "Original detail" };
+    return response(tool, args);
+  });
+  const completed = await jobs.wait(jobs.create({ ...input, backendRunId: "approved-run" }).id);
+  assert.equal(completed?.state, "completed");
+  assert.equal(completed?.result.backendRunId, "approved-run");
+  assert.deepEqual(completed?.result.companies.map(({ row }: { row: { considered: boolean } }) => row.considered), [true, false]);
+  assert.equal(completed?.result.companies[1].detail.name, "Original hidden company");
+  assert.equal(calls.some(({ tool }) => tool === "create_run"), false);
+  assert.equal(calls.some(({ tool }) => tool === "approve_screening_profile"), false);
+  assert.ok(calls.findIndex(({ tool }) => tool === "get_active_screening_profile") < calls.findIndex(({ tool }) => tool === "import_company_files"));
+  assert.ok(calls.findIndex(({ tool }) => tool === "import_company_files") < calls.findIndex(({ tool }) => tool === "search_mid"));
+  assert.equal(calls.find(({ tool }) => tool === "get_candidate_set")?.args.include_hidden, true);
+  assert.deepEqual((calls.find(({ tool }) => tool === "save_checkpoint")?.args.state as { company_ids: string[] }).company_ids, ["MID-A"]);
+});
+
+test("discovery reads more than 1,000 saved candidates and keeps late hidden rows", async () => {
+  const saved = Array.from({ length: 1001 }, (_, index) => ({
+    company_id: `MID-${String(index).padStart(4, "0")}`,
+    name: `Company ${index}`,
+    considered: index !== 1000,
+  }));
+  const calls: { tool: string; args: Record<string, unknown> }[] = [];
+  const jobs = registry(async (tool, args) => {
+    calls.push({ tool, args });
+    if (tool === "search_mid") return { query_id: "empty", results: [] };
+    if (tool === "get_shortlist_context") return shortlistPage(saved, args);
+    if (tool === "get_candidate_set") return { candidates: saved.slice(0, 1000).map((item, index) => ({
+      ...item, company: { company_id: item.company_id, name: item.name },
+      discovery: index === 0 ? [{ source: "MID", retrieval_score: 0.9 }] : [],
+    })) };
+    if (tool === "get_company") return { company_id: args.company_id, name: `Original ${args.company_id}` };
+    if (tool === "get_source_rows") return { rows: [] };
+    if (tool === "get_company_context") return {};
+    if (tool === "get_discovery_summary") return { mid_only: 1000, iscc_only: 0, both: 0, other: 0, total_unique: 1000 };
+    return response(tool, args);
+  });
+  const completed = await jobs.wait(jobs.create({ ...input, backendRunId: "approved-run" }).id);
+  assert.equal(completed?.state, "completed");
+  assert.equal(completed?.result.companies.length, 1001);
+  assert.equal(completed?.result.companies[0].row.score, 0.9);
+  assert.equal(completed?.result.companies[1000].row.considered, false);
+  assert.equal(completed?.result.companies[1000].detail.name, "Original MID-1000");
+  assert.deepEqual(calls.filter(({ tool, args }) => tool === "get_shortlist_context" && args.limit === 500).map(({ args }) => args.after_company_id), [undefined, "MID-0499", "MID-0999"]);
+  assert.equal(calls.find(({ tool }) => tool === "get_candidate_set")?.args.limit, 1000);
+  assert.equal((calls.find(({ tool }) => tool === "save_checkpoint")?.args.state as { company_ids: string[] }).company_ids.length, 1000);
+});
+
+test("discovery rejects a shortlist changed between pages", async () => {
+  const saved = Array.from({ length: 501 }, (_, index) => ({ company_id: `MID-${String(index).padStart(4, "0")}`, name: `Company ${index}`, considered: true }));
+  const jobs = registry(async (tool, args) => {
+    if (tool === "search_mid") return { query_id: "empty", results: [] };
+    if (tool === "get_shortlist_context") return shortlistPage(saved, args, args.after_company_id ? "changed-source" : "original-source");
+    if (tool === "get_candidate_set") throw new Error("Should not read scores after a changed page");
+    return response(tool, args);
+  });
+  const completed = await jobs.wait(jobs.create({ ...input, backendRunId: "approved-run" }).id);
+  assert.equal(completed?.state, "error");
+  assert.match(completed?.error ?? "", /changed during discovery/);
 });
 
 test("approval and request shape are enforced before any Rust call", () => {

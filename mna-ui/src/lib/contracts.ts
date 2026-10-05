@@ -1,6 +1,7 @@
 export type Source = 'MID' | 'ISCC' | 'both';
 export type Fit = 'Strong signal' | 'Worth exploring' | 'Needs research';
 export type Company = {
+  considered?: boolean;
   pk: string;
   ecid: string | null;
   cid: string | null;

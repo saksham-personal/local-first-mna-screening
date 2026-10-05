@@ -1,5 +1,65 @@
 [
   {
+    "name": "get_shortlist_context",
+    "description": "Read considered companies, hidden count, source coverage and chosen results for this screening run",
+    "category": "review",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after_company_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "include_hidden": {
+          "default": false,
+          "type": "boolean"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "ContextArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_criteria_history",
+    "description": "Read every criteria revision and its analyst approval; the previous revision is the last criteria",
+    "category": "review",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunArgs",
+      "type": "object"
+    }
+  },
+  {
     "name": "search_companies",
     "description": "Search canonical core-business descriptions; report non-core filters as unused",
     "category": "search",
@@ -1885,6 +1945,10 @@
         "filters": {
           "$ref": "#/$defs/CandidateFilters"
         },
+        "include_hidden": {
+          "default": false,
+          "type": "boolean"
+        },
         "limit": {
           "default": null,
           "format": "uint",
@@ -2236,6 +2300,10 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "exclude_unmapped": {
+          "default": false,
+          "type": "boolean"
+        },
         "files": {
           "items": {
             "type": "string"
@@ -2376,6 +2444,10 @@
             "string",
             "null"
           ]
+        },
+        "include_hidden": {
+          "default": false,
+          "type": "boolean"
         },
         "limit": {
           "default": null,

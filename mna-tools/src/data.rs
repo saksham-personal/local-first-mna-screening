@@ -35,6 +35,8 @@ struct ImportCompanyFilesArgs {
 struct ImportEnrichmentFilesArgs {
     run_id: String,
     files: Vec<String>,
+    #[serde(default)]
+    exclude_unmapped: bool,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -72,6 +74,8 @@ struct SourceRowsArgs {
 #[serde(deny_unknown_fields)]
 struct CandidateSourceDataArgs {
     run_id: String,
+    #[serde(default)]
+    include_hidden: bool,
     #[serde(default)]
     after_company_id: Option<String>,
     #[serde(default)]
@@ -332,6 +336,7 @@ impl DataService {
                 args.after_company_id.as_deref(),
                 limit,
                 true,
+                !args.include_hidden,
             )
         })
     }
@@ -339,7 +344,7 @@ impl DataService {
     fn get_discovery_summary(&self, args: RunArgs) -> Result<Value> {
         self.store.with_connection(|connection| {
             require_run(connection,&args.run_id)?;
-            let mut statement = connection.prepare("SELECT c.company_id,c.status,EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.source='MID'),EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.source='ISCC' AND s.run_scope=c.run_id) FROM candidates c WHERE c.run_id=?")?;
+            let mut statement = connection.prepare("SELECT c.company_id,c.status,EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.source='MID'),EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.source='ISCC' AND s.run_scope=c.run_id) FROM candidates c WHERE c.run_id=? AND c.considered=1")?;
             let mut total=0usize; let mut mid=0usize; let mut iscc=0usize; let mut both=0usize; let mut other=0usize;
             let records = statement.query_map([&args.run_id],|r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?!=0,r.get::<_,i64>(3)?!=0)))?;
             let mut statuses = BTreeMap::<String,usize>::new();
@@ -348,8 +353,18 @@ impl DataService {
                 total+=1; *statuses.entry(status).or_default()+=1;
                 match (has_mid,has_iscc) { (true,true)=>both+=1,(true,false)=>mid+=1,(false,true)=>iscc+=1,_=>other+=1 }
             }
-            let recommendation=if total>=2000 {"LLM_SCREENING"} else {"PITCHBOOK_ENRICHMENT"};
-            Ok(json!({"run_id":args.run_id,"total_unique":total,"mid_only":mid,"iscc_only":iscc,"both":both,"other":other,"status_counts":statuses,"recommended_next_step":recommendation}))
+            let saved_total: usize=connection.query_row("SELECT COUNT(*) FROM candidates WHERE run_id=?",[&args.run_id],|r|r.get(0))?;
+            let pb: usize=connection.query_row("SELECT COUNT(*) FROM candidates x JOIN company_enrichment e ON e.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 AND (e.pb_name IS NOT NULL OR e.pb_description IS NOT NULL)",[&args.run_id],|r|r.get(0))?;
+            let rogo: usize=connection.query_row("SELECT COUNT(*) FROM candidates x JOIN company_enrichment e ON e.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 AND e.rogo_json!='{}'",[&args.run_id],|r|r.get(0))?;
+            let bing: usize=connection.query_row("SELECT COUNT(DISTINCT x.company_id) FROM candidates x JOIN evidence b ON b.company_id=x.company_id AND b.run_id=x.run_id WHERE x.run_id=? AND x.considered=1 AND b.claim='bing_research_observation' AND b.source_type='bing'",[&args.run_id],|r|r.get(0))?;
+            let mut recommended=Vec::new();
+            if total>0 && total<1000 {recommended.push("PITCHBOOK_ENRICHMENT");recommended.push("BING_HYDRATION");}
+            if total>500 && total<2000 {recommended.push("ROGO_ENRICHMENT");}
+            if total>2000 {recommended.push("LLM_SUITE_SCREENING");}
+            if pb>0 && total>0 && total<250 {recommended.push("M365_SCREENING");}
+            let research_open=total>5000 || pb+rogo+bing>0 || (total>0 && total<500);
+            let recommendation=recommended.first().copied().unwrap_or("REVIEW_SHORTLIST");
+            Ok(json!({"run_id":args.run_id,"total_unique":total,"mid_only":mid,"iscc_only":iscc,"both":both,"other":other,"status_counts":statuses,"recommended_next_step":recommendation,"recommended_steps":recommended,"saved_total":saved_total,"hidden_total":saved_total-total,"coverage":{"PB":pb,"ROGO":rogo,"BING":bing},"research_open":research_open}))
         })
     }
 
@@ -457,6 +472,11 @@ impl DataService {
         if mappings.is_empty() && pb_data.is_empty() && rogo.is_empty() {
             return Err(Error::Validation("no enrichment sheets found".into()));
         }
+        if args.exclude_unmapped && mappings.is_empty() {
+            return Err(Error::Validation(
+                "exclude_unmapped requires a PitchBook mapping sheet".into(),
+            ));
+        }
         let mut parquet_paths = Vec::new();
         let mut new_parquet_paths = Vec::new();
         for sheet in &pb_data {
@@ -491,6 +511,23 @@ impl DataService {
                         _ => None,
                     };
                     save_enrichment_row(&tx, "PB_MAPPING", company_id.as_deref(), row, None)?;
+                    if (!profile
+                        .as_deref()
+                        .is_some_and(|p| p.eq_ignore_ascii_case("yes"))
+                        || pbid.is_none())
+                        && company_id.is_some()
+                    {
+                        crate::review::hide_explicit_unmapped_pb(
+                            &tx,
+                            &args.run_id,
+                            company_id.as_deref().expect("candidate"),
+                            if pbid.is_none() {
+                                "pitchbook_unmapped"
+                            } else {
+                                "pitchbook_non_company"
+                            },
+                        )?;
+                    }
                     if !profile
                         .as_deref()
                         .is_some_and(|p| p.eq_ignore_ascii_case("yes"))
@@ -503,6 +540,11 @@ impl DataService {
                             let already_mapped = lookup_identifier(&tx, "PBID", &pbid)?.is_some();
                             match put_identifier(&tx, "PBID", &pbid, &company_id) {
                                 Ok(()) => {
+                                    crate::review::restore_pb_mapping(
+                                        &tx,
+                                        &args.run_id,
+                                        &company_id,
+                                    )?;
                                     mapped_companies.insert(company_id);
                                     if !already_mapped {
                                         result.pbid_populated += 1;
@@ -526,6 +568,9 @@ impl DataService {
                         }
                     }
                 }
+            }
+            if args.exclude_unmapped {
+                crate::review::hide_all_unmapped_pb(&tx, &args.run_id)?;
             }
             for (sheet, path) in pb_data.iter().zip(&parquet_paths) {
                 for row in &sheet.rows {
@@ -579,17 +624,23 @@ impl DataService {
                     }
                 }
             }
+            let selection_revision = crate::review::record_pb_import_review(&tx, &args.run_id)?;
+            let (considered_count, hidden_count): (i64, i64) = tx.query_row(
+                "SELECT considered_count,hidden_count FROM shortlist_reviews WHERE rowid=?",
+                [selection_revision],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
             tx.commit()?;
-            Ok(())
+            Ok((selection_revision, considered_count, hidden_count))
         });
         if outcome.is_err() {
             for path in &new_parquet_paths {
                 let _ = std::fs::remove_file(path);
             }
         }
-        outcome?;
+        let (selection_revision, considered_count, hidden_count) = outcome?;
         Ok(
-            json!({"run_id":args.run_id,"mapping_rows":result.mapping_rows,"mapping_skipped_non_company":result.mapping_skipped_non_company,"pbid_populated":result.pbid_populated,"mapping_unique_companies":mapped_companies.len(),"pb_data_rows":result.pb_data_rows,"pb_hydrated":result.pb_hydrated,"pb_unique_companies":pb_companies.len(),"pb_unmatched":result.pb_unmatched,"rogo_rows":result.rogo_rows,"rogo_hydrated":result.rogo_hydrated,"rogo_unique_companies":rogo_companies.len(),"rogo_unmatched":result.rogo_unmatched,"quarantined":result.quarantined,"parquet_files":parquet_paths.iter().map(|p|p.to_string_lossy().to_string()).collect::<Vec<_>>() }),
+            json!({"run_id":args.run_id,"mapping_rows":result.mapping_rows,"mapping_skipped_non_company":result.mapping_skipped_non_company,"pbid_populated":result.pbid_populated,"mapping_unique_companies":mapped_companies.len(),"pb_data_rows":result.pb_data_rows,"pb_hydrated":result.pb_hydrated,"pb_unique_companies":pb_companies.len(),"pb_unmatched":result.pb_unmatched,"rogo_rows":result.rogo_rows,"rogo_hydrated":result.rogo_hydrated,"rogo_unique_companies":rogo_companies.len(),"rogo_unmatched":result.rogo_unmatched,"quarantined":result.quarantined,"selection_revision":selection_revision,"considered_count":considered_count,"hidden_count":hidden_count,"parquet_files":parquet_paths.iter().map(|p|p.to_string_lossy().to_string()).collect::<Vec<_>>() }),
         )
     }
 
@@ -643,18 +694,18 @@ impl DataService {
         }
         let data=self.store.with_connection(|connection|{
             require_run(connection,&args.run_id)?;
-            let mut statement=connection.prepare("SELECT c.company_id,c.name,c.website,c.city,c.description,json_extract(c.metadata_json,'$.hq_state') FROM candidates x JOIN companies c ON c.company_id=x.company_id WHERE x.run_id=? ORDER BY c.company_id")?;
+            let mut statement=connection.prepare("SELECT c.company_id,c.name,c.website,c.city,c.description,json_extract(c.metadata_json,'$.hq_state') FROM candidates x JOIN companies c ON c.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 ORDER BY c.company_id")?;
             let companies=statement.query_map([&args.run_id],|r|Ok(ExportCompany{company_id:r.get(0)?,name:r.get(1)?,website:r.get(2)?,city:r.get(3)?,description:r.get(4)?,state:r.get(5)?}))?
                 .collect::<std::result::Result<Vec<_>,_>>()?;
             let mut sources=HashMap::new();
-            let mut source_query=connection.prepare("SELECT c.company_id,MAX(CASE WHEN s.source='MID' THEN 1 ELSE 0 END),MAX(CASE WHEN s.source='ISCC' AND s.run_scope=? THEN 1 ELSE 0 END) FROM candidates c LEFT JOIN source_rows s ON s.company_id=c.company_id WHERE c.run_id=? GROUP BY c.company_id")?;
+            let mut source_query=connection.prepare("SELECT c.company_id,MAX(CASE WHEN s.source='MID' THEN 1 ELSE 0 END),MAX(CASE WHEN s.source='ISCC' AND s.run_scope=? THEN 1 ELSE 0 END) FROM candidates c LEFT JOIN source_rows s ON s.company_id=c.company_id WHERE c.run_id=? AND c.considered=1 GROUP BY c.company_id")?;
             for row in source_query.query_map(params![args.run_id,args.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?)))? {
                 let (id,mid,iscc)=row?;
                 sources.insert(id,match(mid!=0,iscc!=0){(true,true)=>"both",(true,false)=>"MID",(false,true)=>"ISCC",_=>"UNKNOWN"}.to_owned());
             }
             let mut raw_mid=Vec::new();let mut raw_iscc=Vec::new();
             if export_type=="FULL" {
-                let mut statement=connection.prepare("SELECT s.source,s.company_id,s.row_json FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND (s.source='MID' OR s.run_scope=c.run_id) ORDER BY s.source,s.company_id,s.imported_at")?;
+                let mut statement=connection.prepare("SELECT s.source,s.company_id,s.row_json FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND c.considered=1 AND (s.source='MID' OR s.run_scope=c.run_id) ORDER BY s.source,s.company_id,s.imported_at")?;
                 for row in statement.query_map([&args.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))? {
                     let (source,company_id,json)=row?;
                     let record=(company_id,serde_json::from_str::<Value>(&json)?);
@@ -1339,14 +1390,14 @@ fn write_full_export(
     use rust_xlsxwriter::Workbook;
     require_run(connection, run_id)?;
     let companies: usize = connection.query_row(
-        "SELECT COUNT(*) FROM candidates WHERE run_id=?",
+        "SELECT COUNT(*) FROM candidates WHERE run_id=? AND considered=1",
         [run_id],
         |r| r.get(0),
     )?;
     let mut workbook = Workbook::new();
     let mut counts = [0usize, 0usize];
     for (index, source) in ["MID", "ISCC"].iter().enumerate() {
-        let sql="SELECT s.company_id,s.row_json FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND s.source=? AND (s.source='MID' OR s.run_scope=c.run_id) ORDER BY s.company_id,s.imported_at,s.source_row_id";
+        let sql="SELECT s.company_id,s.row_json FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND c.considered=1 AND s.source=? AND (s.source='MID' OR s.run_scope=c.run_id) ORDER BY s.company_id,s.imported_at,s.source_row_id";
         let mut headers = BTreeSet::<String>::new();
         let mut statement = connection.prepare(sql)?;
         for raw in statement.query_map(params![run_id, source], |r| r.get::<_, String>(1))? {
@@ -1539,13 +1590,14 @@ pub(crate) fn candidate_source_page(
     after_company_id: Option<&str>,
     limit: usize,
     enforce_page_limit: bool,
+    considered_only: bool,
 ) -> Result<Value> {
     require_run(connection, run_id)?;
     if let Some(cursor) = &after_company_id {
         let exists: Option<i64> = connection
             .query_row(
-                "SELECT 1 FROM candidates WHERE run_id=? AND company_id=?",
-                params![run_id, cursor],
+                "SELECT 1 FROM candidates WHERE run_id=? AND company_id=? AND (?=0 OR considered=1)",
+                params![run_id, cursor, considered_only],
                 |row| row.get(0),
             )
             .optional()?;
@@ -1556,17 +1608,18 @@ pub(crate) fn candidate_source_page(
         }
     }
     let total: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM candidates WHERE run_id=?",
-        [&run_id],
+        "SELECT COUNT(*) FROM candidates WHERE run_id=? AND (?=0 OR considered=1)",
+        params![run_id, considered_only],
         |row| row.get(0),
     )?;
     let mut statement = connection.prepare(
-                "SELECT company_id FROM candidates WHERE run_id=? AND (? IS NULL OR company_id>?) ORDER BY company_id LIMIT ?"
+                "SELECT company_id FROM candidates WHERE run_id=? AND (?=0 OR considered=1) AND (? IS NULL OR company_id>?) ORDER BY company_id LIMIT ?"
             )?;
     let ids = statement
         .query_map(
             params![
                 run_id,
+                considered_only,
                 after_company_id,
                 after_company_id,
                 (limit + 1) as i64
@@ -1577,10 +1630,11 @@ pub(crate) fn candidate_source_page(
     let has_more = ids.len() > limit;
     let ids = ids.into_iter().take(limit).collect::<Vec<_>>();
     let mut rows = Vec::with_capacity(ids.len());
+    let review_columns = crate::review::review_columns(connection, run_id)?;
     let mut pb_locators = BTreeMap::<String, Vec<(usize, String, usize)>>::new();
     for company_id in &ids {
-        let mut sources = json!({"MID":{},"ISCC":{},"PB":{},"ROGO":{}});
-        let mut provenance = json!({"MID":[],"ISCC":[],"PB":[],"ROGO":[]});
+        let mut sources = json!({"MID":{},"ISCC":{},"PB":{},"ROGO":{},"RESULTS":{},"BING":{}});
+        let mut provenance = json!({"MID":[],"ISCC":[],"PB":[],"ROGO":[],"RESULTS":[],"BING":{}});
         for source in ["MID", "ISCC"] {
             let mut query = connection.prepare(
                         "SELECT source_row_id,row_hash,row_json,imported_at,query_scope FROM source_rows WHERE company_id=? AND source=? AND (source='MID' OR run_scope=?) ORDER BY imported_at DESC,source_row_id DESC"
@@ -1689,6 +1743,51 @@ pub(crate) fn candidate_source_page(
         let records = query.query_map([company_id], |row| Ok(json!({"enrichment_id":row.get::<_, String>(0)?,"row_hash":row.get::<_, String>(1)?,"imported_at":row.get::<_, String>(2)?})))?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
         provenance["ROGO"] = Value::Array(records);
+        for (plan, columns) in &review_columns {
+            for column in columns {
+                sources["RESULTS"][format!("{plan}:{column}")] = Value::Null;
+            }
+            let assessment:Option<(String,String,String)>=connection.query_row("SELECT assessment_id,result_json,created_at FROM model_assessments WHERE run_id=? AND plan_id=? AND company_id=? ORDER BY created_at DESC,assessment_id DESC LIMIT 1",params![run_id,plan,company_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+            if let Some((assessment_id, raw, created_at)) = assessment {
+                let result: Value = serde_json::from_str(&raw)?;
+                for column in columns {
+                    sources["RESULTS"][format!("{plan}:{column}")] =
+                        result.get(column).cloned().unwrap_or(Value::Null);
+                }
+                provenance["RESULTS"].as_array_mut().expect("RESULTS lineage").push(json!({"assessment_id":assessment_id,"plan_id":plan,"created_at":created_at}));
+            }
+        }
+        let bing_total:i64=connection.query_row("SELECT COUNT(*) FROM evidence WHERE run_id=? AND company_id=? AND claim='bing_research_observation' AND source_type='bing'",params![run_id,company_id],|r|r.get(0))?;
+        if bing_total > 0 {
+            let mut bing_stmt=connection.prepare("SELECT evidence_id,value_json,source_reference,retrieved_at FROM evidence WHERE run_id=? AND company_id=? AND claim='bing_research_observation' AND source_type='bing' ORDER BY retrieved_at DESC,evidence_id DESC LIMIT 5")?;
+            let mut observations = Vec::new();
+            let mut evidence_ids = Vec::new();
+            for record in bing_stmt.query_map(params![run_id, company_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })? {
+                let (evidence_id, raw, source_reference, retrieved_at) = record?;
+                let value: Value = serde_json::from_str(&raw)?;
+                let sources=value["sources"].as_array().map(|items|items.iter().take(3).map(|s|json!({"title":bounded_bing_text(&s["title"],300),"url":bounded_bing_text(&s["url"],500),"snippet":bounded_bing_text(&s["snippet"],500)})).collect::<Vec<_>>()).unwrap_or_default();
+                let entry = json!({"question":bounded_bing_text(&value["question"],500),"answer":bounded_bing_text(&value["answer"],1500),"sources":sources,"confidence":"unverified","source_reference":source_reference,"retrieved_at":retrieved_at});
+                let mut proposed = observations.clone();
+                proposed.push(entry.clone());
+                if serde_json::to_vec(&proposed)?.len() > 11_000 {
+                    break;
+                }
+                observations.push(entry);
+                evidence_ids.push(evidence_id);
+            }
+            let truncated = bing_total as usize > observations.len();
+            sources["BING"]["Research"] = json!(serde_json::to_string(
+                &json!({"observations":observations,"unverified":true,"total_observations":bing_total,"truncated":truncated})
+            )?);
+            provenance["BING"] = json!({"evidence_ids":evidence_ids,"total_observations":bing_total,"included_observations":observations.len(),"truncated":truncated,"confidence":"unverified"});
+        }
         rows.push(json!({"pk":company_id,"PBId":pbid,"sources":sources,"provenance":provenance}));
     }
     hydrate_pb_parquet(&mut rows, pb_locators)?;
@@ -1700,4 +1799,13 @@ pub(crate) fn candidate_source_page(
         ));
     }
     Ok(response)
+}
+
+fn bounded_bing_text(value: &Value, max_chars: usize) -> String {
+    value
+        .as_str()
+        .unwrap_or_default()
+        .chars()
+        .take(max_chars)
+        .collect()
 }

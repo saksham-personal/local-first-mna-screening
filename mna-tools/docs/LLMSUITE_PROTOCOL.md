@@ -1,5 +1,7 @@
 # LLMSuite text protocol v1
 
+This is the implemented Rust parsing and controller contract. The local UI does not have a live LLMSuite connection by default; preparing or approving a plan returns `executed:false` until a trusted provider is configured. A direct chat question can use LLMSuite without opening scored-screening setup. The same Rust controller gate applies to that text request when connected.
+
 The controller sends the model the tools allowed for the current turn and their argument descriptions. A tool command is **one complete text block**, with no introduction, code fence, second block, or closing commentary:
 
 ```text
@@ -39,11 +41,11 @@ steps[1].parameters.batch_size:number = 100
 END TOOL
 ```
 
-`parse_tool_response` rejects an unknown tool or type, extra prose, duplicate fields, conflicting paths, sparse arrays, malformed quoting, invalid numbers, excess size, and multiple blocks. The controller should retry a rejected response with `repair_prompt`, at most twice per request; the helper reports a bounded error and the allowed names without echoing the model's raw output. Exhausted attempts should fail the operation and preserve the rejected raw response only in the controller's quarantine/audit store.
+`parse_tool_response` rejects an unknown tool or type, extra prose, duplicate fields, conflicting paths, sparse arrays, malformed quoting, invalid numbers, excess size, and multiple blocks. The controller should retry a rejected response with `repair_prompt`, at most twice per request; the helper reports a bounded error and the allowed names without echoing the model's raw output. Every actual repair send shares LLMSuite's seven-send rolling-minute gate with orchestration, direct questions, and screening. Exhausted attempts should fail the operation and preserve the rejected raw response only in the controller's quarantine/audit store.
 
 ## Index-only Markdown results
 
-For screening results, the controller provides a frozen set of integer indexes and an ordered list of requested columns. The model returns exactly one Markdown table, without a code fence or prose. Its header is `index` followed by those columns in that order, with exact spelling and case:
+For screening results, the controller provides a frozen set of integer indexes and an ordered list of requested columns. The UI can leave the model field empty; preparation binds the configured LLMSuite deployment or records `automatic` while disconnected. The controller must resolve a real deployment before an external send and must never send literal `automatic` to a provider. The analyst's digest approval binds the exact input rows, prompt, columns, and deployment. The model returns exactly one Markdown table, without a code fence or prose. Its header is `index` followed by those columns in that order, with exact spelling and case:
 
 ```text
 | index | Fit Score | Rationale | Product Ownership |
@@ -54,4 +56,4 @@ For screening results, the controller provides a frozen set of integer indexes a
 
 The table has one row per frozen index, in any row order. `parse_markdown_results` returns rows in the controller's expected index order. Every row contains exactly `index` and the requested fields. It rejects duplicate, missing, or out-of-scope indexes, extra columns or prose, malformed separator lines, unsupported escapes, and invalid scores. A literal pipe inside a cell is `\|`; a literal backslash is `\\`. Markdown cell padding is trimmed. For declared score columns only, the cell must be a finite number from 0 through 10 inclusive or exactly `CHECK`; numeric scores become numbers in the returned object. Other cells remain text, including numeric-looking text. No company ID, name, or primary key is inferred from model output. The controller maps each validated index to its frozen server-owned identity and persists all-or-nothing results with the attempt provenance.
 
-Leading/trailing blank lines, UTF-8 BOM, and CRLF are accepted. Blank lines within the table, code fences, and any surrounding explanation are rejected. The table parser is limited to 256 KiB and 4096 expected rows. The controller owns retry limits and the frozen index map; this module only validates one candidate response.
+Leading/trailing blank lines, UTF-8 BOM, and CRLF are accepted. Blank lines within the table, code fences, and any surrounding explanation are rejected. The table parser is limited to 256 KiB and 4096 expected rows. The controller owns the two-repair limit and frozen index map; this module only validates one candidate response. An upload, criteria edit, shortlist change, or source change can make the plan stale; a late response stays historical and does not silently update the current shortlist.

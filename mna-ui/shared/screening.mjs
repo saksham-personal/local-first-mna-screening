@@ -9,7 +9,7 @@ export const DEFAULT_INPUTS = [
   "Description",
   "LinkedIn URL",
 ];
-export const SOURCES = ["MID", "ISCC", "PB", "ROGO"];
+export const SOURCES = ["MID", "ISCC", "PB", "ROGO", "BING", "RESULTS"];
 const IDENTITY_ORDER = ["PB", "MID", "ISCC"];
 const NULLS = /^(?:--?|n\/?a|#n\/?a|none|null|undefined|nan|not\s*available)$/i;
 const normal = (value) =>
@@ -116,7 +116,7 @@ export function buildCatalog(rows) {
       }
       return {
         source,
-        label: source === "PB" ? "PitchBook" : source,
+        label: source === "PB" ? "PitchBook" : source === "RESULTS" ? "Saved results" : source === "BING" ? "Bing research" : source,
         hydrated: companyCount > 0,
         companyCount,
         fields: [...fields.values()].sort((a, b) =>
@@ -186,7 +186,7 @@ export function defaultScreeningConfig(
     },
   };
 }
-export function validateConfig(config, catalog, requireModel = false) {
+export function validateConfig(config, catalog, _requireModel = false) {
   if (!object(config)) throw new Error("Screening setup must be an object.");
   const keys = [
     "provider",
@@ -207,10 +207,9 @@ export function validateConfig(config, catalog, requireModel = false) {
     throw new Error("Choose LLMSuite or M365 and a valid task mode.");
   if (
     typeof config.model !== "string" ||
-    config.model.trim().length > 160 ||
-    (requireModel && !config.model.trim())
+    config.model.trim().length > 160
   )
-    throw new Error("Enter a model or deployment name before approving.");
+    throw new Error("The selected model name is invalid.");
   if (
     !Number.isSafeInteger(config.batchSize) ||
     config.batchSize < 1 ||

@@ -173,7 +173,7 @@ test("editable columns validate uniqueness and immutable index, with transparent
       ),
     /no longer/,
   );
-  assert.throws(() => validateConfig(config, catalog, true), /deployment/);
+  assert.equal(validateConfig(config, catalog, true).model, "");
   assert.equal(
     validateConfig({ ...config, model: " chosen-deployment " }, catalog, true)
       .model,

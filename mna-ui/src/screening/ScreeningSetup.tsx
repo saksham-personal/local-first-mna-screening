@@ -12,6 +12,7 @@ import {
   ChevronRight,
   FileSpreadsheet,
   LoaderCircle,
+  Sparkles,
   Plus,
   UploadCloud,
   X,
@@ -32,6 +33,7 @@ import {
   suggestOutputColumns,
 } from "../lib/screening-data";
 import Tooltip from "../Tooltip";
+import ColumnChips from "./ColumnChips";
 import "./screening-setup.css";
 
 type Props = {
@@ -47,10 +49,11 @@ type Props = {
     preview: ScreeningPreview,
   ) => Promise<PreparedScreening>;
   onHydrate: (files: File[], source: DataSource) => Promise<void>;
+  onGeneratePrompt?: (config: ScreeningConfig) => Promise<{ executed: boolean; text?: string; message?: string }>;
   onClose: () => void;
 };
 
-const SOURCES: DataSource[] = ["MID", "ISCC", "PB", "ROGO"];
+const SOURCES: DataSource[] = ["MID", "ISCC", "PB", "ROGO", "RESULTS", "BING"];
 const IDENTITY_SOURCES: DataSource[] = ["PB", "MID", "ISCC"];
 const IDENTITY_LABELS: { key: keyof IdentitySources; label: string }[] = [
   { key: "name", label: "Company name" },
@@ -59,7 +62,13 @@ const IDENTITY_LABELS: { key: keyof IdentitySources; label: string }[] = [
 ];
 
 function unique(values: string[]) {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  const seen = new Set<string>();
+  return values.map((value) => value.trim()).filter((value) => {
+    const key = value.toLocaleLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function normalized(config: ScreeningConfig): ScreeningConfig {
@@ -78,11 +87,11 @@ function normalized(config: ScreeningConfig): ScreeningConfig {
     ),
     inputColumns: [
       "index",
-      ...unique(config.inputColumns).filter((column) => column !== "index"),
+      ...unique(config.inputColumns).filter((column) => column.toLocaleLowerCase() !== "index"),
     ],
     outputColumns: [
       "index",
-      ...unique(config.outputColumns).filter((column) => column !== "index"),
+      ...unique(config.outputColumns).filter((column) => column.toLocaleLowerCase() !== "index"),
     ],
     identitySources: sources,
   };
@@ -118,14 +127,16 @@ export default function ScreeningSetup({
   onPreview,
   onApprove,
   onHydrate,
+  onGeneratePrompt,
   onClose,
 }: Props) {
   const headingId = useId();
+  const keepLinkedIn = provider === "copilot" && catalog.sources.some(source => source.source === "PB" && source.fields.some(field => /linkedin/i.test(field.id) && field.count > 0));
   const [request, setRequest] = useState(
     initialPrompt ?? requestFromPrompt(initialConfig?.prompt),
   );
-  const [config, setConfig] = useState<ScreeningConfig>(() =>
-    normalized(
+  const [config, setConfig] = useState<ScreeningConfig>(() => {
+    const config = normalized(
       initialConfig ??
         defaultScreeningConfig(
           provider,
@@ -133,16 +144,11 @@ export default function ScreeningSetup({
           criteriaText,
           initialPrompt,
         ),
-    ),
-  );
-  const [outputText, setOutputText] = useState(() =>
-    (
-      initialConfig ??
-      defaultScreeningConfig(provider, initialMode, criteriaText, initialPrompt)
-    ).outputColumns
-      .filter((column) => column !== "index")
-      .join(", "),
-  );
+    );
+    if (!initialConfig) config.inputColumns = [...config.inputColumns, ...catalog.sources.filter(source => source.source === "BING" || source.source === "RESULTS").flatMap(source => source.fields.map(field => field.id))];
+    if (keepLinkedIn && !config.inputColumns.includes("LinkedIn URL")) config.inputColumns.push("LinkedIn URL");
+    return config;
+  });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSource, setPickerSource] = useState<DataSource>("MID");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -156,6 +162,8 @@ export default function ScreeningSetup({
   const [previewing, setPreviewing] = useState(false);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState("");
+  const [promptNotice, setPromptNotice] = useState("");
+  const [generatingPrompt, setGeneratingPrompt] = useState(false);
   const version = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const busy = previewing || approving;
@@ -165,6 +173,7 @@ export default function ScreeningSetup({
   const catalogSignature = JSON.stringify(catalog);
 
   const edit = (next: ScreeningConfig) => {
+    if (keepLinkedIn && !next.inputColumns.includes("LinkedIn URL")) next = { ...next, inputColumns: [...next.inputColumns, "LinkedIn URL"] };
     version.current += 1;
     setConfig(normalized(next));
     setPreview(null);
@@ -174,14 +183,12 @@ export default function ScreeningSetup({
   useEffect(() => {
     version.current += 1;
     setPreview(null);
+    if (keepLinkedIn) setConfig(current => current.inputColumns.includes("LinkedIn URL") ? current : { ...current, inputColumns: [...current.inputColumns, "LinkedIn URL"] });
   }, [catalogSignature]);
 
   const changeMode = (mode: ScreeningMode) => {
     if (mode === config.mode) return;
     const outputColumns = suggestOutputColumns(request, mode);
-    setOutputText(
-      outputColumns.filter((column) => column !== "index").join(", "),
-    );
     edit({
       ...config,
       mode,
@@ -203,11 +210,10 @@ export default function ScreeningSetup({
     });
   };
 
-  const changeOutput = (value: string) => {
-    setOutputText(value);
+  const changeOutput = (columns: string[]) => {
     const outputColumns = [
       "index",
-      ...unique(value.split(",")).filter((column) => column !== "index"),
+      ...unique(columns).filter((column) => column.toLocaleLowerCase() !== "index"),
     ];
     edit({
       ...config,
@@ -221,8 +227,29 @@ export default function ScreeningSetup({
     });
   };
 
+  const generatePrompt = async () => {
+    if (!onGeneratePrompt || generatingPrompt) return;
+    const currentVersion = version.current;
+    setGeneratingPrompt(true);
+    setPromptNotice("");
+    try {
+      const result = await onGeneratePrompt(normalized(config));
+      if (currentVersion !== version.current) return;
+      if (!result.executed || !result.text?.trim()) {
+        setPromptNotice(result.message || "Prompt generation is unavailable right now.");
+        return;
+      }
+      edit({ ...config, prompt: result.text.trim() });
+      setPromptNotice("Prompt generated.");
+    } catch (caught) {
+      if (currentVersion === version.current) setPromptNotice(errorMessage(caught));
+    } finally {
+      setGeneratingPrompt(false);
+    }
+  };
+
   const toggleInput = (fieldId: string) => {
-    if (fieldId === "index") return;
+    if (fieldId === "index" || (fieldId === "LinkedIn URL" && keepLinkedIn)) return;
     const selected = config.inputColumns.includes(fieldId);
     edit({
       ...config,
@@ -260,7 +287,7 @@ export default function ScreeningSetup({
   };
 
   const approve = async () => {
-    if (!preview || preview.version !== version.current || !config.model.trim())
+    if (!preview || preview.version !== version.current)
       return;
     setApproving(true);
     setError("");
@@ -306,7 +333,7 @@ export default function ScreeningSetup({
     }
   };
 
-  const providerLabel = provider === "llm_suite" ? "LLMSuite" : "Copilot";
+  const providerLabel = provider === "llm_suite" ? "LLM Suite" : "M365 Copilot";
   const validPreview =
     preview?.version === version.current ? preview.value : null;
   const batches = Math.max(
@@ -353,56 +380,10 @@ export default function ScreeningSetup({
           </header>
 
           <div className="ss-scroll" inert={approving}>
-            <section className="ss-section" aria-label="Task type">
-              <div className="ss-section-top">
-                <div>
-                  <span className="ss-step">01</span>
-                  <h3>What should the model do?</h3>
-                </div>
-              </div>
-              <div
-                className="ss-mode-group"
-                role="group"
-                aria-label="Screening mode"
-              >
-                <button
-                  type="button"
-                  className={config.mode === "screening" ? "is-selected" : ""}
-                  aria-pressed={config.mode === "screening"}
-                  onClick={() => changeMode("screening")}
-                >
-                  Screen companies<small>Fit score and rationale</small>
-                </button>
-                <button
-                  type="button"
-                  className={config.mode === "question" ? "is-selected" : ""}
-                  aria-pressed={config.mode === "question"}
-                  onClick={() => changeMode("question")}
-                >
-                  Ask a question<small>Answer per company</small>
-                </button>
-              </div>
-              {config.mode === "question" && (
-                <label className="ss-field ss-question">
-                  <span>
-                    {catalog.total
-                      ? "Question for each company"
-                      : "Your question"}
-                  </span>
-                  <textarea
-                    value={request}
-                    onChange={(event) => changeRequest(event.target.value)}
-                    rows={2}
-                    placeholder="What do you want to know?"
-                  />
-                </label>
-              )}
-            </section>
-
             <section className="ss-section" aria-label="Inputs and output">
               <div className="ss-section-top">
                 <div>
-                  <span className="ss-step">02</span>
+                  <span className="ss-step">01</span>
                   <h3>Data in, results out</h3>
                 </div>
                 <span className="ss-muted">
@@ -415,7 +396,8 @@ export default function ScreeningSetup({
                   {config.inputColumns.map((column) => (
                     <span className="ss-chip" key={column}>
                       {column}
-                      {column !== "index" && (
+                      {column === "LinkedIn URL" && keepLinkedIn && <Tooltip label="LinkedIn input">M365 Copilot uses the LinkedIn company page supplied by PitchBook when it is available.</Tooltip>}
+                      {column !== "index" && !(column === "LinkedIn URL" && keepLinkedIn) && (
                         <button
                           type="button"
                           aria-label={`Remove ${column}`}
@@ -440,60 +422,32 @@ export default function ScreeningSetup({
                 </small>
               </div>
               <div className="ss-field">
-                <label htmlFor="ss-output">Output columns</label>
-                <div className="ss-output-row">
-                  <span className="ss-chip ss-pinned">index</span>
-                  <input
-                    id="ss-output"
-                    value={outputText}
-                    onChange={(event) => changeOutput(event.target.value)}
-                    placeholder={
-                      config.mode === "screening"
-                        ? "Fit Score, Rationale"
-                        : "Answer"
-                    }
-                  />
-                </div>
-                <small>
-                  Separate output column names with commas. index stays pinned.{" "}
-                  <button
-                    type="button"
-                    className="ss-link"
-                    onClick={() =>
-                      changeOutput(
-                        suggestOutputColumns(request, config.mode)
-                          .slice(1)
-                          .join(", "),
-                      )
-                    }
-                  >
-                    Suggest from request
-                  </button>
-                </small>
+                <span>Output columns</span>
+                <ColumnChips label="Output columns" values={config.outputColumns.filter((column) => column !== "index")} pinned="index" placeholder="Add a column…" onChange={changeOutput} />
+                <small>Type a column and press Enter or comma. index stays pinned.</small>
               </div>
             </section>
 
             <section className="ss-section" aria-label="Model and prompt">
               <div className="ss-section-top">
                 <div>
-                  <span className="ss-step">03</span>
+                  <span className="ss-step">02</span>
                   <h3>Instructions and capacity</h3>
                 </div>
               </div>
               <div className="ss-two-fields">
-                <label className="ss-field">
-                  <span>
-                    Model or deployment <em>required to approve</em>
-                  </span>
+                <div className="ss-field">
+                  <div className="ss-model-label"><label htmlFor="ss-model">Model or deployment</label><button type="button" className="ss-link" onClick={() => edit({ ...config, model: "" })}>Use automatic</button></div>
                   <input
+                    id="ss-model"
                     value={config.model}
                     onChange={(event) =>
                       edit({ ...config, model: event.target.value })
                     }
-                    placeholder="Enter your model or deployment"
+                    placeholder="Automatic"
                     autoComplete="off"
                   />
-                </label>
+                </div>
                 <label className="ss-field">
                   <span>Companies per batch</span>
                   <input
@@ -510,40 +464,23 @@ export default function ScreeningSetup({
               </div>
               <label className="ss-field">
                 <span>
-                  Prompt · local template suggestion{" "}
+                  Prompt{" "}
                   <Tooltip label="About the prompt">
-                    This is a local template suggestion, not a live model
-                    response. Changes to the question or output columns refresh
-                    it; you can edit the prompt directly.
+                    This editable instruction guides the screening run. Local suggestions are templates, not AI-generated text.
                   </Tooltip>
                 </span>
-                <textarea
-                  className="ss-prompt"
-                  value={config.prompt}
-                  onChange={(event) =>
-                    edit({ ...config, prompt: event.target.value })
-                  }
-                  rows={7}
-                  spellCheck={false}
-                />
+                <div className="ss-prompt-wrap">
+                  <textarea
+                    className="ss-prompt"
+                    value={config.prompt}
+                    onChange={(event) => { setPromptNotice(""); edit({ ...config, prompt: event.target.value }); }}
+                    rows={7}
+                    spellCheck={false}
+                  />
+                  {onGeneratePrompt && <button type="button" className="ss-generate" aria-label="Generate prompt with AI" title="Generate prompt with AI" onClick={() => void generatePrompt()} disabled={generatingPrompt || busy}><Sparkles size={16} />{generatingPrompt ? <LoaderCircle className="ss-spin" size={14} /> : null}</button>}
+                </div>
+                {promptNotice && <small className="ss-prompt-notice" role="status">{promptNotice}</small>}
               </label>
-              <button
-                type="button"
-                className="ss-link"
-                onClick={() =>
-                  edit({
-                    ...config,
-                    prompt: recommendedPrompt(
-                      config.mode,
-                      criteriaText,
-                      request,
-                      config.outputColumns,
-                    ),
-                  })
-                }
-              >
-                Restore recommended prompt
-              </button>
               {provider === "llm_suite" && (
                 <p className="ss-timing">
                   {catalog.total.toLocaleString()} companies ·{" "}
@@ -553,8 +490,7 @@ export default function ScreeningSetup({
                   {minimumMinutes > 0
                     ? ` The rate limit alone adds at least ${minimumMinutes.toLocaleString()} min.`
                     : " This fits within one rate window if capacity is free."}{" "}
-                  All LLMSuite work shares seven requests per minute. Other work
-                  and response time can add delays.
+                  Shared rate limits and provider response time can add delays.
                 </p>
               )}
             </section>
@@ -565,7 +501,7 @@ export default function ScreeningSetup({
             >
               <div className="ss-section-top">
                 <div>
-                  <span className="ss-step">04</span>
+                  <span className="ss-step">03</span>
                   <h3>Review sample</h3>
                 </div>
                 <button
@@ -600,7 +536,7 @@ export default function ScreeningSetup({
                         ` · request time at least ${validPreview.estimatedMinimumMinutes.toLocaleString()} min`}
                     </span>
                   </div>
-                  {validPreview.warnings.map((warning, index) => (
+                  {validPreview.warnings.filter((warning) => !(/\b(?:PBId|LinkedIn)\b.*\b(?:blank|missing|empty|unavailable)\b|\b(?:blank|missing|empty|unavailable)\b.*\b(?:PBId|LinkedIn)\b/i.test(warning))).map((warning, index) => (
                     <p className="ss-warning" key={`${index}-${warning}`}>
                       {warning}
                     </p>
@@ -665,7 +601,7 @@ export default function ScreeningSetup({
                 className="ss-primary"
                 onClick={approve}
                 disabled={
-                  !validPreview || !config.model.trim() || busy || uploading
+                  !validPreview || busy || uploading
                 }
               >
                 {approving ? (
@@ -731,7 +667,7 @@ export default function ScreeningSetup({
                           setUploadSuccess("");
                         }}
                       >
-                        {source}
+                        {source === "RESULTS" ? "Saved results" : source === "BING" ? "Bing research" : source}
                         <small>
                           {item?.hydrated
                             ? `${item.companyCount.toLocaleString()} ${item.companyCount === 1 ? "company" : "companies"}`

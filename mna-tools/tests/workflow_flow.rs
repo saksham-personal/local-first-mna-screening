@@ -108,6 +108,24 @@ fn plans_reject_cycles_and_stale_approval_and_allow_single_criteria_query() {
 }
 
 #[test]
+fn pending_criteria_revision_stops_company_research_but_allows_general_questions() {
+    let (store, workflow) = fixture(true);
+    let company_plan = approved_plan(
+        &workflow,
+        json!([{ "step_id":"companies", "kind":"bing_research", "company_ids":["C1"], "query_templates":["{company} products"] }]),
+    );
+    let args = json!({"run_id":"R1","plan_id":company_plan,"step_id":"companies","company_id":"C1","query":"Same Name products"});
+    workflow.authorize_provider("bing_search", &args).unwrap();
+    store.execute("save_criteria_revision", &json!({"run_id":"R1","criteria_text":"New analyst instruction","business_definition":""})).unwrap();
+    assert!(workflow.authorize_provider("bing_search", &args).is_err());
+    let general_plan = approved_plan(
+        &workflow,
+        json!([{ "step_id":"general", "kind":"bing_research", "query_templates":["Claims software terminology"] }]),
+    );
+    workflow.authorize_provider("bing_search", &json!({"run_id":"R1","plan_id":general_plan,"step_id":"general","query":"Claims software terminology"})).unwrap();
+}
+
+#[test]
 fn screening_is_hydrated_scoped_and_linkedin_is_optional_for_copilot() {
     let (store, workflow) = fixture(true);
     let plan = approved_plan(
@@ -378,7 +396,7 @@ fn large_bing_observations_save_bounded_unicode_excerpts_with_provenance() {
 }
 
 #[test]
-fn recommendation_changes_at_exactly_two_thousand_unique_candidates() {
+fn recommendations_follow_current_strict_thresholds() {
     let (store, _workflow) = fixture(true);
     let companies:Vec<_>=(0..1999).map(|index|json!({"company_id":format!("T{index}"),"name":format!("Test Company {index}")})).collect();
     for chunk in companies.chunks(1000) {
@@ -400,7 +418,7 @@ fn recommendation_changes_at_exactly_two_thousand_unique_candidates() {
         .execute("get_discovery_summary", &json!({"run_id":"R1"}))
         .unwrap();
     assert_eq!(before["total_unique"], 1999);
-    assert_eq!(before["recommended_next_step"], "PITCHBOOK_ENRICHMENT");
+    assert_eq!(before["recommended_next_step"], "ROGO_ENRICHMENT");
     for (id, total) in [("T1997", 2000), ("T1998", 2001)] {
         store
             .execute(
@@ -412,7 +430,17 @@ fn recommendation_changes_at_exactly_two_thousand_unique_candidates() {
             .execute("get_discovery_summary", &json!({"run_id":"R1"}))
             .unwrap();
         assert_eq!(summary["total_unique"], total);
-        assert_eq!(summary["recommended_next_step"], "LLM_SCREENING");
+        assert_eq!(
+            summary["recommended_next_step"],
+            if total > 2000 {
+                "LLM_SUITE_SCREENING"
+            } else {
+                "REVIEW_SHORTLIST"
+            }
+        );
+        if total == 2000 {
+            assert_eq!(summary["recommended_steps"], json!([]));
+        }
     }
 }
 

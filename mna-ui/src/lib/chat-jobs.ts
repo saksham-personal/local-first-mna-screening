@@ -11,7 +11,7 @@ import {
 } from "./chat-store";
 import { sessionStore } from "./session-store";
 import { companyFromRust, type SearchRow } from "./tool-client";
-import { nextStepOptions, recommendedStep } from "./chat-policy";
+import { nextStepOptions, nextStepRecommendations } from "./chat-policy";
 
 type Part = ThreadAssistantMessagePart;
 const jobs = new Map<string, JobSnapshot>();
@@ -169,7 +169,7 @@ function finishJob(
   if (job.state === "completed" && job.result) {
     const companies = job.result.companies.map(
       ({ row, detail, sourceRows }) => {
-        const company = companyFromRust(row as SearchRow, detail);
+        const company = companyFromRust(row as SearchRow, detail, state.companies.find(item => item.pk === String(row.company.company_id)));
         const source = sourceRows.find((row) => row.source === "MID");
         if (source && source.row && typeof source.row === "object")
           company.rawMid = source.row as Record<string, string | number>;
@@ -181,12 +181,13 @@ function finishJob(
       isccOnly: number;
       both: number;
     };
+    const consideredCount = companies.filter(company => company.considered !== false).length;
     const current =
       !!context && context.revision === state.revision && approved(state);
     const artifact = saveArtifact(
       job.sessionId,
       {
-        ...artifactBase(`${companies.length} companies found`),
+        ...artifactBase(`${consideredCount} companies found`),
         type: "companies",
         companies,
         counts,
@@ -217,6 +218,7 @@ function finishJob(
         backendRunId: job.result.backendRunId,
       });
       mirrorWorkspace(next);
+      void import("./review-client").then(({ refreshShortlist }) => refreshShortlist(job.sessionId, job.result!.backendRunId)).catch(() => {});
       void import("./import-pipeline").then(({ processStagedUploads }) => processStagedUploads(job.sessionId));
       parts.push(
         artifactPart(
@@ -225,7 +227,7 @@ function finishJob(
             {
               ...artifactBase("Choose the next step"),
               type: "options",
-              recommended: recommendedStep(companies.length),
+              recommended: nextStepRecommendations(next).recommended,
               options: nextStepOptions,
             },
             context?.turnId,
@@ -233,7 +235,7 @@ function finishJob(
         ),
       );
     }
-    text = `Found **${companies.length} unique companies**: ${counts.midOnly} from MID, ${counts.isccOnly} from ISCC, and ${counts.both} from both. ${current ? "Review the list or choose a next step." : "These results belong to earlier criteria."}`;
+    text = `Found **${consideredCount} companies to review**: ${counts.midOnly} from MID, ${counts.isccOnly} from ISCC, and ${counts.both} from both.${companies.length > consideredCount ? ` ${companies.length - consideredCount} hidden companies remain in history.` : ""} ${current ? "Review the list or choose a next step." : "These results belong to earlier criteria."}`;
   } else
     text =
       job.state === "cancelled"
@@ -327,7 +329,7 @@ export async function startDiscovery(
       title,
       criteriaText: state.criteriaText,
       definition: state.definition,
-      ...(broader && state.backendRunId
+      ...(state.backendRunId
         ? { backendRunId: state.backendRunId }
         : {}),
     });

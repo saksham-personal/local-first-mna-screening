@@ -1,25 +1,58 @@
 # Local-First M&A Screening
 
 A local-first workspace for qualitative M&A company screening. The repository
-contains the screening interface, Rust research tools, and an offline
-orchestration scaffold.
+contains the screening interface, a Rust service with durable run and review
+records, and an offline orchestration scaffold.
 
 ## Projects
 
-- **`mna-ui/`** — React and assistant-ui application for criteria review,
-  company discovery, enrichment, screening setup, and session history.
+- **`mna-ui/`** — React and assistant-ui application for criteria approval,
+  company discovery, shortlist review, enrichment, direct provider questions,
+  iterative screening, export, and session history.
 - **`mna-tools/`** — Rust service for company data, retrieval, evidence,
-  imports, exports, prepared plans, and durable run state.
+  imports, exports, criteria and shortlist versions, prepared plans, durable
+  jobs, and a provider-text gateway. Its catalog has 67 agent tools and 23
+  privileged operations.
 - **`mna-orchestrator/`** — Python and LangGraph scaffold for future workflow
   orchestration. Its external ports are disabled and it is not connected to
   the UI or Rust service.
 
+## Screening flow
+
+Start with a core-business definition or a local TXT draft. Review the initial
+criteria, optionally enter good-fit and bad-fit examples in separate boxes, and
+approve the final revision. The backend saves these revisions before MID/ISCC
+discovery. Editing criteria later requires approval of the latest revision and
+a fresh preview of affected work.
+
+Review discovered companies, including saved hidden rows. PitchBook and ROGO
+spreadsheets add company context; a new PitchBook mapping can hide unmapped or
+explicit `No` matches without deleting them, and the analyst can restore a
+company. Screening uses selected input/output columns and an editable prompt.
+Keep strong matches and `CHECK` cases, hide weaker matches, select saved
+RESULTS columns as inputs for another pass, and export the considered set. A
+broad 2,500-company set might become 400, then 150, then 55 through analyst
+review; these counts are examples, not automatic quotas. See the
+[workflow](mna-tools/docs/WORKFLOW.md) for the complete loop.
+
+Uploads have distinct purposes. Company-data spreadsheets are inspected by
+their headers and matched to the run. Chat attachments can be included or
+excluded per file when using Ask LLM Suite or Ask M365 Copilot, without a
+screening setup. The direct-question path can extract bounded text from TXT,
+CSV, DOCX, XLSX, and PDF attachments. PDF/DOCX attachments do not currently
+draft screening criteria from their text.
+
 ## Current limits
 
-The application runs local workflows and prepares screening handoffs. External
-ISCC, LLMSuite, M365 Copilot, and Bing connections are not verified or enabled
-by default. A prepared handoff does not mean a provider call was executed.
-Read each project's README and validation notes for its current status.
+The application runs local workflows and prepares screening handoffs. Provider
+adapters and the Rust gateway's durable text dispatch are implemented, but
+corporate ISCC, LLMSuite, M365 Copilot, and Bing connections are unconfigured
+and unverified. The local provider-disconnected path prepares plans marked
+`executed:false`; it made no external calls in the release smoke. Actual
+Arctic model assets and large-corpus behavior remain unverified, and reranking
+is pluggable but a production reranker is not selected. Read the
+[implementation record](mna-tools/IMPLEMENTATION.md) and each project's README
+for validation details.
 
 ## Start locally
 
@@ -37,7 +70,15 @@ instructions in `mna-orchestrator/README.md`.
 Discovery focuses on a company's core business. Geography, financial size,
 ownership, and industry classifications remain available as review details
 and do not narrow discovery. MID and ISCC scores use different methods and
-are displayed separately.
+are displayed separately. Provider scores and research claims also retain
+their own provenance. Research leads remain unverified until analyst review.
+
+## Validation
+
+The latest local release checks passed: 120 Rust tests, strict Clippy, release
+build, 119 UI tests, and UI build. An eight-row fictional MID smoke covered
+database restart, criteria lineage, PitchBook hide/restore, three XLSX export
+types, and prepared `executed:false` runs. It did not call a corporate provider.
 
 ## Data and credentials
 

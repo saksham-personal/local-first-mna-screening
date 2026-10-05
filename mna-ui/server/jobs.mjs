@@ -141,6 +141,7 @@ function candidateRow(candidate) {
       : { company_id: id };
   return {
     company,
+    considered: candidate.considered !== false,
     ...(typeof mid?.retrieval_score === "number"
       ? { score: mid.retrieval_score }
       : {}),
@@ -267,7 +268,11 @@ export function createJobRegistry(options) {
         "This saved Rust run belongs to different approved screening criteria. Start a new run.",
       );
 
-    const matches = new Map();
+    // Criteria may have been saved in this run before discovery started. The
+    // fixture import is idempotent and does not replace the run or its reviews.
+    if (input.backendRunId)
+      await tool("import_company_files", { files: [seedFile], source: "MID" });
+
     const exclusions = Array.isArray(profile.content?.core_business_exclusions)
       ? profile.content.core_business_exclusions.filter(value => typeof value === 'string') : [];
     for (const query of discoveryQueries(input.definition)) {
@@ -280,9 +285,6 @@ export function createJobRegistry(options) {
         ...(exclusions.length ? { filters: { exclude_keywords: exclusions } } : {}),
       });
       const rows = searchRows(found);
-      for (const row of rows)
-        if (!matches.has(row.company.company_id))
-          matches.set(row.company.company_id, row);
       if (rows.length)
         await tool("add_candidates", {
           run_id: runId,
@@ -298,20 +300,86 @@ export function createJobRegistry(options) {
         });
     }
 
+    const savedRows = new Map();
+    let cursor, expectedTotal, consideredCount, sourceHash, selectionRevision, criteriaRevision;
+    let pageSize = 500;
+    do {
+      let page;
+      try {
+        page = await tool("get_shortlist_context", {
+          run_id: runId, include_hidden: true, limit: pageSize,
+          ...(cursor ? { after_company_id: cursor } : {}),
+        });
+      } catch (error) {
+        if (pageSize > 1 && /(?:too large|exceeds|2 MB|2MB|byte limit)/i.test(errorMessage(error))) {
+          pageSize = Math.max(1, Math.floor(pageSize / 2));
+          continue;
+        }
+        throw error;
+      }
+      if (!Array.isArray(page?.candidates) || !Number.isSafeInteger(page.total) || page.total < 0 ||
+          !Number.isSafeInteger(page.considered_count) || page.considered_count < 0 ||
+          typeof page.source_hash !== "string" ||
+          !(typeof page.selection_revision === "string" || Number.isSafeInteger(page.selection_revision)))
+        throw new Error("The saved company reader returned an invalid page.");
+      const revision = JSON.stringify(page.criteria_revision ?? null);
+      if (expectedTotal !== undefined && (expectedTotal !== page.total || consideredCount !== page.considered_count ||
+          sourceHash !== page.source_hash || selectionRevision !== page.selection_revision ||
+          criteriaRevision !== revision))
+        throw new Error("The saved company list changed during discovery. Search again.");
+      expectedTotal = page.total;
+      consideredCount = page.considered_count;
+      sourceHash = page.source_hash;
+      selectionRevision = page.selection_revision;
+      criteriaRevision = revision;
+      let lastId = cursor;
+      for (const candidate of page.candidates) {
+        const id = candidate?.company_id;
+        if (typeof id !== "string" || !id || (lastId && id <= lastId) ||
+            savedRows.has(id) || typeof candidate.considered !== "boolean")
+          throw new Error("The saved company reader returned an invalid or duplicate company.");
+        savedRows.set(id, {
+          company: { company_id: id,
+            ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
+            ...(typeof candidate.website === "string" ? { website: candidate.website } : {}) },
+          considered: candidate.considered,
+        });
+        lastId = id;
+      }
+      if (page.has_more !== true && page.has_more !== false)
+        throw new Error("The saved company reader returned an invalid page.");
+      const next = page.next_after_company_id;
+      if (page.has_more && (!page.candidates.length || next !== page.candidates.at(-1).company_id ||
+          (cursor && next <= cursor)))
+        throw new Error("The saved company reader did not advance its cursor.");
+      cursor = page.has_more ? next : undefined;
+    } while (cursor);
+    if (savedRows.size !== expectedTotal || [...savedRows.values()].filter((row) => row.considered).length !== consideredCount)
+      throw new Error("The saved company reader did not return the full company set.");
+
+    // The legacy candidate reader supplies retrieval scores but caps at 1,000.
+    // The paged shortlist above owns the complete membership and review flags.
     const candidateSet = await tool("get_candidate_set", {
-      run_id: runId,
-      limit: 1000,
+      run_id: runId, include_hidden: true, limit: 1000,
     });
     if (!Array.isArray(candidateSet?.candidates))
       throw new Error("The Rust candidate set could not be read.");
     for (const candidate of candidateSet.candidates) {
       const row = candidateRow(candidate);
-      if (row && !matches.has(row.company.company_id))
-        matches.set(row.company.company_id, row);
+      const saved = row && savedRows.get(row.company.company_id);
+      if (!saved || row.considered !== saved.considered)
+        throw new Error("The saved company list changed during discovery. Search again.");
+      if (typeof row.score === "number") saved.score = row.score;
+      if (Number.isSafeInteger(row.rank)) saved.rank = row.rank;
     }
+    const current = await tool("get_shortlist_context", { run_id: runId, include_hidden: true, limit: 1 });
+    if (current.total !== expectedTotal || current.considered_count !== consideredCount ||
+        current.source_hash !== sourceHash || current.selection_revision !== selectionRevision ||
+        JSON.stringify(current.criteria_revision ?? null) !== criteriaRevision)
+      throw new Error("The saved company list changed during discovery. Search again.");
 
     const companies = [];
-    for (const [companyId, row] of matches) {
+    for (const [companyId, row] of savedRows) {
       const detail = await tool("get_company", { company_id: companyId });
       const sources = await tool("get_source_rows", {
         company_id: companyId,
@@ -339,9 +407,10 @@ export function createJobRegistry(options) {
     };
     const total = count(summary, "total_unique");
     const other = summary.other == null ? 0 : count(summary, "other");
+    const consideredIds = [...savedRows].filter(([, row]) => row.considered).map(([id]) => id);
     if (
       total !== counts.midOnly + counts.isccOnly + counts.both + other ||
-      total !== companies.length
+      total !== consideredIds.length
     ) {
       throw new Error(
         "The Rust discovery summary does not match the saved candidate set.",
@@ -351,7 +420,7 @@ export function createJobRegistry(options) {
       run_id: runId,
       namespace: "screening-ui",
       state: {
-        company_ids: [...matches.keys()],
+        company_ids: consideredIds,
         counts,
         approved_definition: input.definition,
         step: "company-list-ready",

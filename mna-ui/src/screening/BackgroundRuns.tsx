@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, CircleAlert, Clock3, Pause, Play, RotateCcw, X } from "lucide-react";
 import "./background-runs.css";
 
@@ -42,6 +42,27 @@ function percent(job: BackgroundRunView) {
 
 export default function BackgroundRuns({ jobs, onAction, onDismiss }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const host = hostRef.current, main = host?.parentElement;
+    if (!host || !main) return;
+    const header = main.querySelector<HTMLElement>(":scope > .ct-header");
+    const composer = main.querySelector<HTMLElement>(".ct-composer-wrap");
+    const sideChatHeader = main.querySelector<HTMLElement>(".ct-docked-head");
+    const toggle = host.querySelector<HTMLElement>(".br-dock-toggle");
+    let previous = "";
+    const measure = () => {
+      const style = getComputedStyle(host);
+      const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth);
+      const room = Math.max(0, Math.floor(main.getBoundingClientRect().height - (header?.getBoundingClientRect().height ?? 0) - (sideChatHeader?.getBoundingClientRect().height ?? 0) - (composer?.getBoundingClientRect().height ?? 0) - (toggle?.getBoundingClientRect().height ?? 0) - padding - 20));
+      const value = `${room}px`;
+      if (value !== previous) { host.style.setProperty("--br-available-room", value); previous = value; }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    [main, header, sideChatHeader, composer, toggle].forEach(element => { if (element) observer.observe(element); });
+    return () => observer.disconnect();
+  }, [jobs, expanded]);
   if (!jobs.length) return null;
   const activeCount = jobs.filter((job) => job.state === "running" || job.state === "queued").length;
   const totalBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.total), 0);
@@ -49,6 +70,7 @@ export default function BackgroundRuns({ jobs, onAction, onDismiss }: Props) {
   const aggregatePercent = totalBatches > 0 ? Math.min(100, (completedBatches / totalBatches) * 100) : 0;
 
   return (
+    <div className="br-host" ref={hostRef}>
     <aside className={`br-dock${expanded ? " is-expanded" : ""}`} aria-label="Background screening runs">
       <button
         className="br-dock-toggle"
@@ -127,5 +149,6 @@ export default function BackgroundRuns({ jobs, onAction, onDismiss }: Props) {
         </div>
       )}
     </aside>
+    </div>
   );
 }

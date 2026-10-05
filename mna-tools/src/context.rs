@@ -127,7 +127,8 @@ impl ContextService {
                 &json!({"run_id": required_run_id(args)?, "company_id": args.company_id}),
             )?,
             CompanySection::ScreeningHistory => {
-                let candidate = self.candidate_for_run(required_run_id(args)?, &args.company_id)?;
+                let candidate =
+                    self.candidate_for_run(required_run_id(args)?, &args.company_id, true)?;
                 json!({"candidate": candidate})
             }
             CompanySection::ExternalResearch => {
@@ -167,7 +168,7 @@ impl ContextService {
         let company = self
             .store
             .execute("get_company", &json!({"company_id": args.company_id}))?;
-        let candidate = self.candidate_for_run(&args.run_id, &args.company_id)?;
+        let candidate = self.candidate_for_run(&args.run_id, &args.company_id, false)?;
         let evidence = self.store.execute(
             "get_evidence",
             &json!({"run_id": args.run_id, "company_id": args.company_id}),
@@ -232,7 +233,7 @@ impl ContextService {
             let company = self
                 .store
                 .execute("get_company", &json!({"company_id": company_id}))?;
-            let candidate = self.candidate_for_run(&args.run_id, company_id)?;
+            let candidate = self.candidate_for_run(&args.run_id, company_id, false)?;
             let available =
                 self.batch_fields(&args.run_id, company_id, company, candidate, &args.fields)?;
             let blocks = args
@@ -376,7 +377,7 @@ impl ContextService {
             let company = self
                 .store
                 .execute("get_company", &json!({"company_id": company_id}))?;
-            let candidate = self.candidate_for_run(&args.run_id, company_id)?;
+            let candidate = self.candidate_for_run(&args.run_id, company_id, false)?;
             subject_details
                 .push(json!({"company": reasoning_company(company), "candidate": candidate}));
             evidence_by_subject.insert(
@@ -469,11 +470,17 @@ impl ContextService {
         Ok(packet)
     }
 
-    fn candidate_for_run(&self, run_id: &str, company_id: &str) -> Result<Value> {
+    fn candidate_for_run(
+        &self,
+        run_id: &str,
+        company_id: &str,
+        include_hidden: bool,
+    ) -> Result<Value> {
         let result = self.store.execute(
             "get_candidate_set",
             &json!({
                 "run_id": run_id,
+                "include_hidden":include_hidden,
                 "filters": {"company_ids": [company_id]},
                 "limit": 1
             }),

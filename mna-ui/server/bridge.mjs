@@ -8,14 +8,15 @@ import { createJobRegistry } from './jobs.mjs';
 import { createDurableScreeningPreparation } from './durable-screening.mjs';
 import { createBackgroundScreening } from './background-screening.mjs';
 import { createBingResearch } from './bing-research.mjs';
+import { createProviderConversation } from './provider-conversation.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = 'http://127.0.0.1:17318';
-const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve' };
+const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
 const allowed = new Set(['get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
-for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research']) allowed.add(tool);
+for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection']) allowed.add(tool);
 const origins = new Set(['http://127.0.0.1:4173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://localhost:5173']);
 const hosts = new Set(['127.0.0.1:7319', 'localhost:7319', '127.0.0.1:4173', 'localhost:4173', '127.0.0.1:5173', 'localhost:5173']);
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -92,15 +93,15 @@ async function sendStagedFile(res, record) {
   res.end(bytes);
 }
 
-async function rustCall(apiKey, analystKey, staged, tool, args, analystApproved, signal) {
+async function rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal) {
   if (typeof tool !== 'string' || (!Object.hasOwn(admin, tool) && !allowed.has(tool))) throw new Error('This tool is not enabled in the local example.');
-  if ((tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
+  if ((tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
   if (tool === 'import_company_files' || tool === 'import_enrichment_files' || tool === 'inspect_enrichment_files') {
     if (!Array.isArray(args.files) || !args.files.length || !args.files.every(file => typeof file === 'string' && staged.has(file))) throw new Error('Select files through the upload controls.');
   }
   const response = await fetch(`${rustAddress}${admin[tool] ?? '/tools/call'}`, {
     method: 'POST', signal,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, ...(Object.hasOwn(admin, tool) ? { 'X-MNA-Analyst-Key': analystKey } : {}) },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, ...(Object.hasOwn(admin, tool) ? { 'X-MNA-Analyst-Key': analystKey } : {}), ...(['review_shortlist', 'save_criteria_revision', 'approve_criteria_revision'].includes(tool) ? { 'X-MNA-Controller-Key': controllerKey } : {}) },
     body: JSON.stringify(Object.hasOwn(admin, tool) ? args : { tool, arguments: args }),
   });
   const result = await response.json().catch(() => undefined);
@@ -132,13 +133,13 @@ export async function startBridge() {
     const saved = savedFiles.find(file => file?.id === id);
     const name = typeof saved?.name === 'string' ? basename(saved.name) : id;
     staged.add(id);
-    stagedFiles.set(id, { id, name, bytes: info.size, path, ...descriptor });
+    stagedFiles.set(id, { id, name, bytes: info.size, path, ...(typeof saved?.sessionId === 'string' ? { sessionId: saved.sessionId } : {}), ...(['chat', 'pitchbook', 'rogo', 'company-data'].includes(saved?.purpose) ? { purpose: saved.purpose } : {}), ...descriptor });
   }
   let manifestQueue = Promise.resolve();
   const saveFiles = () => {
     manifestQueue = manifestQueue.catch(() => {}).then(async () => {
       const temp = `${fileManifest}.${randomUUID()}.tmp`;
-      await writeFile(temp, JSON.stringify([...stagedFiles.values()].map(({ id, name }) => ({ id, name }))), { flag: 'wx' });
+      await writeFile(temp, JSON.stringify([...stagedFiles.values()].map(({ id, name, sessionId, purpose }) => ({ id, name, ...(sessionId ? { sessionId } : {}), ...(purpose ? { purpose } : {}) }))), { flag: 'wx' });
       await rename(temp, fileManifest);
     });
     return manifestQueue;
@@ -171,15 +172,19 @@ export async function startBridge() {
     throw new Error(launchError || 'The Rust tool server did not start. Check that port 17318 is free.');
   }
 
-  const call = (tool, args, analystApproved, signal) => rustCall(apiKey, analystKey, staged, tool, args, analystApproved, signal);
+  const call = (tool, args, analystApproved, signal) => rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal);
   const jobs = createJobRegistry({ call, seedFile: seedId });
-  const screening = createDurableScreeningPreparation({ call });
+  const screening = createDurableScreeningPreparation({ call, deployment: provider => providerDeployment(provider) });
   const providerReady = (provider) => {
     const prefix = provider === 'llm_suite' ? 'LLMSUITE' : provider === 'copilot' ? 'M365' : 'BING';
     return externalEnabled && Boolean(env[`MNA_${prefix}_ENDPOINT`] && env[`MNA_${prefix}_TOKEN`]);
   };
+  const providerDeployment = provider => {
+    const prefix = provider === 'llm_suite' ? 'LLMSUITE' : provider === 'copilot' ? 'M365' : null;
+    return prefix ? (env[`MNA_${prefix}_DEPLOYMENT`] || '').trim() : '';
+  };
   const controllerCall = async (tool, args) => {
-    const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry' }[tool];
+    const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry', dispatch_provider_text: '/admin/provider-text' }[tool];
     if (!path) return call(tool, args);
     const response = await fetch(`${rustAddress}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'X-MNA-Controller-Key': controllerKey }, body: JSON.stringify(args) });
     const result = await response.json();
@@ -189,6 +194,8 @@ export async function startBridge() {
   const background = createBackgroundScreening({ call: controllerCall, dispatch: args => controllerCall('dispatch_execution_job', args), connected: providerReady, storeFile: resolve(data, 'background-runs.json') });
   await background.init();
   const research = createBingResearch({ call, connected: () => providerReady('bing') });
+  const conversation = createProviderConversation({ dispatch: args => controllerCall('dispatch_provider_text', args), connected: providerReady,
+    deployment: providerDeployment, stagedFiles, call });
   const server = createServer(async (req, res) => {
     const origin = req.headers.origin;
     if (origin && !origins.has(origin)) return respond(res, 403, { error: 'This local endpoint accepts the Screening UI only.' });
@@ -223,6 +230,8 @@ export async function startBridge() {
       }
       const researchMatch = url.pathname.match(/^\/api\/research\/(preview|run)$/);
       if (researchMatch) return respond(res, 200, await research[researchMatch[1]](input));
+      const conversationMatch = url.pathname.match(/^\/api\/conversation\/(ask|generate)$/);
+      if (conversationMatch) return respond(res, 200, await conversation[conversationMatch[1]](input));
       const screeningMatch = url.pathname.match(/^\/api\/screening\/(catalog|preview|approve)$/);
       if (screeningMatch) {
         const controller = new AbortController();
@@ -232,6 +241,8 @@ export async function startBridge() {
       if (url.pathname === '/api/jobs') return respond(res, 202, { job: jobs.create(input) });
       if (url.pathname === '/api/files') {
         if (!Array.isArray(input.files) || !input.files.length || input.files.length > 32) throw new Error('Select between 1 and 32 files.');
+        if (input.sessionId != null && (typeof input.sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(input.sessionId))) throw new Error('Use a valid chat session ID.');
+        if (input.purpose != null && !['chat', 'pitchbook', 'rogo', 'company-data'].includes(input.purpose)) throw new Error('Choose a valid file destination.');
         const files = [];
         for (const file of input.files) {
           const name = typeof file?.name === 'string' ? basename(file.name.trim()) : '';
@@ -244,7 +255,7 @@ export async function startBridge() {
           const path = resolve(importRoot, id);
           await writeFile(path, bytes, { flag: 'wx' });
           staged.add(id);
-          const record = { id, name, bytes: bytes.length, path, ...descriptor };
+          const record = { id, name, bytes: bytes.length, path, ...(input.sessionId ? { sessionId: input.sessionId } : {}), ...(input.purpose ? { purpose: input.purpose } : {}), ...descriptor };
           stagedFiles.set(id, record);
           files.push({ id, name, bytes: bytes.length, kind: descriptor.kind, parseKind: descriptor.parseKind, importable: descriptor.importable, ...(extension === '.txt' ? { excerpt: textExcerpt(bytes) } : {}) });
         }

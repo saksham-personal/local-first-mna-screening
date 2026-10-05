@@ -1,6 +1,6 @@
 # Configurable research gateway contracts
 
-The Rust service calls configured JSON gateways. It does not implement the private corporate ISCC browser/CDP protocol or execute LLMSuite and Copilot. A separate ISCC bridge can use browser/CDP and parse CSV/XLSX, then return the JSON rows below. `MNA_ENABLE_EXTERNAL=true` enables configured ISCC, Bing, M365, and public URL fetching. Each gateway also needs its own `MNA_<PROVIDER>_ENDPOINT`, `MNA_<PROVIDER>_TOKEN`, and optional `MNA_<PROVIDER>_RPM`. Production endpoints require HTTPS; local test endpoints can use HTTP. Tokens are bearer credentials. Keep them out of tool arguments and plans.
+The Rust service calls configured JSON gateways. The LLMSuite and M365 text and screening adapters are implemented; corporate endpoints remain unconfigured and unverified. The private ISCC browser/CDP protocol requires a separate bridge that parses CSV/XLSX and returns the JSON rows below. `MNA_ENABLE_EXTERNAL=true` enables configured external providers and public URL fetching. Each gateway also needs its own `MNA_<PROVIDER>_ENDPOINT`, `MNA_<PROVIDER>_TOKEN`, and optional `MNA_<PROVIDER>_RPM`. Production endpoints require HTTPS; local test endpoints can use HTTP. Tokens are bearer credentials. Keep them out of tool arguments and plans. See [the execution contract](EXECUTION_CONTRACT.md) for screening and [the LLMSuite protocol](LLMSUITE_PROTOCOL.md) for parsed text responses, approvals, shared rate limits, and durable receipts.
 
 ## Requests sent to the gateway
 

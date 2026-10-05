@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AllCommunityModule,
   themeQuartz,
@@ -16,6 +16,9 @@ type DataTableProps = {
   columns?: string[];
   label?: string;
   onOpenCompany?: (pk: string) => void;
+  selectedCompanyIds?: string[];
+  onSelectionChange?: (companyIds: string[]) => void;
+  exportCompanyIds?: string[];
 };
 
 const modules = [AllCommunityModule];
@@ -62,11 +65,14 @@ function csvValue(value: unknown) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-export default function DataTable({ rows, columns, label = "Data table", onOpenCompany }: DataTableProps) {
+export default function DataTable({ rows, columns, label = "Data table", onOpenCompany, selectedCompanyIds, onSelectionChange, exportCompanyIds }: DataTableProps) {
   const { resolved } = useTheme();
   const gridRef = useRef<AgGridReact<Record<string, unknown>>>(null);
   const [query, setQuery] = useState("");
   const [visibleRows, setVisibleRows] = useState(rows.length);
+  const reviewSelection = selectedCompanyIds !== undefined && onSelectionChange !== undefined;
+  const selectionKey = reviewSelection ? [...selectedCompanyIds].sort().join("\u0000") : "";
+  const syncingSelection = useRef(false);
   const updateCount = useCallback(({ api }: { api: GridApi<Record<string, unknown>> }) => setVisibleRows(api.getDisplayedRowCount()), []);
   const keys = useMemo(() => {
     const discovered = columns ? [...columns] : [...new Set(rows.flatMap((row) => Object.keys(row)))].sort((a, b) => a.localeCompare(b));
@@ -75,6 +81,23 @@ export default function DataTable({ rows, columns, label = "Data table", onOpenC
     return ordered;
   }, [columns, rows]);
   const hasPk = keys.includes("pk");
+  const syncSelection = useCallback(({ api }: { api: GridApi<Record<string, unknown>> }) => {
+    if (!reviewSelection || api.isDestroyed()) return;
+    const selected = new Set(selectedCompanyIds ?? []);
+    syncingSelection.current = true;
+    try {
+      api.forEachNode((node) => {
+        const pk = node.data?.pk;
+        if (pk == null) return;
+        const shouldSelect = selected.has(String(pk));
+        if (node.isSelected() !== shouldSelect) node.setSelected(shouldSelect);
+      });
+    } finally { syncingSelection.current = false; }
+  }, [reviewSelection, selectionKey]);
+  useEffect(() => {
+    const api = gridRef.current?.api;
+    if (api) syncSelection({ api });
+  }, [syncSelection, rows]);
   const columnDefs = useMemo<ColDef<Record<string, unknown>>[]>(() => {
     const defs: ColDef<Record<string, unknown>>[] = keys.map((key) => ({
       colId: key,
@@ -95,8 +118,10 @@ export default function DataTable({ rows, columns, label = "Data table", onOpenC
     const api = gridRef.current?.api;
     if (!api) return;
     const lines = [keys.map(csvValue).join(",")];
+    const exportIds = exportCompanyIds ? new Set(exportCompanyIds) : undefined;
     api.forEachNodeAfterFilterAndSort(({ data }) => {
       if (!data) return;
+      if (exportIds && !exportIds.has(String(data.pk))) return;
       lines.push(keys.map((key) => csvValue(data[key])).join(","));
     });
     const blob = new Blob([`\uFEFF${lines.join("\r\n")}`], { type: "text/csv;charset=utf-8" });
@@ -106,7 +131,7 @@ export default function DataTable({ rows, columns, label = "Data table", onOpenC
     anchor.download = `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "data"}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [keys, label]);
+  }, [keys, label, exportCompanyIds]);
 
   return (
     <section className="chat-data-table" aria-label={label}>
@@ -124,11 +149,21 @@ export default function DataTable({ rows, columns, label = "Data table", onOpenC
           <AgGridReact<Record<string, unknown>>
             ref={gridRef}
             rowData={rows}
+            {...(reviewSelection ? {
+              getRowId: ({ data }: { data: Record<string, unknown> }) => String(data.pk),
+              rowSelection: { mode: "multiRow" as const, checkboxes: true, headerCheckbox: true, selectAll: "all" as const, enableClickSelection: false },
+              onSelectionChanged: ({ api }: { api: GridApi<Record<string, unknown>> }) => {
+                if (syncingSelection.current || api.isDestroyed()) return;
+                const ids = api.getSelectedRows().filter(data => data.pk != null).map(data => String(data.pk));
+                if ([...ids].sort().join("\u0000") !== selectionKey) onSelectionChange?.(ids);
+              },
+            } : {})}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             theme={resolved === "dark" ? darkTheme : lightTheme}
             quickFilterText={query}
-            onGridReady={updateCount}
+            onGridReady={({ api }) => { updateCount({ api }); syncSelection({ api }); }}
+            onRowDataUpdated={syncSelection}
             onFilterChanged={updateCount}
             onModelUpdated={updateCount}
             pagination

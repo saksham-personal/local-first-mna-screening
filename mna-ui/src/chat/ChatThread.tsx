@@ -71,13 +71,14 @@ import {
   subscribeJobs,
   toolLabels,
 } from "../lib/chat-jobs";
-import { commandPrompts } from "../lib/chat-policy";
+import { commandPrompts, consideredCompanies } from "../lib/chat-policy";
 import { sessionStore, useSessionSnapshot } from "../lib/session-store";
 import ArtifactCard from "./ArtifactCard";
 import MarkdownMessage from "./MarkdownMessage";
 import Tooltip from "../Tooltip";
 import SelectField from "../ui/SelectField";
 import { attachmentError } from "../lib/attachment-policy";
+import "../chat-thread.css";
 
 export type ComposerControls = {
   setText: (text: string) => void;
@@ -85,7 +86,7 @@ export type ComposerControls = {
 };
 type Scope = {
   sessionId: string;
-  onAction: (action: ArtifactAction) => void;
+  onAction: (action: ArtifactAction) => void | Promise<void>;
   openLog: (eventId?: string) => void;
   openContext: () => void;
   openPrompts: () => void;
@@ -109,7 +110,7 @@ function ArtifactPart({ data }: { data: unknown }) {
       : undefined;
   const artifact = state.artifacts.find((a) => a.id === id);
   return artifact ? (
-    <ArtifactCard artifact={artifact} onAction={scope.onAction} />
+    <ArtifactCard artifact={artifact} onAction={scope.onAction} context={state} />
   ) : (
     <p className="ct-missing-artifact">
       This artifact is no longer available. The session log retains its original
@@ -376,17 +377,9 @@ function UserMessage() {
 const messageComponents = { AssistantMessage, UserMessage };
 function PendingAttachment() {
   const scope = useContext(ChatScope);
-  const aui = useAui();
   const attachment = useAuiState((s) => s.attachment);
   const state = useChatState(scope.sessionId);
-  const staged = state.files.find(file => file.id === attachment.id && file.importable);
-  const stagedInSide = !!staged && ['waiting', 'importing', 'imported'].includes(staged.stagingStatus ?? '');
-  useEffect(() => {
-    // Recognized company files already belong to the saved import pipeline.
-    // Clearing the composer copy does not remove the retained source file.
-    if (stagedInSide && attachment.status.type === 'requires-action') aui.attachment.remove();
-  }, [aui, stagedInSide, attachment.status.type]);
-  if (stagedInSide) return null;
+  const staged = state.files.find((file) => file.id === attachment.id);
   return (
     <AttachmentPrimitive.Root className="ct-attachment-chip">
       <FileText size={14} />
@@ -398,6 +391,30 @@ function PendingAttachment() {
       )}
       {attachment.status.type === "running" && (
         <LoaderCircle size={12} className="spin" />
+      )}
+      {staged && (staged.purpose === "chat" || !staged.purpose) && (
+        <label className="ct-pending-provider">
+          <input
+            type="checkbox"
+            aria-label={`Include ${staged.name} when asking LLM Suite or M365 Copilot`}
+            checked={staged.passToProvider !== false}
+            onChange={(event) => {
+              const fileArtifact = state.artifacts.find(
+                (item) => item.type === "file" && item.file.id === staged.id,
+              );
+              if (fileArtifact)
+                void Promise.resolve(
+                  scope.onAction({
+                    type: "toggle-file",
+                    artifactId: fileArtifact.id,
+                    fileId: staged.id,
+                    passToProvider: event.target.checked,
+                  }),
+                );
+            }}
+          />
+          <span>Include in provider questions</span>
+        </label>
       )}
       {/\.pdf$/i.test(attachment.name) &&
         "file" in attachment &&
@@ -507,26 +524,34 @@ function ComposerMenus({ state }: { state: ChatState }) {
     );
   return null;
 }
-function ModelMenu() {
+function ModelMenu({ state }: { state: ChatState }) {
   return (
     <SelectField
       className="ct-model-select"
-      label="Assistant service"
-      value="local"
-      onChange={() => {}}
+      label="Choose assistant"
+      value={state.model}
+      onChange={(model) =>
+        updateChatState(state.sessionId, {
+          model: model as ChatState["model"],
+        })
+      }
       icon={<span className="ct-model-logo">s</span>}
       options={[
         {
           value: "local",
-          label: "Local tools",
-          description: "Tools and files on this computer",
+          label: "Screening assistant",
+          description: "Local tools and company data",
         },
-        ...["LLMSuite", "OpenAI", "DeepSeek", "M365 Copilot"].map((name) => ({
-          value: name,
-          label: name,
-          description: "Not connected",
-          disabled: true,
-        })),
+        {
+          value: "llm_suite",
+          label: "LLM Suite",
+          description: "Ask questions using your staged files",
+        },
+        {
+          value: "copilot",
+          label: "M365 Copilot",
+          description: "Ask questions using your staged files",
+        },
       ]}
     />
   );
@@ -728,7 +753,7 @@ function Conversation({
             <ChevronDown size={11} />
           </button>
           {state.companies.length > 0 && (
-            <span>{state.companies.length} companies</span>
+            <span>{consideredCompanies(state).length.toLocaleString()} in shortlist</span>
           )}
           <Tooltip label="What the assistant uses">
             Only the approved core business definition is used to search. MID
@@ -765,7 +790,7 @@ function Conversation({
               >
                 <List size={17} />
               </button>
-              <ModelMenu />
+              <ModelMenu state={state} />
             </div>
             <div className="ct-composer-send-area">
               {running && (

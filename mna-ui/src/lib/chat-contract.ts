@@ -17,6 +17,9 @@ export type StagedFile = {
   stagingStatus?: "checking" | "waiting" | "importing" | "imported" | "unrecognized" | "error";
   stagingMessage?: string;
   hydratedScope?: string;
+  purpose?: "chat" | "pitchbook" | "rogo" | "company-data";
+  passToProvider?: boolean;
+  uploadArtifactId?: string;
 };
 export type ResearchStep = "pitchbook" | "rogo" | "bing" | "llm" | "copilot";
 type ArtifactBase = { id: string; title: string; createdAt: string };
@@ -30,7 +33,10 @@ export type ChatArtifact = ArtifactBase &
       }
     | { type: "screening-setup"; prepared: PreparedScreening }
     | { type: "file"; file: StagedFile; importStatus?: string }
-    | { type: "data-table"; rows: Record<string, unknown>[]; columns: string[]; note?: string; planId?: string }
+    | { type: "data-table"; rows: Record<string, unknown>[]; columns: string[]; note?: string; planId?: string; reviewable?: boolean }
+    | { type: "fit-examples"; revision: number; good: string; bad: string; completed?: boolean }
+    | { type: "research-answer"; provider: string; question: string; answer: string; applied?: boolean }
+    | { type: "enrichment-upload"; source: "pitchbook" | "rogo"; files: StagedFile[]; summary?: string }
     | {
         type: "criteria";
         criteriaText: string;
@@ -38,6 +44,8 @@ export type ChatArtifact = ArtifactBase &
         ignored: string[];
         revision: number;
         decision: "pending" | "approved" | "declined";
+        phase?: "business" | "final";
+        lastCriteria?: string;
       }
     | {
         type: "companies";
@@ -48,7 +56,9 @@ export type ChatArtifact = ArtifactBase &
       }
     | {
         type: "options";
-        recommended: ResearchStep;
+        recommended: ResearchStep | ResearchStep[];
+        companyCount?: number;
+        hydrated?: boolean;
         options: {
           id: ResearchStep;
           label: string;
@@ -123,7 +133,18 @@ export type ArtifactAction =
   | { type: "start-screening" | "run-research"; artifactId: string }
   | { type: "choose-option"; artifactId: string; option: ResearchStep }
   | { type: "inspect-company"; artifactId: string; companyId: string }
-  | { type: "stop-job"; artifactId: string; jobId: string };
+  | { type: "stop-job"; artifactId: string; jobId: string }
+  | { type: "use-answer-in-criteria"; artifactId: string }
+  | ReviewAction;
+export type ReviewAction = {
+  type: "review-shortlist"; artifactId: string; keepCompanyIds: string[]; outputColumns?: string[]; planId?: string;
+} | {
+  type: "save-examples"; artifactId: string; good: string; bad: string;
+} | {
+  type: "upload-source"; artifactId: string; source: "pitchbook" | "rogo"; files: File[];
+} | {
+  type: "toggle-file"; artifactId: string; fileId: string; passToProvider: boolean;
+};
 export type ChatState = {
   version: 1;
   sessionId: string;
@@ -138,7 +159,18 @@ export type ChatState = {
   backendRunId?: string;
   jobId?: string;
   files: StagedFile[];
-  model: "local";
+  model: "local" | ScreeningProvider;
+  lastCriteria?: { text: string; definition: string; revision: number };
+  criteriaHistory?: { text: string; definition: string; revision: number; good: string; bad: string }[];
+  goodFitExamples?: string;
+  badFitExamples?: string;
+  examplesCompleteRevision?: number;
+  businessReviewedRevision?: number;
+  durableCriteria?: { revision: number; digest: string; localRevision: number };
+  criteriaSaveError?: string;
+  selectedResults?: Record<string, string[]>;
+  selectionRevision?: number;
+  coverage?: { PB: number; ROGO: number; BING: number };
   branchMessageIds: string[];
   jobContext?: {
     id: string;

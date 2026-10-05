@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
 import { LoaderCircle, X } from "lucide-react";
 import ScreeningSetup from "./ScreeningSetup";
+import { generateDraft } from "../lib/conversation-client";
+import { approved } from "../lib/chat-store";
 import { getChatState } from "../lib/chat-store";
 import {
   getScreeningCatalog,
@@ -56,7 +58,7 @@ export default function SetupController({
     const current = getChatState(sessionId);
     if (
       current.backendRunId !== initial.backendRunId ||
-      current.revision !== initial.revision
+      current.revision !== initial.revision || !approved(current)
     )
       throw new Error(
         "The screening changed while this setup was open. Close it and reopen the latest setup.",
@@ -73,7 +75,7 @@ export default function SetupController({
         <Dialog.Portal>
           <Dialog.Overlay className="ss-overlay" />
           <Dialog.Content className="ss-dialog ss-loading-dialog">
-            <Dialog.Title>Prepare screening or a question</Dialog.Title>
+            <Dialog.Title>Prepare screening</Dialog.Title>
             <Dialog.Description>
               Read company data and available source columns.
             </Dialog.Description>
@@ -112,6 +114,10 @@ export default function SetupController({
       catalog={catalog}
       criteriaText={initial.definition}
       onClose={onClose}
+      onGeneratePrompt={async (config) => {
+        guard();
+        return generateDraft(sessionId, "screening-prompt", { request: request ?? config.prompt, outputColumns: config.outputColumns });
+      }}
       onPreview={async (config) => {
         guard();
         return previewScreening(sessionId, initial.backendRunId, config);
