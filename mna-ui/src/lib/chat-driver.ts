@@ -38,10 +38,12 @@ import { sessionStore } from "./session-store";
 import { attachmentAccept, attachmentError } from "./attachment-policy";
 import {
   callTool,
-  companyFromRust,
   stageUploads,
   type ToolResult,
 } from "./tool-client";
+
+import { companyDataRows, refreshCompanyContext } from "./company-data-client";
+import { processStagedUploads } from "./import-pipeline";
 
 type Part = ThreadAssistantMessagePart;
 export function transcriptFor(sessionId: string): ThreadMessageLike[] {
@@ -214,11 +216,17 @@ export function researchQuestions(definition: string): string[] {
   ];
 }
 export function createFileAdapter(sessionId: string): AttachmentAdapter {
+  const stagedFiles = new WeakMap<File, import("./chat-contract").StagedFile>();
   return {
     accept: attachmentAccept,
     async add({ file }) {
       const error = attachmentError(file);
       if (error) throw new Error(error);
+      if (/\.(csv|xlsx)$/i.test(file.name)) {
+        const [staged] = await stageUploads([file], { sessionId });
+        stagedFiles.set(file, staged);
+        return { id: staged.id, name: file.name, file, type: "document", contentType: file.type, status: { type: "requires-action", reason: "composer-send" }, content: [{ type: "data", name: "staged-company-file", data: { fileId: staged.id } }] };
+      }
       return {
         id: crypto.randomUUID(),
         name: file.name,
@@ -230,6 +238,8 @@ export function createFileAdapter(sessionId: string): AttachmentAdapter {
     },
     async remove() {},
     async send(attachment, { signal } = {}) {
+      const cached = stagedFiles.get(attachment.file);
+      if (cached) return { ...attachment, id: cached.id, status: { type: "complete" }, content: [{ type: "data", name: "staged-company-file", data: { fileId: cached.id } }] };
       const [file] = await stageUploads([attachment.file], {
         sessionId,
         signal,
@@ -388,61 +398,10 @@ export function createChatAdapter(
           )
           .map((a) => a.file);
         const tabular = submittedFiles.filter((f) => f.importable);
-        if (tabular.length && state.backendRunId && approved(state)) {
-          content.push({
-            type: "text",
-            text: "Importing the uploaded company data and reading the updated company context.",
-          });
-          const importPromise = tool("import_enrichment_files", {
-            run_id: state.backendRunId,
-            files: tabular.map((f) => f.id),
-          });
-          yield { content: [...content] };
-          const result = await importPromise;
-          const updated = [];
-          for (const company of state.companies) {
-            const read = tool("get_company", { company_id: company.pk });
-            yield { content: [...content] };
-            const detail = await read;
-            const hydrated = companyFromRust(
-              { company: detail, score: company.midScore },
-              detail,
-              company,
-            );
-            updated.push({
-              ...company,
-              ...hydrated,
-              source: company.source,
-              rawMid: company.rawMid,
-              rawIscc: company.rawIscc,
-              isccScore: company.isccScore,
-            });
-          }
-          const next = updateChatState(sessionId, { companies: updated });
-          mirrorWorkspace(next);
-          for (const file of tabular) {
-            const fileArtifact = state.artifacts.find(
-              (a) => a.type === "file" && a.file.id === file.id,
-            );
-            if (fileArtifact)
-              patchArtifact(sessionId, fileArtifact.id, {
-                importStatus: "Imported",
-              });
-          }
-          add(
-            saveArtifact(
-              sessionId,
-              {
-                ...artifactBase("Updated company data"),
-                type: "companies",
-                companies: updated,
-                counts: state.counts,
-                backendRunId: state.backendRunId,
-                note: `${result.mapping_unique_companies ?? 0} PitchBook IDs, ${result.pb_unique_companies ?? 0} PitchBook records, ${result.rogo_unique_companies ?? 0} ROGO records. ${Number(result.pb_unmatched ?? 0) + Number(result.rogo_unmatched ?? 0)} rows could not be matched.`,
-              },
-              turnId,
-            ),
-          );
+        const stagedTabular = attachmentParts.filter(p => p.type === "data" && p.name === "staged-company-file");
+        if (stagedTabular.length) { await processStagedUploads(sessionId); state = getChatState(sessionId); }
+        if (stagedTabular.length && (!text || !/^\/|^(?:find|screen|look for|identify|target|update|revise|change)\b|\b(?:run|screening|llmsuite|bing|copilot)\b/i.test(text))) {
+          content.push({ type: "text", text: "Your spreadsheets are staged in Files and results. Recognized data is added automatically when companies are available. Use /data to view the latest company table." });
         } else if (
           action?.type === "approve-criteria" ||
           /^(?:approve(?: the)? criteria(?: and (?:find companies|search))?|approve and search)$/i.test(
@@ -499,22 +458,13 @@ export function createChatAdapter(
               text: "Describe the company’s core products or services, or attach your DDI. I’ll show a draft for your review.",
             });
         } else if (
-          /^\/companies$|^(?:show|review)(?: the)? companies$/i.test(text)
+          /^\/(?:companies|data)$|^(?:show|review)(?: the)? (?:companies|company data)$/i.test(text)
         ) {
-          if (state.backendRunId)
-            add(
-              saveArtifact(
-                sessionId,
-                {
-                  ...artifactBase("Company list"),
-                  type: "companies",
-                  companies: state.companies,
-                  counts: state.counts,
-                  backendRunId: state.backendRunId,
-                },
-                turnId,
-              ),
-            );
+          if (state.backendRunId) {
+            const rows = await refreshCompanyContext(sessionId, state.backendRunId);
+            const data = companyDataRows(rows);
+            add(saveArtifact(sessionId, { ...artifactBase("Current company data"), type: "data-table", rows: data, columns: [...new Set(data.flatMap(row => Object.keys(row)))], note: "Current saved sources. Company name and website prefer PitchBook independently; descriptions keep their source labels." }, turnId));
+          }
           else
             content.push({
               type: "text",
@@ -714,7 +664,7 @@ export function createChatAdapter(
           });
         } else if (
           action?.type === "choose-option" ||
-          (/\b(?:populate|add|run|research)\b/i.test(text) &&
+          (/\b(?:populate|add|run|research)\b|^\/bing\b/i.test(text) &&
             plannedActions(text).length)
         ) {
           const actions =
@@ -772,8 +722,8 @@ export function createChatAdapter(
                     questions: researchQuestions(
                       state.definition || "the approved business criteria",
                     ),
-                    state: "unavailable",
-                    companies: state.companies.slice(0, 5).map((c) => ({
+                    state: "draft",
+                    companies: state.companies.slice(0, 100).map((c) => ({
                       name: c.name,
                       website: c.pbWebsite || c.website,
                     })),

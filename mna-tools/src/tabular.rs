@@ -105,6 +105,16 @@ fn resolve_contained(
 }
 
 pub fn read_file(path: &Path) -> Result<Vec<SheetRows>> {
+    read_file_with_mode(path, true)
+}
+
+/// Inspection preserves sheets whose headers are not recognized, so callers can
+/// retain the original upload for an explicit analyst choice.
+pub fn inspect_file(path: &Path) -> Result<Vec<SheetRows>> {
+    read_file_with_mode(path, false)
+}
+
+fn read_file_with_mode(path: &Path, strict_header: bool) -> Result<Vec<SheetRows>> {
     let length = fs::metadata(path)?.len();
     if length > MAX_FILE_BYTES {
         return Err(Error::Validation(format!(
@@ -117,8 +127,8 @@ pub fn read_file(path: &Path) -> Result<Vec<SheetRows>> {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "csv" => read_csv(path),
-        "xlsx" | "xls" | "xlsm" | "xlsb" | "ods" => read_workbook(path),
+        "csv" => read_csv(path, strict_header),
+        "xlsx" | "xls" | "xlsm" | "xlsb" | "ods" => read_workbook(path, strict_header),
         _ => Err(Error::Validation(
             "supported import formats: CSV, XLSX, XLS, XLSM, XLSB, ODS".into(),
         )),
@@ -132,7 +142,7 @@ fn file_name(path: &Path) -> String {
         .to_owned()
 }
 
-fn read_csv(path: &Path) -> Result<Vec<SheetRows>> {
+fn read_csv(path: &Path, strict_header: bool) -> Result<Vec<SheetRows>> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -157,10 +167,11 @@ fn read_csv(path: &Path) -> Result<Vec<SheetRows>> {
         file_name(path),
         "CSV".into(),
         matrix,
+        strict_header,
     )?])
 }
 
-fn read_workbook(path: &Path) -> Result<Vec<SheetRows>> {
+fn read_workbook(path: &Path, strict_header: bool) -> Result<Vec<SheetRows>> {
     let mut workbook = open_workbook_auto(path)
         .map_err(|e| Error::Validation(format!("cannot parse workbook: {e}")))?;
     let names = workbook.sheet_names().to_vec();
@@ -199,7 +210,7 @@ fn read_workbook(path: &Path) -> Result<Vec<SheetRows>> {
             .iter()
             .any(|row| row.iter().any(|v| !v.trim().is_empty()))
         {
-            let sheet = matrix_to_sheet(file_name(path), name, matrix)?;
+            let sheet = matrix_to_sheet(file_name(path), name, matrix, strict_header)?;
             total_rows += sheet.rows.len();
             if total_rows > MAX_ROWS_PER_FILE {
                 return Err(Error::Validation(format!(
@@ -216,10 +227,21 @@ fn matrix_to_sheet(
     file_name: String,
     sheet_name: String,
     matrix: Vec<Vec<String>>,
+    strict_header: bool,
 ) -> Result<SheetRows> {
-    let header_index = detect_header(&matrix).ok_or_else(|| {
-        Error::Validation(format!("cannot detect header in {file_name}/{sheet_name}"))
-    })?;
+    let header_index = detect_header(&matrix)
+        .or_else(|| {
+            if strict_header {
+                None
+            } else {
+                matrix
+                    .iter()
+                    .position(|row| row.iter().any(|cell| !cell.trim().is_empty()))
+            }
+        })
+        .ok_or_else(|| {
+            Error::Validation(format!("cannot detect header in {file_name}/{sheet_name}"))
+        })?;
     let headers = matrix[header_index]
         .iter()
         .enumerate()

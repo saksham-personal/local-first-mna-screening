@@ -1,5 +1,11 @@
 # Backend and UI integration validation
 
+The latest 5 October 2026 background/import/grounding checks are recorded in
+[VALIDATION.md](VALIDATION.md) and [the implementation record](../mna-tools/IMPLEMENTATION.md):
+100 UI tests, 107 Rust tests, 65 agent tools, and 19 privileged operations.
+The record below is retained as the earlier preparation iteration; its
+unconnected scheduler statement does not describe the current local controller.
+
 Updated 4 October 2026. The UI now uses backend schema-v2 prepared plans, exact approval digests and durable job/index tables. Its preview displays the complete compiled execution prompt. The short-lived bridge cache stores preview references; it is not domain truth.
 
 The actual local bridge was checked against the freshly compiled service: seven fictional MID companies were found, source/proposal/approval tool traces were returned, compiled prompt and complete company count appeared in preview, approval created three backend jobs, a changed prompt was rejected, and a general M365 question without companies created one unexecuted job. No corporate provider ran. This was an HTTP integration check, not a new visual/browser review.

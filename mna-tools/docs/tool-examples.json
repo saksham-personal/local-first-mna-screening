@@ -542,5 +542,14 @@
   "get_model_assessments": {
     "run_id": "R42",
     "plan_id": "PPLAN-returned-id"
+  },
+  "inspect_enrichment_files": {
+    "files": [
+      "upload-1.csv",
+      "upload-2.xlsx"
+    ]
+  },
+  "get_execution_progress": {
+    "plan_id": "PPLAN-returned-id"
   }
 }

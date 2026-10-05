@@ -46,8 +46,8 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 - [Research](#research): `bing_search`, `m365_research`, `fetch_url`, `extract_url_context`
 - [Durable memory](#durable-memory): `search_research_memory`, `get_previous_research`, `get_recent_agent_events`, `get_search_history`, `get_open_questions`, `add_open_question`, `resolve_open_question`
 - [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `update_candidate_status`, `get_discovery_summary`
-- [Enrichment and exports](#enrichment-and-exports): `import_enrichment_files`, `export_candidate_set`
-- [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_job`, `get_model_assessments`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
+- [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `export_candidate_set`
+- [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_progress`, `get_execution_job`, `get_model_assessments`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
 - [Recovery](#recovery): `save_checkpoint`, `get_checkpoint`
 
 ## Company discovery and retrieval
@@ -1402,7 +1402,30 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Enrichment and exports
 
-### 49. `import_enrichment_files`
+### 49. `inspect_enrichment_files`
+
+**Purpose:** Identify staged spreadsheet roles before hydration or run selection.
+
+**How it works:** Read-only apart from audit. Supply 1–32 import-directory relative file IDs returned by the upload endpoint. Reuse authoritative header detection on every populated sheet: PitchBook mapping headers must be on row one; PB data can follow banners; ROGO uses the first supported Website/Websites header and excludes PB identifiers. Empty sheets are ignored. A workbook containing an unknown or non-enrichment sheet stays pending instead of partly importing a guessed source. Inspection needs no run_id; eligible files may wait until discovery has a saved company set. Import eligible IDs together with import_enrichment_files so mappings precede data rows, and refresh current company context afterwards.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `files` | Yes | array of string | — |
+
+**Returned data and effects:** files with file/eligible/roles/sheets/reason; import_files; pending_files; counts by source kind. Each sheet includes kind (PB_MAPPING, PB_DATA, ROGO, COMPANY or null), one-based header row, data-row count and headers. No source values or approvals are changed.
+
+**Example arguments:**
+
+```json
+{
+  "files": [
+    "upload-1.csv",
+    "upload-2.xlsx"
+  ]
+}
+```
+
+### 50. `import_enrichment_files`
 
 **Purpose:** Classify and join a mixed analyst upload into compact company context.
 
@@ -1428,7 +1451,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 50. `export_candidate_set`
+### 51. `export_candidate_set`
 
 **Purpose:** Create one of the analyst's three exact workbook formats.
 
@@ -1454,7 +1477,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Approved action graphs and screening
 
-### 51. `propose_action_plan`
+### 52. `propose_action_plan`
 
 **Purpose:** Turn an interpreted analyst request into a durable dependency graph.
 
@@ -1501,7 +1524,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 52. `get_action_plan`
+### 53. `get_action_plan`
 
 **Purpose:** Read a plan, its approval metadata and completed dependencies.
 
@@ -1523,7 +1546,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 53. `propose_prepared_plan`
+### 54. `propose_prepared_plan`
 
 **Purpose:** Freeze an immutable version-2 screening or question handoff.
 
@@ -1605,7 +1628,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 54. `get_prepared_plan`
+### 55. `get_prepared_plan`
 
 **Purpose:** Read a frozen handoff, its approval state and durable batch jobs.
 
@@ -1625,7 +1648,27 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 55. `get_execution_job`
+### 56. `get_execution_progress`
+
+**Purpose:** Poll approval freshness and durable batch progress without large frozen inputs.
+
+**How it works:** Supply plan_id. Checks current source/profile freshness once and returns ordered lightweight job records. Frozen prompts, company inputs, raw responses and private index mappings are omitted. Top-level executed=false describes the prepared handoff; inspect each job's executed flag for actual dispatch. Count SUCCEEDED batches, respect next_eligible_at, and stage eligible accepted records with get_model_assessments. Expired dispatched leases require controller reconciliation; a progress read never authorizes blind redispatch and consumes no provider message.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `plan_id` | Yes | string | — |
+
+**Returned data and effects:** plan_id/run_id/digest/status/fresh, compact provider/mode/deployment spec, and jobs with job_id/plan_id/ordinal/state/input_hash/attempt/error/next_eligible_at/lease_expires_at/retryable/executed. No provider call occurs.
+
+**Example arguments:**
+
+```json
+{
+  "plan_id": "PPLAN-returned-id"
+}
+```
+
+### 57. `get_execution_job`
 
 **Purpose:** Inspect a durable provider batch and its parser or dispatch state.
 
@@ -1645,7 +1688,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 56. `get_model_assessments`
+### 58. `get_model_assessments`
 
 **Purpose:** Read accepted provider assessments separately from retrieval and evidence.
 
@@ -1668,7 +1711,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 57. `prepare_screening_batch`
+### 59. `prepare_screening_batch`
 
 **Purpose:** Legacy compatibility handoff for scored screening batches.
 
@@ -1707,7 +1750,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 58. `prepare_bing_queries`
+### 60. `prepare_bing_queries`
 
 **Purpose:** Expand approved fit questions using the best available company identity.
 
@@ -1736,7 +1779,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 59. `save_screening_results`
+### 61. `save_screening_results`
 
 **Purpose:** Legacy compatibility endpoint for batch scores.
 
@@ -1770,7 +1813,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 60. `get_screening_results`
+### 62. `get_screening_results`
 
 **Purpose:** Read a company's external screening history within the current run.
 
@@ -1794,7 +1837,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 61. `complete_action_step`
+### 63. `complete_action_step`
 
 **Purpose:** Release dependent graph work only after successful operations are proven.
 
@@ -1824,7 +1867,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 
 ## Recovery
 
-### 62. `save_checkpoint`
+### 64. `save_checkpoint`
 
 **Purpose:** Persist the orchestrator's restart state with optimistic concurrency.
 
@@ -1857,7 +1900,7 @@ Companies, exact identifiers, source rows and compact enrichment are global. Can
 }
 ```
 
-### 63. `get_checkpoint`
+### 65. `get_checkpoint`
 
 **Purpose:** Resume from the latest or a named historical checkpoint.
 
@@ -1932,9 +1975,14 @@ These operations are excluded from the model tool catalog. Analyst-facing routes
 | `record_execution_response` | `/admin/execution-response` | Controller-only save of the actual provider response for strict parsing. |
 | `reconcile_execution_job` | `/admin/execution-reconcile` | Controller-only recovery of ambiguous external outcomes. |
 | `record_execution_failure` | `/admin/execution-failure` | Controller-only record of a confirmed dispatch failure. |
+| `retry_execution_job` | `/admin/execution-retry` | Controller-only return of a definitively rejected FAILED attempt to READY after explicit analyst request and freshness checks. No send occurs here. |
 | `reserve_llmsuite_slot` / `consume_llmsuite_slot` | `/admin/llmsuite-slot`, `/admin/llmsuite-consume` | Shared seven-per-minute LLMSuite budget; consumption tracks actual dispatch, including parser repairs. |
 | `review_evidence_claim` | `/admin/evidence-review` | Record analyst verification or rejection; unreviewed claims remain `UNKNOWN`. |
 | `rebuild_embedding_index` | `/admin/embedding-index` | Generate real local-worker embeddings and persist them keyed by model/version/text hash. |
+
+For `retry_execution_job`, send `{"job_id":"JOB-returned-id","attempt":1,"reason":"Analyst requested retry of the rejected batch","analyst_requested":true}` with the ordinary bearer credential and `X-MNA-Controller-Key`. The service requires the exact failed attempt, current approval/source snapshot, and a durable definitive rejected-response marker. It preserves accepted results and prior attempts, sends nothing and consumes no slot. A later dispatch uses the shared limit normally. AMBIGUOUS, RUNNING, stale, attempt-mismatched and exhausted parser results are rejected. The response includes previous_attempt, state=READY, executed=false and automatically_redispatched=false.
+
+The [background screening and upload flow](../mna-ui/BACKGROUND_SCREENING.md) describes the implemented controller, pause/recovery, partial staging, automatic spreadsheet detection and approved Bing grounding. Live corporate providers remain disabled unless configured and explicitly approved.
 
 Create and approve criteria:
 

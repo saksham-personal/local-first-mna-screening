@@ -10,4 +10,4 @@ const close = () => { preview.kill(); bridge.close(); };
 process.on('SIGINT', () => { close(); process.exit(0); });
 process.on('SIGTERM', () => { close(); process.exit(0); });
 preview.on('exit', code => { bridge.close(); process.exit(code ?? 0); });
-console.log('Screening tool bridge ready. Rust tools run locally; external providers are off.');
+console.log('Screening workspace ready. External execution is disabled unless explicitly configured.');

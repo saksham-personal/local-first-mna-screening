@@ -45,6 +45,8 @@ export type ScreeningPreview = {
 };
 export type PreparedScreening = {
   id: string;
+  planId?: string;
+  schemaVersion?: number;
   title: string;
   provider: ScreeningProvider;
   mode: ScreeningMode;
@@ -56,5 +58,6 @@ export type PreparedScreening = {
   config: ScreeningConfig;
   fingerprint: string;
   savedAt: string;
-  checkpoint: { runId: string; namespace: string; sequence: number };
+  checkpoint?: { runId: string; namespace: string; sequence: number };
+  jobs?: { job_id: string; ordinal: number; state: string; input_hash: string }[];
 };

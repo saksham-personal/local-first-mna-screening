@@ -69,6 +69,14 @@ import type {
 } from "./lib/screening-contract";
 import PrepareMenu from "./screening/PrepareMenu";
 const SetupController = lazy(() => import("./screening/SetupController"));
+const BingResearchDialog = lazy(() => import("./screening/BingResearchDialog"));
+import BackgroundRuns from "./screening/BackgroundRuns";
+import ImportStaging from "./files/ImportStaging";
+import { backgroundAction, dismissBackground, getBackgroundJobs, startBackgroundPolling, startBackgroundScreening, subscribeBackground } from "./lib/background-client";
+import { previewBingResearch, runBingResearch } from "./lib/research-client";
+import { processStagedUploads } from "./lib/import-pipeline";
+import { researchQuestions } from "./lib/chat-driver";
+import { updateChatState } from "./lib/chat-store";
 
 type Panel = "context" | "artifacts" | "runs" | null;
 type Dialog = "commands" | "prompts" | "criteria" | null;
@@ -450,6 +458,18 @@ export default function App() {
     request?: string;
     initialConfig?: ScreeningConfig;
   }>();
+  const [bingSetup, setBingSetup] = useState<{ sessionId: string; queries: string[] }>();
+  const [bingConnected, setBingConnected] = useState(false);
+  const backgroundJobs = useSyncExternalStore(subscribeBackground, getBackgroundJobs, getBackgroundJobs);
+  useEffect(startBackgroundPolling, []);
+  useEffect(() => { void fetch("/api/health").then(r => r.json()).then(data => setBingConnected(data.providers?.bing === true)).catch(() => {}); }, []);
+  useEffect(() => {
+    const staged = (event: Event) => {
+      if ((event as CustomEvent).detail?.sessionId === session.id) setPanel("artifacts");
+    };
+    window.addEventListener("screening:files-staged", staged);
+    return () => window.removeEventListener("screening:files-staged", staged);
+  }, [session.id]);
   const openSetup = useCallback(
     (
       provider: ScreeningProvider,
@@ -521,7 +541,7 @@ export default function App() {
       void composerRef.current?.addFiles(files).then((count) => {
         if (count)
           setToast(
-            `${count} file${count === 1 ? "" : "s"} attached. Review them in chat, then send.`,
+            `${count} file${count === 1 ? "" : "s"} added. Spreadsheets are checked and staged automatically.`,
           );
       });
     },
@@ -598,7 +618,11 @@ export default function App() {
       const current = getChatState(session.id),
         artifact = current.artifacts.find((a) => a.id === action.artifactId);
       try {
-        if (action.type === "configure-screening") {
+        if (action.type === "start-screening" && artifact?.type === "screening-setup") {
+          void startBackgroundScreening(session.id, artifact.prepared).then(job => setToast(job.state === "blocked" ? job.message ?? "Provider unavailable. Setup saved." : "Screening started in the background.")).catch(error => setToast(String(error)));
+        } else if (action.type === "run-research") {
+          setBingSetup({ sessionId: session.id, queries: artifact?.type === "research" ? artifact.questions : researchQuestions(current.definition) });
+        } else if (action.type === "configure-screening") {
           openSetup(
             action.provider,
             action.mode,
@@ -615,6 +639,8 @@ export default function App() {
             action.option === "llm" ? "llm_suite" : "copilot",
             "screening",
           );
+        } else if (action.type === "choose-option" && action.option === "bing") {
+          setBingSetup({ sessionId: session.id, queries: researchQuestions(current.definition) });
         } else if (action.type === "export" && artifact?.type === "companies") {
           downloadWorkbook(action.format, artifact.companies);
           sessionStore.addEvent({
@@ -716,6 +742,7 @@ export default function App() {
     setPreview(undefined);
     setBusy(false);
     setScreeningSetup(undefined);
+    setBingSetup(undefined);
   };
   const newSession = (title: string) => {
     sessionStore.createSession(title);
@@ -725,6 +752,7 @@ export default function App() {
     setPreview(undefined);
     setBusy(false);
     setScreeningSetup(undefined);
+    setBingSetup(undefined);
   };
   const maximumWidth = (side: ResizeSide) => {
     if (side === "navigation") {
@@ -992,6 +1020,7 @@ export default function App() {
           <div className="ct-header-actions">
             <PrepareMenu
               hasCompanies={state.companies.length > 0}
+              onResearch={() => setBingSetup({ sessionId: session.id, queries: researchQuestions(state.definition) })}
               onChoose={openSetup}
             />
             <div className="ct-view-switch" aria-label="Choose interface">
@@ -1275,27 +1304,13 @@ export default function App() {
                 </div>
               ) : panel === "artifacts" ? (
                 <div className="ct-artifact-list">
-                  {state.artifacts.length ? (
-                    state.artifacts
-                      .filter((a) => a.type !== "job")
-                      .slice()
-                      .reverse()
-                      .map((artifact) => (
-                        <ArtifactCard
-                          key={artifact.id}
-                          artifact={artifact}
-                          onAction={onAction}
-                        />
-                      ))
-                  ) : (
-                    <div className="ct-panel-empty">
-                      <FolderOpen size={24} />
-                      <p>
-                        Uploads, criteria, company lists, and checkpoints appear
-                        here and in the conversation.
-                      </p>
-                    </div>
-                  )}
+                  <ImportStaging files={state.files} summary={state.artifacts.slice().reverse().find(a => a.type === "handoff" && a.service === "Company data")?.type === "handoff" ? (state.artifacts.slice().reverse().find(a => a.type === "handoff" && a.service === "Company data") as Extract<import("./lib/chat-contract").ChatArtifact, { type: "handoff" }>).detail : undefined} onUpload={() => onAction({ type: "upload", artifactId: "company-data" })} onRetry={() => {
+                    updateChatState(session.id, current => ({ ...current, files: current.files.map(file => file.stagingStatus === "error" ? { ...file, stagingStatus: "checking" } : file) }));
+                    void processStagedUploads(session.id);
+                  }} />
+                  {state.artifacts.filter(a => a.type === "file" && !a.file.importable).slice(-6).reverse().map(artifact => <ArtifactCard key={artifact.id} artifact={artifact} onAction={onAction} />)}
+                  {state.artifacts.filter((a, index, all) => ["criteria", "checkpoint", "screening-setup", "handoff"].includes(a.type) && (a.type !== "handoff" || a.service !== "Company data") && !all.slice(index + 1).some(b => b.type === a.type && (a.type !== "screening-setup" || b.type !== "screening-setup" || a.prepared.provider === b.prepared.provider))).slice(-4).reverse().map(artifact => <ArtifactCard key={artifact.id} artifact={artifact} onAction={onAction} />)}
+                  <button type="button" className="ct-panel-link" onClick={() => send("/data")}>View company data in chat<ArrowRight size={14} /></button>
                 </div>
               ) : (
                 <div className="ct-background-list">
@@ -1479,12 +1494,14 @@ export default function App() {
           <SetupController
             {...screeningSetup}
             onClose={() => setScreeningSetup(undefined)}
-            onSaved={() =>
-              setToast("Setup saved. No information was sent to a provider.")
-            }
+            onSaved={(prepared) => {
+              void startBackgroundScreening(screeningSetup.sessionId, prepared).then(job => setToast(job.state === "blocked" ? job.message ?? "Provider unavailable. Setup saved." : "Screening is running in the background.")).catch(error => setToast(String(error)));
+            }}
           />
         </Suspense>
       )}
+      {bingSetup && <Suspense fallback={<div className="ct-toast" role="status">Opening web research…</div>}><BingResearchDialog key={bingSetup.sessionId} companies={getChatState(bingSetup.sessionId).companies} initialQueries={bingSetup.queries} connected={bingConnected} onClose={() => setBingSetup(undefined)} onPreview={input => previewBingResearch(bingSetup.sessionId, input)} onRun={token => runBingResearch(bingSetup.sessionId, token)} /></Suspense>}
+      <BackgroundRuns jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLMSuite" : "Copilot"}` }))} onDismiss={dismissBackground} onAction={(id, action) => { void backgroundAction(id, action).then(() => setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated.")).catch(error => setToast(String(error))); }} />
       {toast && (
         <div className="ct-toast" role="status">
           <Check size={15} />

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { exampleDefinition } from '../src/lib/chat-policy';
 // The production scheduler is intentionally plain Node ESM so the bridge runs without a compile step.
 // @ts-expect-error No declaration file is emitted for this server-only module.
 import { createJobRegistry } from "../server/jobs.mjs";
@@ -28,6 +29,30 @@ type JobEvent = {
   result?: Record<string, unknown>;
   timestamp: string;
 };
+
+test('example discovery searches positive business text and passes only approved exclusions separately', async () => {
+  let profile: Record<string, unknown> = {};
+  const queries: Record<string, unknown>[] = [];
+  const jobs = registry(async (tool, args) => {
+    if (tool === 'create_run') { profile = args.initial_profile as Record<string, unknown>; return {run_id: 'example-run'}; }
+    if (tool === 'get_active_screening_profile') return {content: profile, status: 'APPROVED'};
+    if (tool === 'search_mid') {
+      assert.doesNotMatch(String(args.query), /\b(?:exclude|NOT)\b/i);
+      assert.equal(args.limit, 1000);
+      assert.deepEqual(args.filters, {exclude_keywords: profile.core_business_exclusions});
+      queries.push(args);
+      return {query_id: 'positive-query', results: []};
+    }
+    if (tool === 'get_candidate_set') return {candidates: []};
+    if (tool === 'get_discovery_summary') return {mid_only: 0, iscc_only: 0, both: 0, total_unique: 0};
+    return response(tool, args);
+  });
+  const started = jobs.create({...input, definition: exampleDefinition});
+  assert.equal((await jobs.wait(started.id)).state, 'completed');
+  assert.equal(queries.length, 2);
+  assert.deepEqual(profile.core_business_exclusions, ['broker marketplaces', 'generic CRM', 'pure consulting', 'outsourced claims services']);
+  assert.equal(profile.business_definition, exampleDefinition);
+});
 
 function registry(call: Call) {
   let sequence = 0;

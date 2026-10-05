@@ -280,6 +280,7 @@ export default function ScreeningSetup({
     else setUploadError("");
     setUploadSuccess("");
     setPendingFiles((current) => [...current, ...accepted]);
+    if (accepted.length && accepted.length === files.length) void upload(accepted);
   };
 
   const fileDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -288,15 +289,15 @@ export default function ScreeningSetup({
     addFiles(Array.from(event.dataTransfer.files));
   };
 
-  const upload = async () => {
-    if (!pendingFiles.length) return;
+  const upload = async (files = pendingFiles) => {
+    if (!files.length) return;
     setUploading(true);
     setUploadError("");
     try {
-      await onHydrate(pendingFiles, pickerSource);
+      await onHydrate(files, pickerSource);
       setPendingFiles([]);
       setUploadSuccess(
-        "Files imported. Review the updated source coverage and matching counts in chat.",
+        "Data added. Source coverage is updated; use /data in chat to view the table.",
       );
     } catch (caught) {
       setUploadError(errorMessage(caught));
@@ -648,8 +649,7 @@ export default function ScreeningSetup({
 
           <footer className="ss-footer">
             <p>
-              Saving prepares this setup. {providerLabel} execution is not
-              connected yet.
+              Approval saves this snapshot. Provider status and progress appear in Background screening.
             </p>
             <div>
               <button
@@ -874,7 +874,7 @@ export default function ScreeningSetup({
                           <button
                             type="button"
                             className="ss-primary"
-                            onClick={upload}
+                            onClick={() => void upload()}
                             disabled={uploading}
                           >
                             {uploading ? (

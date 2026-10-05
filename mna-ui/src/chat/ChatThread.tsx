@@ -308,6 +308,8 @@ function MessageActions({ user = false }: { user?: boolean }) {
 }
 function MessageAttachment() {
   const attachment = useAuiState((s) => s.attachment);
+  const attached = useAuiState(s => s.attachment);
+  if (attached.content?.some(part => part.type === "data" && part.name === "staged-company-file")) return null;
   return (
     <AttachmentPrimitive.Root className="ct-sent-file">
       <AttachmentPrimitive.Name />
@@ -374,7 +376,17 @@ function UserMessage() {
 const messageComponents = { AssistantMessage, UserMessage };
 function PendingAttachment() {
   const scope = useContext(ChatScope);
+  const aui = useAui();
   const attachment = useAuiState((s) => s.attachment);
+  const state = useChatState(scope.sessionId);
+  const staged = state.files.find(file => file.id === attachment.id && file.importable);
+  const stagedInSide = !!staged && ['waiting', 'importing', 'imported'].includes(staged.stagingStatus ?? '');
+  useEffect(() => {
+    // Recognized company files already belong to the saved import pipeline.
+    // Clearing the composer copy does not remove the retained source file.
+    if (stagedInSide && attachment.status.type === 'requires-action') aui.attachment.remove();
+  }, [aui, stagedInSide, attachment.status.type]);
+  if (stagedInSide) return null;
   return (
     <AttachmentPrimitive.Root className="ct-attachment-chip">
       <FileText size={14} />

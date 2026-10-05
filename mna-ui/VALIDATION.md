@@ -1,10 +1,84 @@
 # Screening UI validation
 
-The latest backend/preparation iteration is recorded in
-[BACKEND_VALIDATION.md](BACKEND_VALIDATION.md): 76 UI tests, 72 Rust tests,
-14 offline orchestration tests, optimized executable and HTTP smoke, and
-browser approval/upload/branch checks. Earlier UI and animation checks below
-are retained as history.
+## Background screening, uploads, and research — 5 October 2026
+
+The latest iteration adds a background controller for approved LLMSuite and
+M365 jobs, automatic source imports, `/data` tables, and approved Bing research.
+See [BACKGROUND_SCREENING.md](BACKGROUND_SCREENING.md) for behavior and
+[the implementation record](../mna-tools/IMPLEMENTATION.md) for backend evidence.
+
+| Check | Result |
+|---|---|
+| UI tests | **100 passed**, zero failed or skipped |
+| TypeScript and production build | Passed; the existing large-chunk advisory remains for lazy grid/diagram bundles |
+| Backend checks | **107 Rust tests**, format, strict lint, release build, and isolated executable HTTP smoke passed |
+| Catalogs | **65 agent tools / 19 privileged operations**; generated schemas, examples, Markdown links and three workbook layouts verified |
+| Independent review | **GPT-6.1 Sol** reviewed lifecycle, replay, query construction and UI integration; confirmed findings were corrected |
+| Live corporate execution | Disabled; connected behavior is validated with loopback mocks only |
+
+The browser check uploaded fictional PitchBook data before its mapping CSV,
+plus a ROGO CSV, before companies existed. Header detection staged them without
+a chat message or approval. The approved example performed 31 actual local
+tool calls and returned seven companies. The grouped import then hydrated one
+PB identifier, one PB record and one ROGO record, with no unmatched or
+quarantined rows. The side panel showed source summaries rather than imported
+file lists or duplicate company tables. `/data` displayed the saved projection
+in AG Grid, including labeled PB/MID descriptions and blank unavailable fields.
+
+Separate LLMSuite and M365 approvals created four and three background batches.
+Both appeared in the progress dock and correctly reported no request sent while
+disconnected. The Bing dialog expanded four questions for seven companies into
+28 exact queries; approval saved an `executed:false` handoff without search
+results. Retry, pause-before-send, lease recovery, ambiguous-attempt protection,
+offline partial staging and the shared seven-send gate are covered by local
+automated tests rather than claimed live corporate calls.
+
+Browser testing found and corrected an existing discovery failure: the example's
+`Exclude` clause was being sent as query syntax. Both discovery paths now use
+the same positive core-business query and pass only approved business exclusions
+separately. Additional final corrections preserve CSV blanks, update filtered
+row counts, remove recognized imports only from the composer copy, and keep
+company-template and general Bing drafts separate. Background pulses use stepped
+opacity and honor reduced motion.
+
+GPT-6 Sol contributed backend and import work; GPT-6 Luna contributed bounded
+UI work. The integration owner completed the source integration, regression
+checks, and browser verification. No DeepSeek or Terra agents were used.
+Changed source is concentrated in the bridge, background/research controllers,
+shared discovery and import clients, chat artifacts and tables, setup/research
+dialogs, and background dock; backend changes add header inspection, compact
+progress, and controller-only safe retry. No new production dependency was added.
+
+Final automated logs are `work/background-ui-final-tests.log`,
+`work/background-ui-final-build.log`, `work/background-rust-tests.log`, and
+`work/background-clippy.log`. Release proof is in
+`work/background-release-smoke/proof.json`; browser diagnostics remain under
+`output/qa` and `.playwright-cli`, outside source archives. A UI automation
+infrastructure failure required switching from the in-app browser tool to the
+Playwright CLI. No application exception was identified by that failure.
+
+Full LLM chat orchestration, production multi-user scheduling/identity and real
+provider deployment contracts remain planned or unverified. Original spreadsheet
+references and background controls persist; discovery queue state remains
+process-local.
+
+The final upload check confirmed that a recognized ROGO sheet disappears from
+the composer and leaves Send disabled, without adding a raw file entry to chat.
+It also invalidated the older provider input snapshots as expected. A filtered
+one-row CSV contained blank PB fields rather than presentation dashes. The dark
+desktop layout and 390×844 mobile layout were visually checked; mobile document
+width and scroll width were both 390 pixels. Separate company/general Bing
+drafts were checked through the dialog. A browser selector initially used the
+wrong input role and was corrected; the application filter itself passed.
+
+The controlled restart exposed and corrected a recovery display issue: stale
+plans could fall back to an empty snapshot and lose Copilot's provider or batch
+count. The controller now saves the initial compact snapshot and reads durable
+historical progress after staleness. A stale plan remains blocked even if all its
+batches succeeded; completed counts and actual execution history remain visible.
+The additional regression verifies temporary disconnection, durable STALE status,
+all-success stale jobs, and denial of further staging or dispatch. Earlier
+validation below is retained as history.
 
 ## Result
 

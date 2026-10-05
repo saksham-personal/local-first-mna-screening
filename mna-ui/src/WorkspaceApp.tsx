@@ -38,6 +38,8 @@ import type {
 import type { Company, ExportKind, Source } from "./lib/contracts";
 import { approved } from "./lib/chat-store";
 import "./workspace/workspace.css";
+import ImportStaging from "./files/ImportStaging";
+import { processStagedUploads, retryStagedUploads } from "./lib/import-pipeline";
 
 type WorkspaceTab = "overview" | "companies" | "files";
 type SourceFilter = Source | "all";
@@ -722,7 +724,7 @@ function Files({
   onAction,
   send,
 }: Pick<Props, "state" | "onAction" | "send">) {
-  const files = state.artifacts.filter((artifact) => artifact.type === "file");
+  const files = state.artifacts.filter((artifact) => artifact.type === "file" && !artifact.file.importable);
   const latestHandoff = latestArtifact(state.artifacts, "handoff");
   return (
     <div className="ws-files-grid">
@@ -733,8 +735,7 @@ function Files({
         <div>
           <h2>Upload screening or enrichment files</h2>
           <p>
-            Attach DDI, CSV, XLSX, PDF, DOCX, or TXT files. They appear in the
-            chat and session log.
+            Add criteria documents or spreadsheets. PitchBook and ROGO files are detected and added to company context automatically.
           </p>
         </div>
         <button
@@ -750,6 +751,7 @@ function Files({
           <UploadCloud size={15} /> Choose files
         </button>
       </section>
+      <ImportStaging files={state.files} onUpload={() => onAction({ type: "upload", artifactId: "workspace-upload" })} onRetry={() => { void retryStagedUploads(state.sessionId); }} />
       <section className="ws-card ws-file-list-card">
         <div className="ws-section-head">
           <div>

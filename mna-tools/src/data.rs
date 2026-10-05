@@ -38,6 +38,11 @@ struct ImportEnrichmentFilesArgs {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct InspectEnrichmentFilesArgs {
+    files: Vec<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ExportCandidateSetArgs {
     run_id: String,
     export_type: String,
@@ -77,6 +82,7 @@ pub fn input_schema(tool: &str) -> Option<Value> {
     let schema = match tool {
         "import_company_files" => schemars::schema_for!(ImportCompanyFilesArgs),
         "import_enrichment_files" => schemars::schema_for!(ImportEnrichmentFilesArgs),
+        "inspect_enrichment_files" => schemars::schema_for!(InspectEnrichmentFilesArgs),
         "export_candidate_set" => schemars::schema_for!(ExportCandidateSetArgs),
         "get_discovery_summary" => schemars::schema_for!(RunArgs),
         "get_company_identifiers" => schemars::schema_for!(CompanyArgs),
@@ -96,6 +102,7 @@ impl DataService {
         match tool {
             "import_company_files" => self.import_company_files(parse(arguments)?),
             "import_enrichment_files" => self.import_enrichment_files(parse(arguments)?),
+            "inspect_enrichment_files" => self.inspect_enrichment_files(parse(arguments)?),
             "export_candidate_set" => self.export_candidate_set(parse(arguments)?),
             "get_discovery_summary" => self.get_discovery_summary(parse(arguments)?),
             "get_company_identifiers" => self.get_company_identifiers(parse(arguments)?),
@@ -344,6 +351,80 @@ impl DataService {
             let recommendation=if total>=2000 {"LLM_SCREENING"} else {"PITCHBOOK_ENRICHMENT"};
             Ok(json!({"run_id":args.run_id,"total_unique":total,"mid_only":mid,"iscc_only":iscc,"both":both,"other":other,"status_counts":statuses,"recommended_next_step":recommendation}))
         })
+    }
+
+    fn inspect_enrichment_files(&self, args: InspectEnrichmentFilesArgs) -> Result<Value> {
+        validate_files(&args.files)?;
+        let mut files = Vec::with_capacity(args.files.len());
+        let mut import_files = Vec::new();
+        let mut pending_files = Vec::new();
+        let mut counts = BTreeMap::<&str, usize>::from([
+            ("mapping", 0),
+            ("pitchbook", 0),
+            ("rogo", 0),
+            ("company", 0),
+            ("unrecognized", 0),
+        ]);
+        for file in args.files {
+            let sheets = tabular::inspect_file(&tabular::resolve_import_path(&file)?)?;
+            let inspected = sheets
+                .iter()
+                .map(|sheet| {
+                    let kind = tabular::sheet_kind(sheet);
+                    let counter = match kind {
+                        Some("PB_MAPPING") => "mapping",
+                        Some("PB_DATA") => "pitchbook",
+                        Some("ROGO") => "rogo",
+                        Some("COMPANY") => "company",
+                        _ => "unrecognized",
+                    };
+                    *counts.get_mut(counter).expect("known inspection count") += 1;
+                    json!({
+                        "sheet": sheet.sheet_name,
+                        "header_row": sheet.header_row,
+                        "kind": kind,
+                        "rows": sheet.rows.len(),
+                        "headers": sheet.headers,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let eligible = !inspected.is_empty()
+                && inspected.iter().all(|sheet| {
+                    matches!(
+                        sheet["kind"].as_str(),
+                        Some("PB_MAPPING" | "PB_DATA" | "ROGO")
+                    )
+                });
+            let roles = inspected
+                .iter()
+                .filter_map(|sheet| sheet["kind"].as_str())
+                .collect::<BTreeSet<_>>();
+            let reason = if eligible {
+                None
+            } else if inspected.is_empty() {
+                Some("no populated sheets")
+            } else {
+                Some("contains a non-enrichment or unrecognized sheet")
+            };
+            if eligible {
+                import_files.push(file.clone());
+            } else {
+                pending_files.push(file.clone());
+            }
+            files.push(json!({
+                "file": file,
+                "eligible": eligible,
+                "roles": roles,
+                "sheets": inspected,
+                "reason": reason,
+            }));
+        }
+        Ok(json!({
+            "files": files,
+            "import_files": import_files,
+            "pending_files": pending_files,
+            "counts": counts,
+        }))
     }
 
     fn import_enrichment_files(&self, args: ImportEnrichmentFilesArgs) -> Result<Value> {

@@ -19,16 +19,16 @@ export const nextStepOptions: Extract<
   },
   {
     id: "bing",
-    label: "Prepare Bing research",
+    label: "Bing research",
     description:
-      "Draft the questions to review. Bing searches require a connected provider.",
+      "Review queries, search the web, and add source-linked research to company context.",
     available: true,
   },
   {
     id: "llm",
     label: "LLM screening",
     description:
-      "Choose inputs, review the prompt, and save a setup for LLMSuite.",
+      "Review inputs and the prompt, then run batches in the background.",
     available: true,
   },
   {
@@ -95,6 +95,8 @@ export const commandPrompts = [
     title: "Review criteria",
     description: "Show the current business criteria and approval.",
   },
+  { command: "/data", title: "Show company data", description: "Read the latest MID, ISCC, PitchBook and ROGO sources in a table." },
+  { command: "/bing", title: "Bing research", description: "Edit web queries and choose companies before approving a search." },
   {
     command: "/companies",
     title: "Show companies",

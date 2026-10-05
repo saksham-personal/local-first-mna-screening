@@ -13,6 +13,10 @@ export type StagedFile = {
   parseKind?: string;
   importable?: boolean;
   excerpt?: string;
+  sourceKinds?: string[];
+  stagingStatus?: "checking" | "waiting" | "importing" | "imported" | "unrecognized" | "error";
+  stagingMessage?: string;
+  hydratedScope?: string;
 };
 export type ResearchStep = "pitchbook" | "rogo" | "bing" | "llm" | "copilot";
 type ArtifactBase = { id: string; title: string; createdAt: string };
@@ -26,6 +30,7 @@ export type ChatArtifact = ArtifactBase &
       }
     | { type: "screening-setup"; prepared: PreparedScreening }
     | { type: "file"; file: StagedFile; importStatus?: string }
+    | { type: "data-table"; rows: Record<string, unknown>[]; columns: string[]; note?: string; planId?: string }
     | {
         type: "criteria";
         criteriaText: string;
@@ -66,7 +71,9 @@ export type ChatArtifact = ArtifactBase &
     | {
         type: "research";
         questions: string[];
-        state: "draft" | "unavailable";
+        state: "draft" | "unavailable" | "completed";
+        planId?: string;
+        stepId?: string;
         companies?: { name: string; website: string }[];
       }
     | {
@@ -113,6 +120,7 @@ export type ArtifactAction =
     }
   | { type: "export"; artifactId: string; format: ExportKind }
   | { type: "preview-file"; artifactId: string }
+  | { type: "start-screening" | "run-research"; artifactId: string }
   | { type: "choose-option"; artifactId: string; option: ResearchStep }
   | { type: "inspect-company"; artifactId: string; companyId: string }
   | { type: "stop-job"; artifactId: string; jobId: string };

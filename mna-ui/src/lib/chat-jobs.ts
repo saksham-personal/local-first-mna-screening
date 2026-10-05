@@ -217,6 +217,7 @@ function finishJob(
         backendRunId: job.result.backendRunId,
       });
       mirrorWorkspace(next);
+      void import("./import-pipeline").then(({ processStagedUploads }) => processStagedUploads(job.sessionId));
       parts.push(
         artifactPart(
           saveArtifact(

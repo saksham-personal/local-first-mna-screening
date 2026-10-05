@@ -115,7 +115,7 @@ test('edited non-insurance criteria generate both search queries from the approv
     return responses(tool, args);
   };
   await collect(() => edited, call, {}, edited);
-  assert.deepEqual(queries, [definition, 'veterinary appointment scheduling platform independent clinics']);
+  assert.deepEqual(queries, ['Veterinary appointment scheduling platform for independent clinics', 'veterinary appointment scheduling platform independent clinics']);
   assert.ok(queries.every(query => !/insurance/i.test(query)));
 });
 

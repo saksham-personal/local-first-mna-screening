@@ -116,15 +116,14 @@ function validArtifact(value: unknown): boolean {
         prepared.config.provider === prepared.provider &&
         prepared.config.mode === prepared.mode &&
         prepared.config.model === prepared.model &&
-        record(prepared.checkpoint) &&
-        typeof prepared.checkpoint.runId === "string" &&
-        typeof prepared.checkpoint.namespace === "string" &&
-        count(prepared.checkpoint.sequence) &&
-        prepared.checkpoint.sequence >= 1
+        ((prepared.schemaVersion === 2 && typeof prepared.planId === "string" && Array.isArray(prepared.jobs)) ||
+          (record(prepared.checkpoint) && typeof prepared.checkpoint.runId === "string" && typeof prepared.checkpoint.namespace === "string" && count(prepared.checkpoint.sequence) && prepared.checkpoint.sequence >= 1))
       );
     }
     case "file":
       return validFile(value.file);
+    case "data-table":
+      return Array.isArray(value.rows) && value.rows.every(record) && strings(value.columns) && (value.planId === undefined || typeof value.planId === "string");
     case "criteria":
       return (
         typeof value.criteriaText === "string" &&
@@ -179,7 +178,7 @@ function validArtifact(value: unknown): boolean {
     case "research":
       return (
         strings(value.questions) &&
-        ["draft", "unavailable"].includes(String(value.state)) &&
+        ["draft", "unavailable", "completed"].includes(String(value.state)) &&
         (value.companies === undefined ||
           (Array.isArray(value.companies) &&
             value.companies.every(

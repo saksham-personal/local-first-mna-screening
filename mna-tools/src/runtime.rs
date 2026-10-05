@@ -287,6 +287,12 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             false,
         ),
         (
+            "inspect_enrichment_files",
+            "Inspect uploaded sheet headers and identify PitchBook mapping, PitchBook data, and ROGO files without importing",
+            "data",
+            false,
+        ),
+        (
             "import_enrichment_files",
             "Detect and join user-supplied PitchBook and ROGO files with import metrics",
             "data",
@@ -329,6 +335,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ("rerank_candidates", "Reorder only the first 500 retrieved companies using a configured local reranker and preserve the remaining companies and source scores", "search", true),
         ("propose_prepared_plan", "Freeze a version-2 screening or question proposal with exact input rows, prompt, columns, deployment and batch size; requires later analyst approval and does not execute a provider", "execution", true),
         ("get_prepared_plan", "Read a frozen version-2 proposal, approval status and durable jobs; never infer that a prepared handoff has executed", "execution", false),
+        ("get_execution_progress", "Read lightweight plan and batch progress without resending frozen inputs; includes safe retry eligibility and source freshness", "execution", false),
         ("get_execution_job", "Read durable batch state, immutable index mapping, repair diagnostics and recorded provider status", "execution", false),
         ("get_model_assessments", "Read accepted provider assessments by prompt and batch, independently of retrieval scores and verified evidence", "execution", false),
         (
@@ -807,6 +814,7 @@ async fn admin(
             | "execution-response"
             | "execution-reconcile"
             | "execution-failure"
+            | "execution-retry"
             | "execution-dispatch"
             | "llmsuite-slot"
             | "llmsuite-consume"
@@ -845,6 +853,7 @@ async fn admin(
         "execution-response" => "record_execution_response",
         "execution-reconcile" => "reconcile_execution_job",
         "execution-failure" => "record_execution_failure",
+        "execution-retry" => "retry_execution_job",
         "llmsuite-slot" => "reserve_llmsuite_slot",
         "llmsuite-consume" => "consume_llmsuite_slot",
         "embedding-index" => "rebuild_embedding_index",
@@ -917,10 +926,10 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("review_evidence_claim", "/admin/evidence-review"),
         ("lease_execution_job", "/admin/execution-lease"), ("mark_execution_dispatch", "/admin/execution-mark"),
         ("record_execution_response", "/admin/execution-response"), ("reserve_llmsuite_slot", "/admin/llmsuite-slot"),
-        ("reconcile_execution_job", "/admin/execution-reconcile"), ("record_execution_failure", "/admin/execution-failure"),
+        ("reconcile_execution_job", "/admin/execution-reconcile"), ("record_execution_failure", "/admin/execution-failure"), ("retry_execution_job", "/admin/execution-retry"),
         ("consume_llmsuite_slot", "/admin/llmsuite-consume"), ("dispatch_execution_job", "/admin/execution-dispatch"),
         ("rebuild_embedding_index", "/admin/embedding-index"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"dispatch_execution_job"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name))}})).collect();
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name))}})).collect();
     tools
 }
 

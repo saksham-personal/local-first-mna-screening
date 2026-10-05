@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -24,6 +24,7 @@ import Tooltip from "../Tooltip";
 import { useTheme } from "../lib/theme-store";
 import { renderDiagram } from "../lib/mermaid-renderer";
 import "./artifacts.css";
+const DataTable = lazy(() => import("./DataTable"));
 
 type Props = {
   artifact: ChatArtifact;
@@ -272,7 +273,7 @@ function ArtifactBody({ artifact, onAction }: Props) {
         <>
           <div className="ca-criteria-decision">
             <span className="ca-state-dot ca-state-approved" />
-            Approved setup · no provider request sent
+            Approved input snapshot · executed: false
           </div>
           <p className="ca-note">
             {saved.provider === "llm_suite" ? "LLMSuite" : "M365 Copilot"} ·{" "}
@@ -293,8 +294,9 @@ function ArtifactBody({ artifact, onAction }: Props) {
           </details>
           <p className="ca-note">
             Input data and the index-to-company mapping are saved with this
-            setup. Changes require a new preview and approval.
+            setup. Changes require a new preview and approval. Provider execution is tracked separately in Background screening.
           </p>
+          <div className="ca-action-row"><button type="button" className="ca-primary-action" onClick={() => onAction({ type: "start-screening", artifactId: artifact.id })}>Start in background</button></div>
           <button
             type="button"
             className="ca-secondary-action"
@@ -312,6 +314,8 @@ function ArtifactBody({ artifact, onAction }: Props) {
         </>
       );
     }
+    case "data-table":
+      return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}<Suspense fallback={<p className="ca-note" role="status">Opening table…</p>}><DataTable rows={artifact.rows} columns={artifact.columns} label={artifact.title} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} /></Suspense></>;
     case "file": {
       const file = artifact.file;
       const href = `/api/files/${encodeURIComponent(file.id)}`;
@@ -558,6 +562,7 @@ function ArtifactBody({ artifact, onAction }: Props) {
               <li key={`${index}-${question}`}>{question}</li>
             ))}
           </ol>
+          <button type="button" className="ca-primary-action" onClick={() => onAction({ type: "run-research", artifactId: artifact.id })}><Search size={14} />Review queries and companies</button>
         </>
       );
     case "memory":

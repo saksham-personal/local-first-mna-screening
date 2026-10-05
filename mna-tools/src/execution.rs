@@ -116,6 +116,14 @@ struct FailureArgs {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct RetryArgs {
+    job_id: String,
+    attempt: i64,
+    reason: String,
+    analyst_requested: bool,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct JobIdArgs {
     job_id: String,
 }
@@ -187,7 +195,9 @@ impl ExecutionService {
             "record_execution_response" => self.record(parse(args)?),
             "reconcile_execution_job" => self.reconcile(parse(args)?),
             "record_execution_failure" => self.failure(parse(args)?),
+            "retry_execution_job" => self.retry(parse(args)?),
             "get_execution_job" => self.get_job(parse(args)?),
+            "get_execution_progress" => self.progress(parse(args)?),
             "get_model_assessments" => self.assessments(parse(args)?),
             "reserve_llmsuite_slot" => {
                 let a: SlotArgs = parse(args)?;
@@ -542,12 +552,61 @@ impl ExecutionService {
             let state=match a.kind.as_str(){"rate_limited"=>"WAITING_RATE","ambiguous"=>"AMBIGUOUS",_=>"FAILED"};
             let next=if state=="WAITING_RATE" {Some((Utc::now()+Duration::seconds(a.retry_after_seconds.unwrap_or(60).clamp(1,3600) as i64)).to_rfc3339())}else{None};
             tx.execute("UPDATE execution_jobs SET state=?,error_text=?,next_eligible_at=?,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE job_id=?",params![state,a.reason,next,timestamp(),a.job_id])?;
+            if a.kind=="rejected" {
+                tx.execute("INSERT INTO execution_outbox(event_id,plan_id,job_id,kind,payload_json,created_at) VALUES(?,?,?,'JOB_FAILED_REJECTED',?,?)",params![id("EO"),j.plan_id,a.job_id,encoded(&json!({"attempt":j.attempt,"reason":a.reason}))?,timestamp()])?;
+            }
             tx.commit()?;Ok(json!({"job_id":a.job_id,"state":state,"next_eligible_at":next,"executed":true,"accepted":false}))
         })
     }
 
+    fn retry(&self, a: RetryArgs) -> Result<Value> {
+        bounded("reason", &a.reason, 2000)?;
+        if !a.analyst_requested {
+            return Err(Error::Validation(
+                "explicit analyst retry request is required".into(),
+            ));
+        }
+        self.store.with_connection(|conn| {
+            let tx=conn.transaction()?;
+            let j=load_job(&tx,&a.job_id)?;
+            if j.state!="FAILED" {return Err(Error::Conflict(format!("job cannot be retried from {}",j.state)));}
+            if j.attempt!=a.attempt {return Err(Error::Conflict("retry refers to a different provider attempt".into()));}
+            let p=load_plan(&tx,&j.plan_id)?;
+            if p.status!="APPROVED" {return Err(Error::Conflict("plan is not approved".into()));}
+            if let Err(e)=require_fresh(&tx,&p) {mark_stale(&tx,&p.plan_id,&j.job_id)?;tx.commit()?;return Err(e);}
+            // Only a provider's definitive rejected response is safe to send anew.
+            // Parse failures and reconciled ambiguous attempts remain quarantined.
+            let rejected:i64=tx.query_row("SELECT COUNT(*) FROM execution_outbox WHERE job_id=? AND kind='JOB_FAILED_REJECTED' AND json_extract(payload_json,'$.attempt')=?",params![a.job_id,a.attempt],|r|r.get(0))?;
+            if rejected!=1 || j.response_hash.is_some() || j.repair_attempt>=2 {
+                return Err(Error::Conflict("failure has no definitive rejected receipt; reconcile or approve a new plan".into()));
+            }
+            let now=timestamp();
+            tx.execute("UPDATE execution_jobs SET state='READY',lease_token=NULL,lease_expires_at=NULL,next_eligible_at=NULL,error_text=NULL,updated_at=? WHERE job_id=?",params![now,a.job_id])?;
+            tx.execute("INSERT INTO execution_outbox(event_id,plan_id,job_id,kind,payload_json,created_at) VALUES(?,?,?,'JOB_RETRY',?,?)",params![id("EO"),j.plan_id,a.job_id,encoded(&json!({"expected_attempt":a.attempt,"reason":a.reason,"analyst_requested":true}))?,now])?;
+            tx.commit()?;
+            Ok(json!({"job_id":a.job_id,"state":"READY","previous_attempt":a.attempt,"executed":false,"automatically_redispatched":false}))
+        })
+    }
+
     fn get_job(&self, a: JobIdArgs) -> Result<Value> {
-        self.store.with_connection(|conn|{let j=load_job(conn,&a.job_id)?;Ok(json!({"job_id":j.job_id,"plan_id":j.plan_id,"run_id":j.run_id,"state":j.state,"payload":j.payload,"input_hash":j.input_hash,"attempt":j.attempt,"repair_attempt":j.repair_attempt,"response_hash":j.response_hash,"raw_response":j.raw_response,"repair_prompt":j.repair_prompt,"error":j.error_text,"lease_expires_at":j.lease_expires_at,"next_eligible_at":j.next_eligible_at,"dispatched_at":j.dispatched_at,"executed":j.attempt>0,"accepted":j.state=="SUCCEEDED"}))})
+        self.store.with_connection(|conn|{let j=load_job(conn,&a.job_id)?;
+            let retryable = j.state=="FAILED" && j.response_hash.is_none() && j.repair_attempt<2 && conn.query_row("SELECT COUNT(*) FROM execution_outbox WHERE job_id=? AND kind='JOB_FAILED_REJECTED' AND json_extract(payload_json,'$.attempt')=?",params![a.job_id,j.attempt],|r|r.get::<_,i64>(0))?==1 && load_plan(conn,&j.plan_id).is_ok_and(|p|p.status=="APPROVED" && require_fresh(conn,&p).is_ok());
+            Ok(json!({"job_id":j.job_id,"plan_id":j.plan_id,"run_id":j.run_id,"state":j.state,"payload":j.payload,"input_hash":j.input_hash,"attempt":j.attempt,"repair_attempt":j.repair_attempt,"response_hash":j.response_hash,"raw_response":j.raw_response,"repair_prompt":j.repair_prompt,"error":j.error_text,"lease_expires_at":j.lease_expires_at,"next_eligible_at":j.next_eligible_at,"dispatched_at":j.dispatched_at,"executed":j.attempt>0,"accepted":j.state=="SUCCEEDED","retryable":retryable}))})
+    }
+
+    fn progress(&self, a: PlanIdArgs) -> Result<Value> {
+        self.store.with_connection(|conn| {
+            let p=load_plan(conn,&a.plan_id)?;
+            let fresh=p.status=="APPROVED" && require_fresh(conn,&p).is_ok();
+            let mut stmt=conn.prepare("SELECT job_id,ordinal,state,input_hash,attempt,repair_attempt,error_text,next_eligible_at,response_hash,lease_expires_at FROM execution_jobs WHERE plan_id=? ORDER BY ordinal")?;
+            let mut jobs=Vec::new();
+            for row in stmt.query_map([&a.plan_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,i64>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,Option<String>>(9)?)))? {
+                let(job_id,ordinal,state,input_hash,attempt,repair,error,next,response_hash,lease_expires_at)=row?;
+                let retryable=fresh && state=="FAILED" && response_hash.is_none() && repair<2 && conn.query_row("SELECT COUNT(*) FROM execution_outbox WHERE job_id=? AND kind='JOB_FAILED_REJECTED' AND json_extract(payload_json,'$.attempt')=?",params![job_id,attempt],|r|r.get::<_,i64>(0))?==1;
+                jobs.push(json!({"job_id":job_id,"plan_id":a.plan_id,"ordinal":ordinal,"state":state,"input_hash":input_hash,"attempt":attempt,"error":error,"next_eligible_at":next,"retryable":retryable,"lease_expires_at":lease_expires_at,"executed":attempt>0}));
+            }
+            Ok(json!({"plan_id":a.plan_id,"run_id":p.run_id,"digest":p.digest,"status":p.status,"fresh":fresh,"spec":{"provider":p.spec["provider"],"mode":p.spec["mode"],"deployment":p.spec["deployment"]},"jobs":jobs,"executed":false}))
+        })
     }
 
     fn assessments(&self, a: AssessmentsArgs) -> Result<Value> {
@@ -852,7 +911,9 @@ pub fn input_schema(tool: &str) -> Option<Value> {
         "record_execution_response" => schema!(ResponseArgs),
         "reconcile_execution_job" => schema!(ReconcileArgs),
         "record_execution_failure" => schema!(FailureArgs),
+        "retry_execution_job" => schema!(RetryArgs),
         "get_execution_job" => schema!(JobIdArgs),
+        "get_execution_progress" => schema!(PlanIdArgs),
         "get_model_assessments" => schema!(AssessmentsArgs),
         "reserve_llmsuite_slot" => schema!(SlotArgs),
         "consume_llmsuite_slot" => schema!(SlotArgs),
@@ -902,5 +963,118 @@ mod rate_tests {
                 Ok(())
             })
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    fn failed_job() -> (Store, ExecutionService, String) {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .execute(
+                "create_run",
+                &json!({"run_id":"R","objective":"Question","original_criteria":{}}),
+            )
+            .unwrap();
+        let service = ExecutionService::new(store.clone());
+        let plan=service.execute("propose_prepared_plan",&json!({"run_id":"R","mode":"question","provider":"llm_suite","deployment":"fixture","prompt":"Explain","question":"What is known?"})).unwrap();
+        service.execute("approve_prepared_plan",&json!({"plan_id":plan["plan_id"],"digest":plan["digest"],"approved_by":"Analyst","approval_key":"approval"})).unwrap();
+        let job = service
+            .execute("get_prepared_plan", &json!({"plan_id":plan["plan_id"]}))
+            .unwrap()["jobs"][0]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        store.with_connection(|conn| {
+            conn.execute("UPDATE execution_jobs SET state='FAILED',attempt=1,dispatched_at=?,error_text='HTTP 400' WHERE job_id=?",params![timestamp(),job])?;
+            conn.execute("INSERT INTO execution_outbox(event_id,plan_id,job_id,kind,payload_json,created_at) VALUES(?,?,?,'JOB_FAILED_REJECTED',?,?)",params![id("EO"),plan["plan_id"].as_str(),job,encoded(&json!({"attempt":1,"reason":"HTTP 400"}))?,timestamp()])?;
+            Ok(())
+        }).unwrap();
+        (store, service, job)
+    }
+
+    #[test]
+    fn rejected_attempt_can_be_explicitly_requeued_without_changing_rate_slots() {
+        let (store, service, job) = failed_job();
+        let result=service.execute("retry_execution_job",&json!({"job_id":job,"attempt":1,"reason":"Analyst requested retry","analyst_requested":true})).unwrap();
+        assert_eq!(result["state"], "READY");
+        assert_eq!(
+            service
+                .execute("get_execution_job", &json!({"job_id":job}))
+                .unwrap()["attempt"],
+            1
+        );
+        let (slots, retries): (i64, i64) = store
+            .with_connection(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM llmsuite_slots", [], |r| r.get(0))?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM execution_outbox WHERE job_id=? AND kind='JOB_RETRY'",
+                        [&job],
+                        |r| r.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!((slots, retries), (0, 1));
+        assert!(service
+            .execute(
+                "retry_execution_job",
+                &json!({"job_id":job,"attempt":1,"reason":"Again","analyst_requested":true})
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn retry_rejects_ambiguous_stale_mismatched_and_unrequested_attempts() {
+        let (store, service, job) = failed_job();
+        assert!(service
+            .execute(
+                "retry_execution_job",
+                &json!({"job_id":job,"attempt":1,"reason":"No","analyst_requested":false})
+            )
+            .is_err());
+        assert!(service
+            .execute(
+                "retry_execution_job",
+                &json!({"job_id":job,"attempt":0,"reason":"Wrong attempt","analyst_requested":true})
+            )
+            .is_err());
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE execution_jobs SET state='AMBIGUOUS' WHERE job_id=?",
+                    [&job],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(service
+            .execute(
+                "retry_execution_job",
+                &json!({"job_id":job,"attempt":1,"reason":"Unsafe","analyst_requested":true})
+            )
+            .is_err());
+        store.with_connection(|conn| {conn.execute("UPDATE execution_jobs SET state='FAILED' WHERE job_id=?",[&job])?;conn.execute("UPDATE prepared_plans SET status='STALE' WHERE plan_id=(SELECT plan_id FROM execution_jobs WHERE job_id=?)",[&job])?;Ok(())}).unwrap();
+        assert!(service
+            .execute(
+                "retry_execution_job",
+                &json!({"job_id":job,"attempt":1,"reason":"Stale","analyst_requested":true})
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn quarantined_parse_failure_cannot_be_requeued_as_provider_rejection() {
+        let (store, service, job) = failed_job();
+        store.with_connection(|conn| {conn.execute("UPDATE execution_jobs SET response_hash='quarantined',repair_attempt=2 WHERE job_id=?",[&job])?;Ok(())}).unwrap();
+        assert!(service
+            .execute(
+                "retry_execution_job",
+                &json!({"job_id":job,"attempt":1,"reason":"Unsafe","analyst_requested":true})
+            )
+            .is_err());
     }
 }

@@ -174,7 +174,7 @@ export async function stageUploads(
   const parsed = await staged.json();
   if (!staged.ok)
     throw new Error(parsed.error ?? "Files could not be uploaded.");
-  const stagedFiles = parsed.files as StagedFile[];
+  const stagedFiles = (parsed.files as StagedFile[]).map(file => ({ ...file, ...(file.importable ? { stagingStatus: "checking" as const, stagingMessage: "Identifying spreadsheet headers…" } : {}) }));
   const artifacts = stagedFiles.map((file) =>
     saveArtifact(options.sessionId, {
       ...artifactBase(file.name),
@@ -187,7 +187,11 @@ export async function stageUploads(
     ...state,
     files: [...state.files, ...stagedFiles],
   }));
-  if (options.workspaceMessage) {
+  if (stagedFiles.some(file => file.importable)) {
+    window.dispatchEvent(new CustomEvent("screening:files-staged", { detail: { sessionId: options.sessionId } }));
+    void import("./import-pipeline").then(({ processStagedUploads }) => processStagedUploads(options.sessionId));
+  }
+  if (options.workspaceMessage && stagedFiles.some(file => !file.importable)) {
     const messageId = crypto.randomUUID();
     updateChatState(options.sessionId, (state) => ({
       ...state,
@@ -204,7 +208,7 @@ export async function stageUploads(
       text: `Added ${stagedFiles.length} file${stagedFiles.length === 1 ? "" : "s"} in the workspace.`,
       content: [
         { type: "text", text: "Added files in the workspace." },
-        ...artifacts.map((artifact) => ({
+        ...artifacts.filter(artifact => artifact.type !== "file" || !artifact.file.importable).map((artifact) => ({
           type: "data",
           name: "screening-artifact",
           data: { artifactId: artifact.id },
@@ -226,45 +230,11 @@ export async function uploadEnrichmentFiles(
     ...options,
     workspaceMessage: true,
   });
-  const fileArtifacts = getChatState(options.sessionId).artifacts.filter(
-    (a) =>
-      a.type === "file" && stagedFiles.some((file) => file.id === a.file.id),
-  );
-  const args = { run_id: runId, files: stagedFiles.map((file) => file.id) };
-  const receipt = sessionStore.startTool("import_enrichment_files", args, {
-    sessionId: options.sessionId,
-    origin: "workspace",
-    title: "Import company data",
-  });
-  try {
-    const result = await callTool("import_enrichment_files", args, {
-      signal: options.signal,
-    });
-    sessionStore.finishTool(receipt, result);
-    fileArtifacts.forEach((artifact) =>
-      patchArtifact(options.sessionId, artifact.id, {
-        importStatus: "Imported",
-      }),
-    );
-    const summary = `Imported ${files.length} file${files.length === 1 ? "" : "s"}: ${result.mapping_unique_companies ?? 0} PitchBook IDs, ${result.pb_unique_companies ?? 0} PitchBook records, ${result.rogo_unique_companies ?? 0} ROGO records. ${Number(result.pb_unmatched ?? 0) + Number(result.rogo_unmatched ?? 0)} rows could not be matched.`;
-    return {
-      files: files.map((file) => ({ name: file.name, status: "Imported" })),
-      summary,
-    };
-  } catch (error) {
-    fileArtifacts.forEach((artifact) =>
-      patchArtifact(options.sessionId, artifact.id, {
-        importStatus: options.signal?.aborted
-          ? "Import stopped"
-          : "Import failed",
-      }),
-    );
-    sessionStore.finishTool(
-      receipt,
-      null,
-      options.signal?.aborted ? "cancelled" : "error",
-      error instanceof Error ? error.message : String(error),
-    );
-    throw error;
-  }
+  await (await import("./import-pipeline")).processStagedUploads(options.sessionId);
+  const latest = getChatState(options.sessionId);
+  const imported = latest.files.filter(file => stagedFiles.some(item => item.id === file.id));
+  const errors = imported.filter(file => file.stagingStatus === "error" || file.stagingStatus === "unrecognized");
+  if (errors.length) throw new Error(errors.map(file => `${file.name}: ${file.stagingMessage}`).join("\n"));
+  if (latest.backendRunId !== runId) throw new Error("The screening changed. Open the original screening to view its files.");
+  return { files: imported.map(file => ({ name: file.name, status: file.stagingMessage ?? "Staged" })), summary: "Company context refreshed. Use /data to view the current table." };
 }

@@ -1,18 +1,21 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, access } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, access, readdir, stat, rename } from 'node:fs/promises';
 import { dirname, resolve, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJobRegistry } from './jobs.mjs';
 import { createDurableScreeningPreparation } from './durable-screening.mjs';
+import { createBackgroundScreening } from './background-screening.mjs';
+import { createBingResearch } from './bing-research.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = 'http://127.0.0.1:17318';
-const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve' };
+const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve' };
 const allowed = new Set(['get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
+for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research']) allowed.add(tool);
 const origins = new Set(['http://127.0.0.1:4173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://localhost:5173']);
 const hosts = new Set(['127.0.0.1:7319', 'localhost:7319', '127.0.0.1:4173', 'localhost:4173', '127.0.0.1:5173', 'localhost:5173']);
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -91,8 +94,8 @@ async function sendStagedFile(res, record) {
 
 async function rustCall(apiKey, analystKey, staged, tool, args, analystApproved, signal) {
   if (typeof tool !== 'string' || (!Object.hasOwn(admin, tool) && !allowed.has(tool))) throw new Error('This tool is not enabled in the local example.');
-  if ((tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan') && analystApproved !== true) throw new Error('Approve the screening setup before changing a Rust screening run.');
-  if (tool === 'import_company_files' || tool === 'import_enrichment_files') {
+  if ((tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
+  if (tool === 'import_company_files' || tool === 'import_enrichment_files' || tool === 'inspect_enrichment_files') {
     if (!Array.isArray(args.files) || !args.files.length || !args.files.every(file => typeof file === 'string' && staged.has(file))) throw new Error('Select files through the upload controls.');
   }
   const response = await fetch(`${rustAddress}${admin[tool] ?? '/tools/call'}`, {
@@ -115,13 +118,40 @@ export async function startBridge() {
   await writeFile(seedPath, await readFile(resolve(root, 'examples/mid.csv')));
   const staged = new Set([seedId]);
   const stagedFiles = new Map();
+  const fileManifest = resolve(data, 'uploaded-files.json');
+  let savedFiles = [];
+  try { savedFiles = JSON.parse(await readFile(fileManifest, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!Array.isArray(savedFiles)) throw new Error('The saved upload index is unreadable. Original files are retained.');
+  // Recover older uploads that predate the durable metadata index. Names still
+  // live in the conversation; only UUID-named files under this import directory are eligible.
+  for (const id of await readdir(importRoot)) {
+    if (!/^[0-9a-f-]{36}\.(?:pdf|docx|txt|csv|xlsx)$/i.test(id)) continue;
+    const descriptor = fileKinds.get(extname(id).toLowerCase());
+    const path = resolve(importRoot, id), info = await stat(path);
+    if (!info.isFile() || !info.size || info.size > MAX_FILE_BYTES || !descriptor) continue;
+    const saved = savedFiles.find(file => file?.id === id);
+    const name = typeof saved?.name === 'string' ? basename(saved.name) : id;
+    staged.add(id);
+    stagedFiles.set(id, { id, name, bytes: info.size, path, ...descriptor });
+  }
+  let manifestQueue = Promise.resolve();
+  const saveFiles = () => {
+    manifestQueue = manifestQueue.catch(() => {}).then(async () => {
+      const temp = `${fileManifest}.${randomUUID()}.tmp`;
+      await writeFile(temp, JSON.stringify([...stagedFiles.values()].map(({ id, name }) => ({ id, name }))), { flag: 'wx' });
+      await rename(temp, fileManifest);
+    });
+    return manifestQueue;
+  };
   const defaultBinary = resolve(root, '../mna-tools/target/x86_64-pc-windows-gnu/release/mna-tools.exe');
   const binary = process.env.SCREENING_RUST_BINARY || defaultBinary;
   await access(binary).catch(() => { throw new Error(`Rust executable is missing. Build mna-tools or set SCREENING_RUST_BINARY. Expected: ${binary}`); });
   const apiKey = randomBytes(32).toString('hex');
   const analystKey = randomBytes(32).toString('hex');
-  const env = { ...process.env, MNA_ENABLE_EXTERNAL: 'false', MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_BIND: '127.0.0.1:17318', MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
-  for (const key of Object.keys(env)) if (/(?:OPENAI|ANTHROPIC|AZURE_OPENAI|GOOGLE|GEMINI|COHERE|BING|M365|ISCC|MEILI|LLMSUITE|PROVIDER_(?:URL|ENDPOINT|API_KEY))/i.test(key)) delete env[key];
+  const controllerKey = randomBytes(32).toString('hex');
+  const externalEnabled = process.env.SCREENING_ENABLE_EXTERNAL === 'true';
+  const env = { ...process.env, MNA_ENABLE_EXTERNAL: String(externalEnabled), MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_CONTROLLER_KEY: controllerKey, MNA_BIND: '127.0.0.1:17318', MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
+  for (const key of Object.keys(env)) if (/(?:OPENAI|ANTHROPIC|AZURE_OPENAI|GOOGLE|GEMINI|COHERE|BING|M365|ISCC|MEILI|LLMSUITE|PROVIDER_(?:URL|ENDPOINT|API_KEY))/i.test(key) && !(externalEnabled && /^MNA_(?:LLMSUITE|M365|BING|ISCC)_/.test(key))) delete env[key];
   const rust = spawn(binary, [], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let launchError = '';
   rust.on('error', error => { launchError = error.message; });
@@ -144,13 +174,29 @@ export async function startBridge() {
   const call = (tool, args, analystApproved, signal) => rustCall(apiKey, analystKey, staged, tool, args, analystApproved, signal);
   const jobs = createJobRegistry({ call, seedFile: seedId });
   const screening = createDurableScreeningPreparation({ call });
+  const providerReady = (provider) => {
+    const prefix = provider === 'llm_suite' ? 'LLMSUITE' : provider === 'copilot' ? 'M365' : 'BING';
+    return externalEnabled && Boolean(env[`MNA_${prefix}_ENDPOINT`] && env[`MNA_${prefix}_TOKEN`]);
+  };
+  const controllerCall = async (tool, args) => {
+    const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry' }[tool];
+    if (!path) return call(tool, args);
+    const response = await fetch(`${rustAddress}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'X-MNA-Controller-Key': controllerKey }, body: JSON.stringify(args) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message ?? result?.message ?? result?.error ?? `Provider controller failed (${response.status})`);
+    return result;
+  };
+  const background = createBackgroundScreening({ call: controllerCall, dispatch: args => controllerCall('dispatch_execution_job', args), connected: providerReady, storeFile: resolve(data, 'background-runs.json') });
+  await background.init();
+  const research = createBingResearch({ call, connected: () => providerReady('bing') });
   const server = createServer(async (req, res) => {
     const origin = req.headers.origin;
     if (origin && !origins.has(origin)) return respond(res, 403, { error: 'This local endpoint accepts the Screening UI only.' });
     if (!hosts.has(req.headers.host ?? '')) return respond(res, 403, { error: 'This local endpoint accepts localhost requests only.' });
     const url = new URL(req.url ?? '/', 'http://127.0.0.1:7319');
     try {
-      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, engine: 'Rust', providers: false });
+      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
+      if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
       if (req.method === 'GET' && url.pathname === '/api/jobs') return respond(res, 200, { jobs: jobs.list() });
       const jobMatch = url.pathname.match(/^\/api\/jobs\/([A-Za-z0-9-]+)$/);
       if (req.method === 'GET' && jobMatch) {
@@ -170,6 +216,13 @@ export async function startBridge() {
       }
       if (req.method !== 'POST' || !req.headers['content-type']?.startsWith('application/json')) return respond(res, 400, { error: 'Use a JSON request.' });
       const input = await body(req);
+      const backgroundMatch = url.pathname.match(/^\/api\/background-runs\/(start|pause|resume|retry|stage)$/);
+      if (backgroundMatch) {
+        const result = await background[backgroundMatch[1]](input);
+        return respond(res, 200, backgroundMatch[1] === 'stage' ? result : { job: result });
+      }
+      const researchMatch = url.pathname.match(/^\/api\/research\/(preview|run)$/);
+      if (researchMatch) return respond(res, 200, await research[researchMatch[1]](input));
       const screeningMatch = url.pathname.match(/^\/api\/screening\/(catalog|preview|approve)$/);
       if (screeningMatch) {
         const controller = new AbortController();
@@ -195,6 +248,7 @@ export async function startBridge() {
           stagedFiles.set(id, record);
           files.push({ id, name, bytes: bytes.length, kind: descriptor.kind, parseKind: descriptor.parseKind, importable: descriptor.importable, ...(extension === '.txt' ? { excerpt: textExcerpt(bytes) } : {}) });
         }
+        await saveFiles();
         return respond(res, 200, { files });
       }
       if (url.pathname !== '/api/tools') return respond(res, 404, { error: 'Endpoint not found.' });
@@ -212,5 +266,5 @@ export async function startBridge() {
     rust.kill();
     throw error;
   }
-  return { close: () => { server.close(); rust.kill(); }, rust, jobs };
+  return { close: () => { background.close(); server.close(); rust.kill(); }, rust, jobs };
 }

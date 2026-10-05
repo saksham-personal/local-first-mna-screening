@@ -1,4 +1,6 @@
 import type { AssistantContext, WorkspaceAction } from "./assistant-contract";
+import { discoveryDefinition, discoveryQueries } from './discovery-query.mjs';
+export { qualitativeQuery } from './discovery-query.mjs';
 import {
   callTool,
   companyFromRust,
@@ -16,28 +18,6 @@ export type WorkflowEvent =
       message: string;
     };
 
-export function qualitativeQuery(definition: string): string {
-  const stop = new Set(
-    "a an and are as at be business by central company companies directly for from include includes is it must of only or product products pure sold that the their this to used whose with workflow workflows exclude excluded".split(
-      " ",
-    ),
-  );
-  // Search only the approved business description; never add an unrelated industry.
-  const positive = definition.split(/\bexclude\b/i)[0];
-  const words = positive.match(/[a-zA-Z][a-zA-Z0-9-]{2,}/g) ?? [];
-  return (
-    [
-      ...new Set(
-        words
-          .map((word) => word.toLowerCase())
-          .filter((word) => !stop.has(word)),
-      ),
-    ]
-      .slice(0, 12)
-      .join(" ") || definition
-  );
-}
-
 /** Real Rust calls over a local bridge. The dataset is fictional; the results are not simulated. */
 export async function* runScreeningExample(
   initial: AssistantContext,
@@ -49,6 +29,7 @@ export async function* runScreeningExample(
   },
 ): AsyncGenerator<WorkflowEvent, void, void> {
   const call = options.call ?? callTool;
+  const business = discoveryDefinition(initial.definition);
   const guard = () => {
     const current = options.current();
     if (
@@ -89,6 +70,9 @@ export async function* runScreeningExample(
         original_criteria: { text: initial.mandate },
         initial_profile: {
           business_definition: initial.definition,
+          core_business_query: business.positive,
+          core_business_criteria: [business.positive],
+          core_business_exclusions: business.exclusions,
           search_policy: "qualitative core business only",
           unused_search_dimensions: [
             "financial / size",
@@ -117,17 +101,19 @@ export async function* runScreeningExample(
       true,
     );
   }
-  yield* step("get_active_screening_profile", { run_id: runId });
+  const profile = yield* step("get_active_screening_profile", { run_id: runId });
+  const content = profile.content && typeof profile.content === 'object' ? profile.content as ToolResult : {};
+  const exclusions = Array.isArray(content.core_business_exclusions)
+    ? content.core_business_exclusions.filter((value: unknown) => typeof value === 'string') : [];
   const matches = new Map<string, SearchRow>();
-  for (const query of [
-    ...new Set([initial.definition, qualitativeQuery(initial.definition)]),
-  ]) {
+  for (const query of discoveryQueries(initial.definition)) {
     const found = yield* step("search_mid", {
       run_id: runId,
       query,
       mode: "lexical",
-      limit: 100,
+      limit: 1000,
       prefer_meilisearch: false,
+      ...(exclusions.length ? { filters: { exclude_keywords: exclusions } } : {}),
     });
     const rows = searchRows(found);
     for (const row of rows)

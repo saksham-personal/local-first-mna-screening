@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { discoveryDefinition, discoveryQueries } from '../src/lib/discovery-query.mjs';
+export { qualitativeQuery } from '../src/lib/discovery-query.mjs';
 
 const MAX_SESSION_ID = 128;
 const MAX_TITLE = 500;
@@ -83,27 +85,6 @@ function isAbort(error, signal) {
   return (
     signal.aborted ||
     (error && typeof error === "object" && error.name === "AbortError")
-  );
-}
-
-export function qualitativeQuery(definition) {
-  const stop = new Set(
-    "a an and are as at be business by central company companies directly for from include includes is it must of only or product products pure sold that the their this to used whose with workflow workflows exclude excluded".split(
-      " ",
-    ),
-  );
-  const positive = definition.split(/\bexclude\b/i)[0];
-  const words = positive.match(/[a-zA-Z][a-zA-Z0-9-]{2,}/g) ?? [];
-  return (
-    [
-      ...new Set(
-        words
-          .map((word) => word.toLowerCase())
-          .filter((word) => !stop.has(word)),
-      ),
-    ]
-      .slice(0, 12)
-      .join(" ") || definition
   );
 }
 
@@ -204,6 +185,7 @@ export function createJobRegistry(options) {
   async function execute(job) {
     const { input, controller } = job;
     const { signal } = controller;
+    const business = discoveryDefinition(input.definition);
 
     async function tool(name, args, analystApproved = false) {
       guard(signal);
@@ -248,8 +230,9 @@ export function createJobRegistry(options) {
           original_criteria: { text: input.criteriaText },
           initial_profile: {
             business_definition: input.definition,
-            core_business_query: input.definition,
-            core_business_criteria: [input.definition],
+            core_business_query: business.positive,
+            core_business_criteria: [business.positive],
+            core_business_exclusions: business.exclusions,
             search_policy: "qualitative core business only",
             unused_search_dimensions: [
               "financial / size",
@@ -285,15 +268,16 @@ export function createJobRegistry(options) {
       );
 
     const matches = new Map();
-    for (const query of [
-      ...new Set([input.definition, qualitativeQuery(input.definition)]),
-    ]) {
+    const exclusions = Array.isArray(profile.content?.core_business_exclusions)
+      ? profile.content.core_business_exclusions.filter(value => typeof value === 'string') : [];
+    for (const query of discoveryQueries(input.definition)) {
       const found = await tool("search_mid", {
         run_id: runId,
         query,
         mode: "lexical",
-        limit: 100,
+        limit: 1000,
         prefer_meilisearch: false,
+        ...(exclusions.length ? { filters: { exclude_keywords: exclusions } } : {}),
       });
       const rows = searchRows(found);
       for (const row of rows)

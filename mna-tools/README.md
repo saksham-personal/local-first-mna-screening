@@ -37,7 +37,7 @@ Every route except `/health` requires `Authorization: Bearer <MNA_API_KEY>`. Ana
 | `POST /admin/evidence-review` | Verify/reject a claim with analyst reason |
 | Controller execution routes | Leases, dispatch, responses, reconciliation and shared LLMSuite slots; see [execution contract](docs/EXECUTION_CONTRACT.md) |
 
-The service exposes **63 agent tools and 18 privileged operations**. Unknown arguments fail. HTTP bodies are bounded at 1 MiB; at most eight tool calls execute concurrently. Batch calls are not one transaction. Schemas are in [tool-catalog.json](tool-catalog.json) and [admin-tool-catalog.json](admin-tool-catalog.json). Export them without starting a server:
+The service exposes **65 agent tools and 19 privileged operations**. Unknown arguments fail. HTTP bodies are bounded at 1 MiB; at most eight tool calls execute concurrently. Batch calls are not one transaction. Schemas are in [tool-catalog.json](tool-catalog.json) and [admin-tool-catalog.json](admin-tool-catalog.json). Export them without starting a server:
 
 ```powershell
 mna-tools.exe --print-tool-schemas

@@ -177,6 +177,28 @@ async function reply(
   for await (const update of run as AsyncIterable<unknown>) output.push(update);
   return output;
 }
+test("/data reads current source context without revising criteria or starting another search", async () => {
+  const id = session();
+  reviseCriteria(id, "Insurance software", "Insurance software", []);
+  updateChatState(id, { backendRunId: "run-data", approvedRevision: getChatState(id).revision });
+  const revision = getChatState(id).revision, prior = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body)); calls.push(request.tool);
+    return new Response(JSON.stringify({ ok: true, result: { total: 1, next_cursor: null, rows: [{ pk: "A-1", PBId: "PB-1", sources: { MID: { "Company Name": "MID name", Website: "mid.example", Description: "MID business" }, ISCC: {}, PB: { PB_Name: "PB name", PB_Website: "", PB_Description: "PB business" }, ROGO: { Notes: "Extra context" } }, provenance: {} }] } }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    await reply(id, [user("current-data", "/data")]);
+    const table = getChatState(id).artifacts.find(a => a.type === "data-table");
+    assert.ok(table?.type === "data-table");
+    assert.equal(table.rows[0]["Company Name"], "PB name");
+    assert.equal(table.rows[0].Website, "mid.example");
+    assert.equal(table.rows[0]["ROGO: Notes"], "Extra context");
+    assert.equal(getChatState(id).revision, revision);
+    assert.equal(approved(getChatState(id)), true);
+    assert.deepEqual(calls, ["get_candidate_source_data"]);
+  } finally { globalThis.fetch = prior; }
+});
 function completed(
   id: string,
   revision: number,

@@ -584,6 +584,38 @@
   },
   {
     "controller_only": true,
+    "endpoint": "/admin/execution-retry",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "analyst_requested": {
+          "type": "boolean"
+        },
+        "attempt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "attempt",
+        "reason",
+        "analyst_requested"
+      ],
+      "title": "RetryArgs",
+      "type": "object"
+    },
+    "name": "retry_execution_job"
+  },
+  {
+    "controller_only": true,
     "endpoint": "/admin/llmsuite-consume",
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",

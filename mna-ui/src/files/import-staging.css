@@ -1,0 +1,13 @@
+.import-staging { border:1px solid var(--border); border-radius:12px; padding:16px; background:var(--surface); }
+.import-staging-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.import-staging-head h3 { margin:0; font-size:14px; color:var(--text); }
+.import-staging-head p,.import-empty { color:var(--text-muted); font-size:12px; line-height:1.6; margin:5px 0 0; }
+.import-staging-head button,.import-retry { background:var(--surface); border:1px solid var(--border); color:var(--accent); border-radius:7px; padding:7px; cursor:pointer; }
+.import-pending,.import-added { display:flex; align-items:flex-start; gap:10px; padding:13px 0 0; margin-top:12px; border-top:1px solid var(--border); font-size:12px; }
+.import-pending>svg { flex-shrink:0; margin-top:2px; color:var(--accent); }
+.import-pending>div { min-width:0; }
+.import-pending strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:550; }
+.import-pending small,.import-added small { display:block; margin-top:4px; color:var(--text-muted); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
+.import-error>svg,.import-unrecognized>svg { color:var(--danger); }
+.import-added { color:var(--success); align-items:center; }
+.import-retry { margin-top:12px; font-size:12px; }

@@ -14,6 +14,7 @@ import type {
   ScreeningConfig,
   ScreeningMode,
   ScreeningProvider,
+  PreparedScreening,
 } from "../lib/screening-contract";
 
 export default function SetupController({
@@ -31,7 +32,7 @@ export default function SetupController({
   request?: string;
   initialConfig?: ScreeningConfig;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (prepared: PreparedScreening) => void;
 }) {
   const initial = useRef(getChatState(sessionId)).current;
   const [catalog, setCatalog] = useState<ScreeningCatalog>();
@@ -123,7 +124,7 @@ export default function SetupController({
           config,
           preview,
         );
-        onSaved();
+        onSaved(prepared);
         return prepared;
       }}
       onHydrate={async (files) => {

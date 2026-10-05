@@ -1,5 +1,5 @@
 import { DropdownMenu } from "radix-ui";
-import { ChevronDown, ListChecks, MessageSquare } from "lucide-react";
+import { ChevronDown, ListChecks, MessageSquare, Search } from "lucide-react";
 import type {
   ScreeningMode,
   ScreeningProvider,
@@ -8,8 +8,10 @@ import "./screening-setup.css";
 export default function PrepareMenu({
   hasCompanies,
   onChoose,
+  onResearch,
 }: {
   hasCompanies: boolean;
+  onResearch?: () => void;
   onChoose: (provider: ScreeningProvider, mode: ScreeningMode) => void;
 }) {
   return (
@@ -52,7 +54,8 @@ export default function PrepareMenu({
             </div>
           ))}
           <DropdownMenu.Separator />
-          <small>Review and save a setup. Providers are not connected.</small>
+          {onResearch && <DropdownMenu.Item onSelect={onResearch}><Search size={14} /><span>Bing research</span></DropdownMenu.Item>}
+          <small>Review inputs and approve before sending. Screening runs in the background.</small>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

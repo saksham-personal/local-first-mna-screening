@@ -8,6 +8,60 @@ use mna_tools::{data::DataService, store::Store};
 use serde_json::json;
 
 #[test]
+fn inspection_classifies_staged_headers_without_a_run_or_mutation() {
+    let _guard = file_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let import_dir = dir.path().join("import");
+    fs::create_dir_all(&import_dir).unwrap();
+    std::env::set_var("MNA_IMPORT_DIR", &import_dir);
+    let data = DataService::new(Store::open(dir.path().join("data.db")).unwrap());
+    fs::write(import_dir.join("arbitrary-a.csv"), "pk,PBId,Firm Name from PitchBook,Website from PitchBook,Company Profile,Investor Profile,Limited Partner Profile,Service Provider Profile\nE1-C1,PB1,Firm,firm.example,Yes,No,No,No\n").unwrap();
+    create_pb_data(&import_dir.join("arbitrary-b.xlsx"));
+    fs::write(
+        import_dir.join("arbitrary-c.csv"),
+        "Note,Analyst\nWebsite,Signal\nfirm.example,Yes\n",
+    )
+    .unwrap();
+    fs::write(import_dir.join("unknown.csv"), "Item,Value\na,b\n").unwrap();
+    fs::write(
+        import_dir.join("company.csv"),
+        "ECID,CID,Company Name\nE1,C1,Firm\n",
+    )
+    .unwrap();
+    create_mixed_workbook(&import_dir.join("mixed.xlsx"));
+    let result = data.execute("inspect_enrichment_files", &json!({"files":["arbitrary-b.xlsx","unknown.csv","arbitrary-a.csv","arbitrary-c.csv","company.csv"]})).unwrap();
+    assert_eq!(
+        result["import_files"],
+        json!(["arbitrary-b.xlsx", "arbitrary-a.csv", "arbitrary-c.csv"])
+    );
+    assert_eq!(
+        result["pending_files"],
+        json!(["unknown.csv", "company.csv"])
+    );
+    assert_eq!(result["files"][0]["sheets"][0]["kind"], "PB_DATA");
+    assert_eq!(result["files"][0]["sheets"][0]["header_row"], 3);
+    assert_eq!(result["files"][2]["sheets"][0]["kind"], "PB_MAPPING");
+    assert_eq!(result["files"][3]["sheets"][0]["kind"], "ROGO");
+    assert_eq!(result["files"][3]["sheets"][0]["header_row"], 2);
+    assert_eq!(
+        result["counts"],
+        json!({"mapping":1,"pitchbook":1,"rogo":1,"company":1,"unrecognized":1})
+    );
+    assert_eq!(result["files"][0]["roles"], json!(["PB_DATA"]));
+    let mixed = data
+        .execute("inspect_enrichment_files", &json!({"files":["mixed.xlsx"]}))
+        .unwrap();
+    assert_eq!(mixed["import_files"], json!([]));
+    assert_eq!(mixed["pending_files"], json!(["mixed.xlsx"]));
+    assert_eq!(mixed["files"][0]["eligible"], false);
+    assert_eq!(mixed["files"][0]["sheets"][0]["kind"], "ROGO");
+    assert_eq!(
+        mixed["files"][0]["sheets"][1]["kind"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
 fn identity_promotion_source_priority_and_enrichment_export() {
     let _guard = file_env_lock();
     let dir = tempfile::tempdir().unwrap();
@@ -322,6 +376,22 @@ fn create_pb_data(path: &Path) {
     for (col, value) in row.iter().enumerate() {
         sheet.write_string(3, col as u16, *value).unwrap();
     }
+    workbook.save(path).unwrap();
+}
+
+fn create_mixed_workbook(path: &Path) {
+    use rust_xlsxwriter::Workbook;
+    let mut workbook = Workbook::new();
+    let rogo = workbook.add_worksheet();
+    rogo.set_name("ROGO").unwrap();
+    rogo.write_string(0, 0, "Website").unwrap();
+    rogo.write_string(0, 1, "Signal").unwrap();
+    rogo.write_string(1, 0, "firm.example").unwrap();
+    let unknown = workbook.add_worksheet();
+    unknown.set_name("Notes").unwrap();
+    unknown.write_string(0, 0, "Item").unwrap();
+    unknown.write_string(0, 1, "Value").unwrap();
+    unknown.write_string(1, 0, "a").unwrap();
     workbook.save(path).unwrap();
 }
 

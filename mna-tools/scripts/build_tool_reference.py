@@ -267,6 +267,15 @@ tool("get_model_assessments", "Read accepted provider assessments separately fro
      "Assessment rows with plan/job/company/index/provider/prompt/result/time and eligible_for_current_use, plus question_answers. An empty result is not evidence of poor fit.",
      {"run_id":R,"plan_id":"PPLAN-returned-id"})
 
+tool("inspect_enrichment_files", "Identify staged spreadsheet roles before hydration or run selection.",
+     "Read-only apart from audit. Supply 1–32 import-directory relative file IDs returned by the upload endpoint. Reuse authoritative header detection on every populated sheet: PitchBook mapping headers must be on row one; PB data can follow banners; ROGO uses the first supported Website/Websites header and excludes PB identifiers. Empty sheets are ignored. A workbook containing an unknown or non-enrichment sheet stays pending instead of partly importing a guessed source. Inspection needs no run_id; eligible files may wait until discovery has a saved company set. Import eligible IDs together with import_enrichment_files so mappings precede data rows, and refresh current company context afterwards.",
+     "files with file/eligible/roles/sheets/reason; import_files; pending_files; counts by source kind. Each sheet includes kind (PB_MAPPING, PB_DATA, ROGO, COMPANY or null), one-based header row, data-row count and headers. No source values or approvals are changed.",
+     {"files":["upload-1.csv","upload-2.xlsx"]})
+tool("get_execution_progress", "Poll approval freshness and durable batch progress without large frozen inputs.",
+     "Supply plan_id. Checks current source/profile freshness once and returns ordered lightweight job records. Frozen prompts, company inputs, raw responses and private index mappings are omitted. Top-level executed=false describes the prepared handoff; inspect each job's executed flag for actual dispatch. Count SUCCEEDED batches, respect next_eligible_at, and stage eligible accepted records with get_model_assessments. Expired dispatched leases require controller reconciliation; a progress read never authorizes blind redispatch and consumes no provider message.",
+     "plan_id/run_id/digest/status/fresh, compact provider/mode/deployment spec, and jobs with job_id/plan_id/ordinal/state/input_hash/attempt/error/next_eligible_at/lease_expires_at/retryable/executed. No provider call occurs.",
+     {"plan_id":"PPLAN-returned-id"})
+
 GROUPS = [
     ("Company discovery and retrieval",["search_mid","search_companies","find_company","find_similar_companies","find_similar_to_examples","search_iscc","get_iscc_score_samples","get_retrieval_config","embed_texts","rerank_candidates"]),
     ("Identity and source context",["get_company","get_company_identifiers","get_source_rows","get_candidate_source_data","get_run_source_projection","get_source_field_catalog"]),
@@ -277,8 +286,8 @@ GROUPS = [
     ("Research",["bing_search","m365_research","fetch_url","extract_url_context"]),
     ("Durable memory",["search_research_memory","get_previous_research","get_recent_agent_events","get_search_history","get_open_questions","add_open_question","resolve_open_question"]),
     ("Candidate funnel",["add_candidates","get_candidate_set","update_candidate_status","get_discovery_summary"]),
-    ("Enrichment and exports",["import_enrichment_files","export_candidate_set"]),
-    ("Approved action graphs and screening",["propose_action_plan","get_action_plan","propose_prepared_plan","get_prepared_plan","get_execution_job","get_model_assessments","prepare_screening_batch","prepare_bing_queries","save_screening_results","get_screening_results","complete_action_step"]),
+    ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","export_candidate_set"]),
+    ("Approved action graphs and screening",["propose_action_plan","get_action_plan","propose_prepared_plan","get_prepared_plan","get_execution_progress","get_execution_job","get_model_assessments","prepare_screening_batch","prepare_bing_queries","save_screening_results","get_screening_results","complete_action_step"]),
     ("Recovery",["save_checkpoint","get_checkpoint"]),
 ]
 
@@ -420,9 +429,14 @@ These operations are excluded from the model tool catalog. Analyst-facing routes
 | `record_execution_response` | `/admin/execution-response` | Controller-only save of the actual provider response for strict parsing. |
 | `reconcile_execution_job` | `/admin/execution-reconcile` | Controller-only recovery of ambiguous external outcomes. |
 | `record_execution_failure` | `/admin/execution-failure` | Controller-only record of a confirmed dispatch failure. |
+| `retry_execution_job` | `/admin/execution-retry` | Controller-only return of a definitively rejected FAILED attempt to READY after explicit analyst request and freshness checks. No send occurs here. |
 | `reserve_llmsuite_slot` / `consume_llmsuite_slot` | `/admin/llmsuite-slot`, `/admin/llmsuite-consume` | Shared seven-per-minute LLMSuite budget; consumption tracks actual dispatch, including parser repairs. |
 | `review_evidence_claim` | `/admin/evidence-review` | Record analyst verification or rejection; unreviewed claims remain `UNKNOWN`. |
 | `rebuild_embedding_index` | `/admin/embedding-index` | Generate real local-worker embeddings and persist them keyed by model/version/text hash. |
+
+For `retry_execution_job`, send `{"job_id":"JOB-returned-id","attempt":1,"reason":"Analyst requested retry of the rejected batch","analyst_requested":true}` with the ordinary bearer credential and `X-MNA-Controller-Key`. The service requires the exact failed attempt, current approval/source snapshot, and a durable definitive rejected-response marker. It preserves accepted results and prior attempts, sends nothing and consumes no slot. A later dispatch uses the shared limit normally. AMBIGUOUS, RUNNING, stale, attempt-mismatched and exhausted parser results are rejected. The response includes previous_attempt, state=READY, executed=false and automatically_redispatched=false.
+
+The [background screening and upload flow](../mna-ui/BACKGROUND_SCREENING.md) describes the implemented controller, pause/recovery, partial staging, automatic spreadsheet detection and approved Bing grounding. Live corporate providers remain disabled unless configured and explicitly approved.
 
 Create and approve criteria:
 
@@ -488,7 +502,7 @@ The tables below cover typed nested objects and enums referenced by the agent ar
 
 """
 
-assert len(TOOLS)==63 and set(META)==set(TOOLS)
+assert len(TOOLS)==65 and set(META)==set(TOOLS)
 grouped=[name for _,names in GROUPS for name in names]
 assert len(grouped)==len(TOOLS) and len(set(grouped))==len(TOOLS) and set(grouped)==set(TOOLS)
 parts=[INTRO]

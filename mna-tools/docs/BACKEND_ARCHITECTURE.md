@@ -6,8 +6,8 @@ Rust owns company identity, source observations, screening profiles, candidate m
 
 | Component | Responsibility | Status |
 |---|---|---|
-| assistant-ui frontend and local bridge | Chat, uploads, source selection, exact setup preview/approval, artifacts and session log | Implemented locally; no corporate execution button |
-| Rust domain service | 63 agent tools, 18 privileged operations, joins, policy, approvals and durable jobs | Implemented and fixture-tested |
+| assistant-ui frontend and local bridge | Chat, automatic uploads, source selection, exact setup approval, background batches, research and session log | Implemented locally; external providers disabled by default |
+| Rust domain service | 65 agent tools, 19 privileged operations, joins, policy, approvals and durable jobs | Implemented and fixture-tested |
 | SQLite | Domain truth, immutable manifests, request audit, shared capacity gate, jobs/outbox and accepted results | Implemented; schema version 6 |
 | Parquet | Original wide PitchBook/enrichment data for later column selection and joins | Implemented local artifacts |
 | MID retrieval | Description-only lexical and model-specific semantic/hybrid search, 1,000 per query | Implemented; actual large corpus benchmark pending |
@@ -69,12 +69,14 @@ Jobs have leases, attempts and dispatch audit. LLMSuite capacity is shared by or
 
 Search history stores retrieval provenance. Model assessments store prompt/plan/job/batch output and eligibility. Evidence stores claim, source/reference, confidence, provenance and content hash. New research claims remain UNKNOWN until a privileged analyst review verifies or rejects them. Retrieval relevance or a model's certainty never closes an evidence gap by itself. `label_company` is only actual analyst feedback supplied by the caller.
 
-Durable memory, open questions, checkpoints and recent events help resume a run. The browser session log is presentation state. UI background discovery jobs are process-local; Rust provider execution jobs are durable. Do not equate either with LangGraph checkpoints or claim provider-wide exactly-once execution.
+Durable memory, open questions, checkpoints and recent events help resume a run. The browser session log is presentation state. UI background discovery jobs are process-local; Rust provider execution jobs are durable. The local background controller persists controls and actual dispatch traces, reads lightweight durable progress, pauses future sends, recovers safe expired leases, quarantines ambiguous attempts and stages accepted partial/final records. Definite failures can be explicitly retried through the controller-only route. Do not equate these records with LangGraph checkpoints or claim provider-wide exactly-once execution.
 
 ## Orchestration and remaining integration
 
 The offline LangGraph scaffold supplies criteria, discovery, coverage, source-selection and plan-approval interrupts, bounded broaden loops, batch nodes and a direct-question branch. Production must inject a durable checkpointer, stable thread IDs, authenticated review decisions and ports to these Rust APIs. Its demonstration Python queue is not the production scheduler or shared rate authority.
 
-Next deployment work: validate real Arctic assets/tokenization and corpus recall, select and benchmark a reranker, wire corporate adapter contracts, implement a scheduler using Rust leases/outbox, and connect durable LangGraph ports. DDI PDF/DOCX text extraction, advanced natural-language output-schema analysis, streaming preparation above 64 MB, multi-user identity and a source-column analytics engine remain planned. No local generative model is part of the design.
+The [local background and upload flow](../../mna-ui/BACKGROUND_SCREENING.md) is implemented against the Rust leases, immutable jobs and shared rate gate. Source inspection reuses the importer; recognized sheets wait for a candidate scope and replay when that scope grows. `/data` reads a fresh table independently of other jobs. Approved manual Bing grounding uses the same registered tools that an LLM can call, and retains unverified evidence provenance.
+
+Next deployment work: validate real Arctic assets/tokenization and corpus recall, select and benchmark a reranker, verify corporate adapter contracts and production scheduler operation, and connect durable LangGraph ports. DDI PDF/DOCX text extraction, advanced natural-language output-schema analysis, streaming preparation above 64 MB, multi-user identity and a source-column analytics engine remain planned. No local generative model is part of the design.
 
 See [the correction table](ARCHITECTURE_CRITIQUE.md), [tool protocol](LLMSUITE_PROTOCOL.md), [retrieval setup](RETRIEVAL.md), [workflow](WORKFLOW.md) and [implementation record](../IMPLEMENTATION.md).
