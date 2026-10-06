@@ -1,0 +1,322 @@
+[
+  {
+    "name": "plain placeholder",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\nHello {{a}}!\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "World"
+    },
+    "expected": "Hello World!"
+  },
+  {
+    "name": "optional input may be omitted",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}} [{{b}}]{{/b}}.\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1"
+    },
+    "expected": "1."
+  },
+  {
+    "name": "inline section is kept when the input has a value",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}} [{{b}}]{{/b}}.\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": "2"
+    },
+    "expected": "1 [2]."
+  },
+  {
+    "name": "blank optional input counts as omitted",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}} [{{b}}]{{/b}}.\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": "   "
+    },
+    "expected": "1."
+  },
+  {
+    "name": "null optional input counts as omitted",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}|{{b}}|\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": null
+    },
+    "expected": "1||"
+  },
+  {
+    "name": "standalone section lines vanish when skipped",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n{{#b}}\nB is {{b}}\n{{/b}}\nend\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1"
+    },
+    "expected": "1\nend"
+  },
+  {
+    "name": "standalone section lines vanish when kept",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n{{#b}}\nB is {{b}}\n{{/b}}\nend\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": "2"
+    },
+    "expected": "1\nB is 2\nend"
+  },
+  {
+    "name": "indented standalone tag lines vanish",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n  {{#b}}  \nB\n  {{/b}}\nend\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": "2"
+    },
+    "expected": "1\nB\nend"
+  },
+  {
+    "name": "nested section one level deep",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value; `{{c}}` (optional) – C value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n{{#b}}\nb={{b}}\n{{#c}}\nc={{c}} (b={{b}})\n{{/c}}\n{{/b}}\nend\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": "2",
+      "c": "3"
+    },
+    "expected": "1\nb=2\nc=3 (b=2)\nend"
+  },
+  {
+    "name": "nested section skipped when inner input is empty",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value; `{{c}}` (optional) – C value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n{{#b}}\nb={{b}}\n{{#c}}\nc={{c}}\n{{/c}}\n{{/b}}\nend\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": "2"
+    },
+    "expected": "1\nb=2\nend"
+  },
+  {
+    "name": "nested section skipped with its parent",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value; `{{c}}` (optional) – C value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n{{#b}}\nb={{b}}\n{{#c}}\nc={{c}}\n{{/c}}\n{{/b}}\nend\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "c": "3"
+    },
+    "expected": "1\nend"
+  },
+  {
+    "name": "values are never read as placeholders",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}|{{b}}\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "{{b}} {{#b}}x{{/b}} {{/b}}",
+      "b": "{{a}}"
+    },
+    "expected": "{{b}} {{#b}}x{{/b}} {{/b}}|{{a}}"
+  },
+  {
+    "name": "single braces are plain text",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{company} {{a}} {website}\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "x"
+    },
+    "expected": "{company} x {website}"
+  },
+  {
+    "name": "numbers are accepted as text",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": 3
+    },
+    "expected": "3"
+  },
+  {
+    "name": "values keep their own newlines and spacing",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n<{{a}}>\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": " x\n y "
+    },
+    "expected": "< x\n y >"
+  },
+  {
+    "name": "CRLF source reads as LF",
+    "source": "# T\r\n\r\n**ID:** t\r\n**What it does:** x\r\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\r\n**Output:** o\r\n**Supplied to:** s\r\n**Version:** 1\r\n\r\n===@@=== STARTING ===@@===\r\n{{a}}\r\n{{#b}}\r\nB\r\n{{/b}}\r\nend\r\n===@@=== END ===@@===\r\n",
+    "vars": {
+      "a": "1",
+      "b": "2"
+    },
+    "expected": "1\nB\nend"
+  },
+  {
+    "name": "a prompt with no inputs",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** none\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\nJust text.\n===@@=== END ===@@===\n",
+    "vars": {},
+    "expected": "Just text."
+  },
+  {
+    "name": "description may continue on the next line",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value\ncontinued here; `{{b}}` (optional) – B\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}}!{{/b}}\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "b": "2"
+    },
+    "expected": "1!"
+  },
+  {
+    "name": "error: no start marker",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "missing_marker"
+  },
+  {
+    "name": "error: no end marker",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n",
+    "error": "missing_marker"
+  },
+  {
+    "name": "error: two start markers",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== STARTING ===@@===\n===@@=== END ===@@===\n",
+    "error": "duplicate_marker"
+  },
+  {
+    "name": "error: two end markers",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n===@@=== END ===@@===\n",
+    "error": "duplicate_marker"
+  },
+  {
+    "name": "error: end marker before start marker",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== END ===@@===\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n",
+    "error": "missing_marker"
+  },
+  {
+    "name": "error: malformed marker",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== START ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_marker"
+  },
+  {
+    "name": "error: text after the end marker",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\nNotes\n",
+    "error": "bad_header"
+  },
+  {
+    "name": "error: missing title",
+    "source": "\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_header"
+  },
+  {
+    "name": "error: missing description field",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_header"
+  },
+  {
+    "name": "error: unknown description field",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Owner:** me\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_header"
+  },
+  {
+    "name": "error: id with capitals",
+    "source": "# T\n\n**ID:** Bad_Id\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_header"
+  },
+  {
+    "name": "error: version is not a number",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** one\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_header"
+  },
+  {
+    "name": "error: inputs are not a list",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** a and b\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n===@@=== END ===@@===\n",
+    "error": "bad_inputs"
+  },
+  {
+    "name": "error: an input is listed twice",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A; `{{a}}` (optional) – again\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n===@@=== END ===@@===\n",
+    "error": "bad_inputs"
+  },
+  {
+    "name": "error: an input has no description",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required)\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n===@@=== END ===@@===\n",
+    "error": "bad_inputs"
+  },
+  {
+    "name": "error: spaces inside a placeholder",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{ a }}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_placeholder"
+  },
+  {
+    "name": "error: triple braces",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{{a}}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_placeholder"
+  },
+  {
+    "name": "error: uppercase placeholder name",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{A}}{{b}}\n===@@=== END ===@@===\n",
+    "error": "bad_placeholder"
+  },
+  {
+    "name": "error: placeholder not declared",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}{{zzz}}\n===@@=== END ===@@===\n",
+    "error": "undeclared_placeholder"
+  },
+  {
+    "name": "error: section not declared",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}{{#zzz}}x{{/zzz}}\n===@@=== END ===@@===\n",
+    "error": "undeclared_placeholder"
+  },
+  {
+    "name": "error: declared input never used",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}\n===@@=== END ===@@===\n",
+    "error": "unused_input"
+  },
+  {
+    "name": "error: section never closed",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}}x\n===@@=== END ===@@===\n",
+    "error": "unbalanced_section"
+  },
+  {
+    "name": "error: closing tag without opening",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}{{/b}}\n===@@=== END ===@@===\n",
+    "error": "unbalanced_section"
+  },
+  {
+    "name": "error: closing tag names another section",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}}x{{/a}}{{/b}}\n===@@=== END ===@@===\n",
+    "error": "unbalanced_section"
+  },
+  {
+    "name": "error: section nested inside itself",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}}{{#b}}x{{/b}}{{/b}}\n===@@=== END ===@@===\n",
+    "error": "unbalanced_section"
+  },
+  {
+    "name": "error: sections nested two levels deep",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value; `{{c}}` (optional) – C value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{#b}}{{#c}}{{#a}}x{{/a}}{{/c}}{{/b}}\n===@@=== END ===@@===\n",
+    "error": "section_depth"
+  },
+  {
+    "name": "error: required input missing",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "vars": {
+      "b": "2"
+    },
+    "error": "missing_input"
+  },
+  {
+    "name": "error: required input blank",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "  ",
+      "b": "2"
+    },
+    "error": "missing_input"
+  },
+  {
+    "name": "error: unknown input supplied",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": "1",
+      "z": "2"
+    },
+    "error": "unknown_input"
+  },
+  {
+    "name": "error: input is not text",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{a}}` (required) – A value; `{{b}}` (optional) – B value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{a}}{{b}}\n===@@=== END ===@@===\n",
+    "vars": {
+      "a": [
+        "1"
+      ]
+    },
+    "error": "bad_value"
+  }
+]

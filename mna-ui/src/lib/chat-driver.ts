@@ -258,14 +258,9 @@ function plannedActions(text: string): ResearchStep[] {
   }
   return matches.sort((a, b) => a.at - b.at).map((m) => m.step);
 }
+import { defaultResearchQueries } from "./research-queries";
 export function researchQuestions(definition: string): string[] {
-  const business = definition.split(/\bexclude\b/i)[0].replace(/[.\s]+$/, "");
-  return [
-    `Does {company} provide ${business.toLowerCase()}? Website: {website}`,
-    "Which products and customer workflows show that this is a core business for {company}? Website: {website}",
-    "Does {company} sell a software product or mainly provide services? Website: {website}",
-    "Which primary sources support or contradict the business fit for {company}? Website: {website}",
-  ];
+  return defaultResearchQueries(definition);
 }
 export function createFileAdapter(sessionId: string): AttachmentAdapter {
   const stagedFiles = new WeakMap<File, import("./chat-contract").StagedFile>();

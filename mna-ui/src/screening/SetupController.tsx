@@ -10,6 +10,8 @@ import {
   previewScreening,
   approveScreening,
   hydrateScreeningSources,
+  fetchScreeningPrompt,
+  splitExamples,
 } from "../lib/screening-client";
 import type {
   ScreeningCatalog,
@@ -114,9 +116,24 @@ export default function SetupController({
       catalog={catalog}
       criteriaText={initial.definition}
       onClose={onClose}
+      onBuildPrompt={async (config) => {
+        guard();
+        const result = await fetchScreeningPrompt({
+          sessionId,
+          mode: config.mode,
+          definition: initial.definition,
+          goodFits: splitExamples(initial.goodFitExamples),
+          badFits: splitExamples(initial.badFitExamples),
+          deferred: initial.ignored,
+          inputColumns: config.inputColumns,
+          outputColumns: config.outputColumns,
+          request: config.request ?? "",
+        });
+        return result.prompt;
+      }}
       onGeneratePrompt={async (config) => {
         guard();
-        return generateDraft(sessionId, "screening-prompt", { request: request ?? config.prompt, outputColumns: config.outputColumns });
+        return generateDraft(sessionId, "screening-prompt", { request: config.request?.trim() || request || config.prompt, outputColumns: config.outputColumns });
       }}
       onPreview={async (config) => {
         guard();

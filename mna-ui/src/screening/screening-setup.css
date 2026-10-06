@@ -312,7 +312,9 @@
 .ss-generate { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; gap: 5px; min-width: 30px; height: 30px; justify-content: center; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); color: var(--accent); cursor: pointer; }
 .ss-generate:hover:not(:disabled) { background: var(--accent-soft); }
 .ss-generate:disabled { opacity: .55; cursor: default; }
-.ss-prompt-notice { color: var(--text-muted); font-size: 11px; font-weight: 400; }
+.ss-prompt-notice { display: block; margin-top: 4px; color: var(--text-muted); font-size: 11px; font-weight: 400; }
+.ss-prompt-notice .ss-spin { vertical-align: -2px; }
+.ss-prompt-wrap .ss-prompt[aria-busy="true"] { opacity: .55; }
 .ss-timing {
   margin: 11px 0 0;
   padding: 9px 11px;
