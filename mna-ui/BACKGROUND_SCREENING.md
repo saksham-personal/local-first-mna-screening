@@ -27,7 +27,7 @@ PitchBook name and website are independently preferred with MID/ISCC fallback. D
 
 ## Bing grounding
 
-Use **Screen / ask → Bing research**, the next-step option, or **`/bing`**. Company research uses every currently considered company. Edit one to five query chips or generate them from the current criteria with LLM Suite. General research uses literal queries and can optionally propose a new criteria revision from its answer. Company templates support `{company}`, `{website}`, and `<company>`. Preview shows expanded queries before approval; source identity or criteria changes require a fresh preview. The controller continues in pages of 100 queries while the app remains usable.
+Use **Screen → Bing research**, the next-step option, or **`/bing`**. Company research uses every currently considered company. Edit one to five query chips or generate them from the current criteria with LLM Suite. General research uses literal queries and can optionally propose a new criteria revision from its answer. Company templates support `{company}`, `{website}`, and `<company>`. Preview shows expanded queries before approval; source identity or criteria changes require a fresh preview. The controller continues in pages of 100 queries while the app remains usable.
 
 The controller proposes and approves a run-scoped action plan, then uses the registered `prepare_bing_queries` and `bing_search` tools. The same tools are available to an LLM through the backend's plain-language catalog and deterministic text-command parser. An agent can propose research when needed, but provider authorization still requires the approved scope and exact query templates.
 

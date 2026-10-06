@@ -243,7 +243,6 @@
 
 .pdf-preview__spinner {
   color: var(--accent);
-  animation: pdf-preview-spin 1.2s steps(8, end) infinite;
 }
 
 .pdf-preview__retry {
@@ -282,12 +281,6 @@
   background: var(--surface-raised);
   box-shadow: 0 3px 15px var(--shadow-color);
   font-size: 11px;
-}
-
-@keyframes pdf-preview-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @container (max-width: 390px) {
@@ -333,11 +326,5 @@
   .pdf-preview--expanded {
     inset: 0;
     border-radius: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pdf-preview__spinner {
-    animation: none;
   }
 }

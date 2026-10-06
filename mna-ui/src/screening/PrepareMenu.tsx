@@ -1,10 +1,16 @@
 import { DropdownMenu } from "radix-ui";
-import { ChevronDown, ListChecks, MessageSquare, Search } from "lucide-react";
+import { ChevronDown, ListChecks, Search } from "lucide-react";
 import type {
   ScreeningMode,
   ScreeningProvider,
 } from "../lib/screening-contract";
 import "./screening-setup.css";
+
+const providers: { id: ScreeningProvider; name: string }[] = [
+  { id: "llm_suite", name: "LLM Suite" },
+  { id: "copilot", name: "M365 Copilot" },
+];
+
 export default function PrepareMenu({
   hasCompanies,
   onChoose,
@@ -18,10 +24,10 @@ export default function PrepareMenu({
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
         className="ct-log-button"
-        aria-label="Prepare screening or a question"
+        aria-label="Prepare screening"
       >
         <ListChecks size={15} />
-        <span>Screen / ask</span>
+        <span>Screen</span>
         <ChevronDown size={12} />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -30,32 +36,28 @@ export default function PrepareMenu({
           sideOffset={8}
           align="end"
         >
-          <DropdownMenu.Label>Prepare with</DropdownMenu.Label>
-          {(["llm_suite", "copilot"] as ScreeningProvider[]).map((provider) => (
-            <div key={provider}>
-              <DropdownMenu.Item
-                onSelect={() => onChoose(provider, "screening")}
-                disabled={!hasCompanies}
-              >
-                <ListChecks size={14} />
-                <span>
-                  {provider === "llm_suite" ? "LLMSuite" : "M365 Copilot"}{" "}
-                  screening
-                </span>
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                onSelect={() => onChoose(provider, "question")}
-              >
-                <MessageSquare size={14} />
-                <span>
-                  Ask {provider === "llm_suite" ? "LLMSuite" : "M365 Copilot"}
-                </span>
-              </DropdownMenu.Item>
-            </div>
+          <DropdownMenu.Label className="ss-prepare-label">
+            Prepare with
+          </DropdownMenu.Label>
+          {providers.map(({ id, name }) => (
+            <DropdownMenu.Item
+              key={id}
+              onSelect={() => onChoose(id, "screening")}
+              disabled={!hasCompanies}
+            >
+              <ListChecks size={14} />
+              <span>{name} screening</span>
+            </DropdownMenu.Item>
           ))}
-          <DropdownMenu.Separator />
-          {onResearch && <DropdownMenu.Item onSelect={onResearch}><Search size={14} /><span>Bing research</span></DropdownMenu.Item>}
-          <small>Review inputs and approve before sending. Screening runs in the background.</small>
+          {onResearch && (
+            <>
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item onSelect={onResearch}>
+                <Search size={14} />
+                <span>Bing research</span>
+              </DropdownMenu.Item>
+            </>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

@@ -635,14 +635,6 @@
 .ss-picker-footer .ss-primary {
   gap: 3px;
 }
-.ss-spin {
-  animation: ss-spin 1.2s steps(8, end) infinite;
-}
-@keyframes ss-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .ss-dialog button:focus-visible,
 .ss-picker button:focus-visible,
 .ss-dialog input:focus-visible,
@@ -734,7 +726,7 @@
 }
 .ss-prepare-menu {
   z-index: 1100;
-  width: 260px;
+  width: 232px;
   background: var(--surface-raised);
   color: var(--text);
   border: 1px solid var(--border);
@@ -768,11 +760,11 @@
 .ss-prepare-menu [id] {
   font-weight: 600;
 }
-.ss-prepare-menu > small {
-  display: block;
+.ss-prepare-label {
+  padding: 6px 10px 4px;
   color: var(--text-muted);
-  padding: 6px 10px;
   font-size: 11px;
+  font-weight: 600;
 }
 .ca-setup-prompt {
   white-space: pre-wrap;
@@ -787,10 +779,5 @@
 @media (max-width: 700px) {
   .ct-header-actions > .ct-log-button > span {
     display: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ss-spin {
-    animation: none;
   }
 }

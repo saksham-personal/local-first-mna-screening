@@ -43,7 +43,7 @@
 }
 .br-dock-mark.is-running,
 .br-stat-running i { background: var(--info); }
-.br-dock-mark.is-running { animation: br-pulse 1.8s steps(8) infinite; }
+.br-dock-mark.is-running { animation: br-pulse 1.8s ease-in-out infinite; }
 .br-dock-summary { display: grid; flex: 1; min-width: 0; }
 .br-dock-summary strong { font-size: 13px; font-weight: 700; }
 .br-dock-summary small { color: var(--text-muted); font-size: 11px; }

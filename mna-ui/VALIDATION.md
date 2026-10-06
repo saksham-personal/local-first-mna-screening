@@ -38,8 +38,8 @@ Browser testing found and corrected an existing discovery failure: the example's
 the same positive core-business query and pass only approved business exclusions
 separately. Additional final corrections preserve CSV blanks, update filtered
 row counts, remove recognized imports only from the composer copy, and keep
-company-template and general Bing drafts separate. Background pulses use stepped
-opacity and honor reduced motion.
+company-template and general Bing drafts separate. Background pulses use
+opacity-only ease-in-out fades and honor reduced motion.
 
 GPT-6 Sol contributed backend and import work; GPT-6 Luna contributed bounded
 UI work. The integration owner completed the source integration, regression
@@ -97,7 +97,7 @@ correction. The local preview used was `http://127.0.0.1:4173/`.
 
 ## CPU-friendly animation follow-up
 
-The user requested ordinary CPU-compatible animations, then explicitly asked to retain looping status pulses. Pulses remain infinite stepped opacity loops. Small loaders use eight stepped rotations per 1.2-second cycle. Menus and the log backdrop retain short opacity fades; panel sliding, backdrop blur, brightness filters, animated shadows, and AG Grid row movement were removed. PDF.js explicitly disables hardware acceleration and uses a standard readback-friendly 2D canvas. Reduced-motion disables animations and transitions while leaving status text and colors visible.
+The user requested ordinary CPU-compatible animations, then explicitly asked to retain looping status pulses. Pulses remain infinite opacity-only ease-in-out loops. Loaders share one smooth linear `ui-spin` rotation (one second per turn). Menus and the log backdrop retain short opacity fades; panel sliding, backdrop blur, brightness filters, animated shadows, and AG Grid row movement were removed. PDF.js explicitly disables hardware acceleration and uses a standard readback-friendly 2D canvas. Reduced-motion disables animations and transitions while leaving status text and colors visible.
 
 Independent source review found no verified blockers. Changed files include
 the application styles, company grid, and PDF preview. DESIGN, UI_GUIDE, and
