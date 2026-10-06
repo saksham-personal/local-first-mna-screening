@@ -1,0 +1,91 @@
+/* Workspace chat dock: rail, default and expanded states. The column width comes
+   from --ct-dock-width, which the app sets on .ct-body. */
+@media (min-width: 1001px) {
+  .ct-body.ct-body-workspace .ct-chat-docked {
+    position: relative;
+  }
+}
+.ct-resize-dock {
+  inset: 0 auto 0 -6px;
+}
+/* Collapsed: the chat stays mounted and laid out at its open width, but cannot be
+   seen, focused or reached. It leaves the grid so the rail takes the second column. */
+@media (min-width: 1001px) {
+  .ct-body.ct-body-workspace .ct-chat-docked.is-rail {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: var(--ct-dock-open-width, 390px);
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+.ct-dock-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+.ct-dock-rail-chat {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+}
+.ct-dock-rail-chat:hover {
+  background: var(--surface-muted);
+  color: var(--accent);
+}
+.ct-dock-rail-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--info);
+  box-shadow: 0 0 0 2px var(--surface);
+  animation: ct-dock-pulse 1.6s ease-in-out infinite;
+}
+.ct-dock-head-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+  color: var(--info);
+  font-size: 11px;
+  font-weight: 500;
+}
+.ct-dock-head-busy i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--info);
+  animation: ct-dock-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ct-dock-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (max-width: 1000px) {
+  .ct-dock-rail,
+  .ct-resize-dock {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ct-dock-rail-dot,
+  .ct-dock-head-busy i {
+    animation: none;
+  }
+}

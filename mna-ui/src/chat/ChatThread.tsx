@@ -73,6 +73,7 @@ import {
 } from "../lib/chat-jobs";
 import { commandPrompts, consideredCompanies } from "../lib/chat-policy";
 import { sessionStore, useSessionSnapshot } from "../lib/session-store";
+import { formatDateTime, formatTime } from "../lib/format";
 import ArtifactCard from "./ArtifactCard";
 import MarkdownMessage from "./MarkdownMessage";
 import Tooltip from "../Tooltip";
@@ -121,11 +122,11 @@ function ArtifactPart({ data }: { data: unknown }) {
 function Timestamp() {
   const date = useAuiState((s) => s.message.createdAt);
   return (
-    <time dateTime={date.toISOString()} title={date.toLocaleString()}>
-      {date.toLocaleTimeString(undefined, {
-        hour: "2-digit",
-        minute: "2-digit",
-      })}
+    <time
+      dateTime={date.toISOString()}
+      title={formatDateTime(date, { seconds: true })}
+    >
+      {formatTime(date)}
     </time>
   );
 }
@@ -164,11 +165,7 @@ function ToolCall(part: ToolPart) {
           {toolLabels[part.toolName] ?? part.toolName.replaceAll("_", " ")}
         </span>
         <time title={event?.startedAt}>
-          {event
-            ? new Date(event.startedAt).toLocaleTimeString(undefined, {
-                hour12: false,
-              })
-            : ""}
+          {event ? formatTime(event.startedAt, { seconds: true }) : ""}
         </time>
         <small>
           {event?.durationMs !== undefined ? `${event.durationMs} ms` : label}

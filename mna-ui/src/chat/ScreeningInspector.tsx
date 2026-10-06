@@ -2,6 +2,7 @@ import { ArrowRight, CheckCircle2, FileText, Globe, Layers3, Pencil, Table2 } fr
 import type { ChatState } from "../lib/chat-contract";
 import { approved } from "../lib/chat-store";
 import { consideredCompanies, nextStepRecommendations } from "../lib/chat-policy";
+import { plural } from "../lib/format";
 import "./shortlist-flow.css";
 
 export default function ScreeningInspector({ state, criteriaFirst, send, edit, preview }: {
@@ -33,7 +34,7 @@ export default function ScreeningInspector({ state, criteriaFirst, send, edit, p
     <section className="si-section">
       <div className="si-heading"><h3>Company context</h3><Layers3 size={16} /></div>
       <div className="si-sources">{sources.map(source => <div key={source.key}>
-        <span>{source.hydrated ? <CheckCircle2 size={15} /> : source.key === "BING" ? <Globe size={15} /> : <Layers3 size={15} />}<strong>{source.label}</strong><small>{source.hydrated ? `${(state.coverage?.[source.key] ?? 0).toLocaleString()} companies updated` : "Not added yet"}</small></span>
+        <span>{source.hydrated ? <CheckCircle2 size={15} /> : source.key === "BING" ? <Globe size={15} /> : <Layers3 size={15} />}<strong>{source.label}</strong><small>{source.hydrated ? `${plural(state.coverage?.[source.key] ?? 0, "company", "companies")} updated` : "Not added yet"}</small></span>
         <button type="button" onClick={() => send(source.command)}>{source.hydrated ? "Add more" : source.key === "BING" ? "Research" : "Upload"}</button>
       </div>)}</div>
       <p>Source files are staged on their upload card. They are kept for joins and exports.</p>

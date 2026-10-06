@@ -2,6 +2,7 @@ import { artifactBase, getChatState, patchArtifact, saveArtifact, updateChatStat
 import { callTool, type ToolResult } from "./tool-client";
 import { refreshCompanyContext } from "./company-data-client";
 import { sessionStore } from "./session-store";
+import { plural } from "./format";
 import type { StagedFile } from "./chat-contract";
 
 type Inspection = { file: string; eligible: boolean; sheets: { kind: string }[] };
@@ -56,7 +57,8 @@ async function process(sessionId: string) {
     }
     await refreshCompanyContext(sessionId, state.backendRunId);
     await (await import("./review-client")).refreshShortlist(sessionId, state.backendRunId);
-    const summary = `${totals.mapping_unique_companies ?? 0} PitchBook IDs, ${totals.pb_unique_companies ?? 0} PitchBook company records and ${totals.rogo_unique_companies ?? 0} ROGO records matched. ${Number(totals.pb_unmatched ?? 0) + Number(totals.rogo_unmatched ?? 0)} rows unmatched; ${totals.quarantined ?? 0} rows need review.`;
+    const count = (key: string) => Number(totals[key] ?? 0), needReview = count("quarantined");
+    const summary = `${plural(count("mapping_unique_companies"), "PitchBook ID")}, ${plural(count("pb_unique_companies"), "PitchBook company record")} and ${plural(count("rogo_unique_companies"), "ROGO record")} matched. ${plural(count("pb_unmatched") + count("rogo_unmatched"), "row")} unmatched; ${plural(needReview, "row")} ${needReview === 1 ? "needs" : "need"} review.`;
     pending.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "imported", stagingMessage: "Data added", hydratedScope: scope }));
     for (const artifactId of new Set(pending.map(file => file.uploadArtifactId).filter(Boolean))) {
       const artifact = getChatState(sessionId).artifacts.find(item => item.id === artifactId);

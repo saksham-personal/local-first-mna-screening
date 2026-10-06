@@ -12,8 +12,17 @@ const listeners = new Set<() => void>();
 const receipts = new Map<string, string>();
 const dismissed = new Set<string>();
 const emit = () => listeners.forEach(fn => fn());
+const reschedulers = new Set<() => void>();
+export const ACTIVE_POLL_MS = 2000;
+export const IDLE_POLL_MS = 15000;
+/** Runs that are still moving; everything else is waiting on the analyst or finished. */
+export const isBackgroundActive = (jobs: readonly Pick<BackgroundJob, "state">[]) => jobs.some(job => job.state === "running" || job.state === "queued");
+/** Delay before the next poll, or undefined to pause (tab hidden). */
+export const backgroundPollDelay = (jobs: readonly Pick<BackgroundJob, "state">[], hidden: boolean) => hidden ? undefined : isBackgroundActive(jobs) ? ACTIVE_POLL_MS : IDLE_POLL_MS;
 export const subscribeBackground = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
 export const getBackgroundJobs = () => snapshot;
+/** The background run for one prepared plan, if it was started or restored. */
+export const getBackgroundJobForPlan = (planId: string | undefined) => planId ? snapshot.find(job => job.planId === planId) : undefined;
 function record(job: BackgroundJob) {
   if (!job.sessionId) return;
   const session = sessionStore.getSnapshot().sessions.find(s => s.id === job.sessionId);
@@ -29,6 +38,8 @@ function merge(job: BackgroundJob) {
   record(job);
   snapshot = [...snapshot.filter(item => item.id !== job.id), job].filter(item => !dismissed.has(item.id));
   emit();
+  // A run that just started should be followed at the fast cadence, not the idle one.
+  if (isBackgroundActive([job])) reschedulers.forEach(fn => fn());
 }
 async function request(route: string, input: unknown) {
   const response = await fetch(`/api/background-runs/${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
@@ -77,8 +88,17 @@ export async function backgroundAction(id: string, action: "pause" | "resume" | 
 }
 export function dismissBackground(id: string) { dismissed.add(id); snapshot = snapshot.filter(job => job.id !== id); emit(); }
 export function startBackgroundPolling() {
-  let active = true, timer: ReturnType<typeof setTimeout>;
+  let active = true, inFlight = false, timer: ReturnType<typeof setTimeout> | undefined;
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    if (!active) return;
+    const delay = backgroundPollDelay(snapshot, document.hidden);
+    if (delay !== undefined) timer = setTimeout(() => void poll(), delay);
+  };
   const poll = async () => {
+    if (inFlight || !active) return;
+    inFlight = true;
     try {
       const response = await fetch("/api/background-runs");
       if (response.ok) {
@@ -90,8 +110,13 @@ export function startBackgroundPolling() {
         }
       }
     } catch { /* The saved UI state survives a bridge restart. */ }
-    if (active) timer = setTimeout(() => void poll(), 2000);
+    inFlight = false;
+    schedule();
   };
-  void poll();
-  return () => { active = false; clearTimeout(timer); };
+  // Pause while the tab is hidden and catch up as soon as it is visible again.
+  const visibility = () => { if (document.hidden) { clearTimeout(timer); timer = undefined; } else { clearTimeout(timer); void poll(); } };
+  document.addEventListener("visibilitychange", visibility);
+  reschedulers.add(schedule);
+  if (!document.hidden) void poll();
+  return () => { active = false; clearTimeout(timer); document.removeEventListener("visibilitychange", visibility); reschedulers.delete(schedule); };
 }

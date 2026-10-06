@@ -17,7 +17,9 @@
 .ct-body.ct-body-workspace {
   display: grid;
   position: relative;
-  grid-template-columns: minmax(0, 1fr) minmax(350px, 390px);
+  /* --ct-dock-width is set by the app: 44 px rail, the default width, or expanded. */
+  grid-template-columns: minmax(0, 1fr) var(--ct-dock-width, 390px);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   background: var(--surface-muted);
 }
@@ -957,9 +959,6 @@
 }
 
 @media (max-width: 1280px) {
-  .ct-body.ct-body-workspace {
-    grid-template-columns: minmax(0, 1fr) 350px;
-  }
   .ws-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

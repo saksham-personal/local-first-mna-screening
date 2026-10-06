@@ -12,9 +12,11 @@ import {
 import { sessionStore } from "./session-store";
 import { companyFromRust, type SearchRow } from "./tool-client";
 import { nextStepOptions, nextStepRecommendations } from "./chat-policy";
+import { plural } from "./format";
 
 type Part = ThreadAssistantMessagePart;
 const jobs = new Map<string, JobSnapshot>();
+let jobsSnapshot: readonly JobSnapshot[] | undefined;
 const subscribers = new Set<() => void>();
 const starting = new Set<string>();
 let polling: ReturnType<typeof setTimeout> | undefined;
@@ -40,6 +42,15 @@ export const toolLabels: Record<string, string> = {
 };
 export function getJob(id?: string): JobSnapshot | undefined {
   return id ? jobs.get(id) : undefined;
+}
+/** Every known discovery job, oldest first. Stable between changes, so it suits useSyncExternalStore. */
+export function getJobsSnapshot(): readonly JobSnapshot[] {
+  if (!jobsSnapshot) {
+    jobsSnapshot = [...jobs.values()].sort((a, b) =>
+      a.startedAt.localeCompare(b.startedAt),
+    );
+  }
+  return jobsSnapshot;
 }
 export function subscribeJobs(fn: () => void): () => void {
   subscribers.add(fn);
@@ -101,6 +112,7 @@ export function syncJob(job: JobSnapshot): void {
   )
     return;
   jobs.set(job.id, job);
+  jobsSnapshot = undefined;
   const state = getChatState(job.sessionId);
   const context =
     state.jobContext?.id === job.id ? state.jobContext : undefined;
@@ -187,7 +199,7 @@ function finishJob(
     const artifact = saveArtifact(
       job.sessionId,
       {
-        ...artifactBase(`${consideredCount} companies found`),
+        ...artifactBase(`${plural(consideredCount, "company", "companies")} found`),
         type: "companies",
         companies,
         counts,
@@ -206,7 +218,7 @@ function finishJob(
         type: "checkpoint",
         key: "screening-ui",
         backendRunId: job.result.backendRunId,
-        summary: `${companies.length} company IDs, source counts, and the approved business definition are saved locally.`,
+        summary: `${plural(companies.length, "company ID")}, source counts, and the approved business definition are saved locally.`,
       },
       context?.turnId,
     );
@@ -235,7 +247,7 @@ function finishJob(
         ),
       );
     }
-    text = `Found **${consideredCount} companies to review**: ${counts.midOnly} from MID, ${counts.isccOnly} from ISCC, and ${counts.both} from both.${companies.length > consideredCount ? ` ${companies.length - consideredCount} hidden companies remain in history.` : ""} ${current ? "Review the list or choose a next step." : "These results belong to earlier criteria."}`;
+    text = `Found **${plural(consideredCount, "company", "companies")} to review**: ${counts.midOnly} from MID, ${counts.isccOnly} from ISCC, and ${counts.both} from both.${companies.length > consideredCount ? ` ${plural(companies.length - consideredCount, "hidden company", "hidden companies")} remain${companies.length - consideredCount === 1 ? "s" : ""} in history.` : ""} ${current ? "Review the list or choose a next step." : "These results belong to earlier criteria."}`;
   } else
     text =
       job.state === "cancelled"
@@ -429,7 +441,7 @@ export async function refreshJobs(): Promise<void> {
           session.createdAt,
         events: [],
         error:
-          "The local server restarted. Running jobs cannot resume; saved saved checkpoints remain available. Tool finish times were not recorded.",
+          "The local server restarted. Running jobs cannot resume; saved checkpoints remain available. Tool finish times were not recorded.",
       });
     }
   }

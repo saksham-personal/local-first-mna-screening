@@ -32,14 +32,14 @@ no LLM is called. Approved provider plans are saved with `executed:false`.
 - `shared/screening.mjs` — logic shared by server and client.
 - `src/App.tsx` — shell: sidebar, header, modals, command palette, criteria editor, inspectors. Large file (~1.5k lines).
 - `src/WorkspaceApp.tsx` — Workspace view (Overview / Companies / Files). It is a *view* of the same chat state; it has no second runtime.
-- `src/AssistantPanel.tsx`, `src/chat/ChatThread.tsx` — assistant-ui LocalRuntime thread, composer, attachments.
+- `src/chat/ChatThread.tsx` — assistant-ui LocalRuntime thread, composer, attachments.
 - `src/chat/ArtifactCard.tsx` — all screening-domain cards (criteria, company results, next steps, plans, jobs, checkpoints, files, handoffs).
 - `src/chat/ShortlistReview.tsx`, `FitExamples.tsx`, `EnrichmentUpload.tsx`, `NextStepsCard.tsx`, `DataTable.tsx`, `ScreeningInspector.tsx`, `SessionTiming.tsx`.
 - `src/screening/` — `ScreeningSetup.tsx` (provider setup: column chips, prompt, preview, approve), `SetupController.tsx`, `BackgroundRuns.tsx`, `BingResearchDialog.tsx`, `PrepareMenu.tsx`, `ColumnChips.tsx`.
 - `src/workspace/CompanyGrid.tsx` — AG Grid company table.
 - `src/files/` — import staging and PDF preview.
 - `src/SessionLog.tsx` — event ledger, timing view, exports.
-- `src/lib/` — non-visual logic. Key files: `chat-driver.ts` (command interpretation, local "assistant"), `chat-store.ts` (per-screening state in localStorage), `chat-jobs.ts` (job → tool-call parts), `session-store.ts` (event ledger), `policy.ts`/`chat-policy.ts` (recommendation thresholds), `exports.ts`, `import-pipeline.ts`, `*-client.ts` (bridge API clients), `product-copy.ts` (user-facing strings).
+- `src/lib/` — non-visual logic. Key files: `chat-driver.ts` (command interpretation, local "assistant"), `chat-store.ts` (per-screening state in localStorage), `chat-jobs.ts` (job → tool-call parts), `session-store.ts` (event ledger), `chat-policy.ts` (recommendation thresholds), `format.ts` (`plural`, `formatTime`/`formatDateTime`), `exports.ts`, `import-pipeline.ts`, `*-client.ts` (bridge API clients), `product-copy.ts` (user-facing strings).
 - `src/theme/theme.css` — **all design tokens** (light + dark). `src/ui/controls.css` — shared controls. Other CSS files are per-feature.
 - `tests/*.test.ts` — Node test runner via `tsx --test` (logic/contract tests, no browser).
 
@@ -111,7 +111,7 @@ py -3 -m unittest discover -s tests -v
 - **Never fabricate** results, scores, provider responses, approvals, or agent activity. Unavailable providers must show as unavailable. Research claims are unverified leads until analyst review.
 - **Identity:** names/websites alone never merge companies; only exact identifier bridges.
 - **LLMSuite rate gate:** seven actual sends per rolling minute shared across all purposes.
-- Recommendation thresholds (strict comparisons on considered count `n`) are documented in `mna-tools/docs/WORKFLOW.md` and implemented in `src/lib/policy.ts`; keep code, tests and docs in sync.
+- Recommendation thresholds (strict comparisons on considered count `n`) are documented in `mna-tools/docs/WORKFLOW.md` and implemented in `src/lib/chat-policy.ts`; keep code, tests and docs in sync.
 - Bridge security: keep the tool allowlist, Origin/Host checks, staged file IDs (never caller paths), 20 MB file limit, and secret scrubbing.
 
 ## UI conventions

@@ -21,6 +21,7 @@ import type {
 } from "../lib/chat-contract";
 import type { Company, ExportKind } from "../lib/contracts";
 import { productCopy } from "../lib/product-copy";
+import { formatTime, plural, pluralWord } from "../lib/format";
 import Tooltip from "../Tooltip";
 import { useTheme } from "../lib/theme-store";
 import { renderDiagram } from "../lib/mermaid-renderer";
@@ -30,6 +31,7 @@ const ShortlistReview = lazy(() => import("./ShortlistReview"));
 import FitExamples from "./FitExamples";
 import NextStepsCard from "./NextStepsCard";
 import EnrichmentUpload from "./EnrichmentUpload";
+import StartInBackground from "./StartInBackground";
 import { consideredCompanies } from "../lib/chat-policy";
 
 type Props = {
@@ -111,7 +113,8 @@ function Companies({
     <>
       <div className="ca-counts" aria-label="Company source counts">
         <span>
-          <strong>{number.format(artifact.companies.length)}</strong> companies
+          <strong>{number.format(artifact.companies.length)}</strong>{" "}
+          {pluralWord(artifact.companies.length, "company", "companies")}
         </span>
         <span>
           <strong>{number.format(artifact.counts.midOnly)}</strong> MID only
@@ -290,8 +293,8 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
             {saved.provider === "llm_suite" ? "LLMSuite" : "M365 Copilot"} ·{" "}
             {saved.model} ·{" "}
             {saved.mode === "screening" ? "Screening" : "Question"} ·{" "}
-            {saved.companyCount.toLocaleString()} companies · {saved.batches}{" "}
-            {saved.batches === 1 ? "batch" : "batches"}
+            {plural(saved.companyCount, "company", "companies")} ·{" "}
+            {plural(saved.batches, "batch", "batches")}
           </p>
           <details className="ca-criteria-original">
             <summary>Inputs, prompt, and outputs</summary>
@@ -307,7 +310,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
             Input data and the index-to-company mapping are saved with this
             setup. Changes require a new preview and approval. Provider execution is tracked separately in Background screening.
           </p>
-          <div className="ca-action-row"><button type="button" className="ca-primary-action" onClick={() => onAction({ type: "start-screening", artifactId: artifact.id })}>Start in background</button></div>
+          <StartInBackground artifactId={artifact.id} prepared={saved} onAction={onAction} />
           <button
             type="button"
             className="ca-secondary-action"
@@ -667,12 +670,9 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
 export default function ArtifactCard({ artifact, onAction, context }: Props) {
   if (artifact.type === "companies" && context?.backendRunId === artifact.backendRunId) {
     const companies = consideredCompanies(context);
-    artifact = { ...artifact, title: `${companies.length.toLocaleString()} ${companies.length === 1 ? "company" : "companies"} considered`, companies, counts: context.counts };
+    artifact = { ...artifact, title: `${plural(companies.length, "company", "companies")} considered`, companies, counts: context.counts };
   }
-  const createdAt = new Date(artifact.createdAt);
-  const timeLabel = Number.isNaN(createdAt.getTime())
-    ? ""
-    : createdAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const timeLabel = formatTime(artifact.createdAt);
   return (
     <article
       className={`ca-artifact ca-artifact-${artifact.type}`}

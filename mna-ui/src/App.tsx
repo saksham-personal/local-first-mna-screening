@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -11,6 +12,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowRight,
   Check,
@@ -34,6 +36,8 @@ import {
 } from "lucide-react";
 import WorkspaceApp from "./WorkspaceApp";
 import ChatThread from "./chat/ChatThread";
+import { DockHead, DockRail, DockResizeHandle } from "./chat/DockRail";
+import { useDock } from "./chat/useDock";
 import ArtifactCard from "./chat/ArtifactCard";
 import SessionLog from "./SessionLog";
 import Tooltip from "./Tooltip";
@@ -53,10 +57,12 @@ import {
 import { reviseCriteria, completeFitExamples, addResearchToCriteria } from "./lib/chat-driver";
 import {
   getJob,
+  getJobsSnapshot,
   startJobPolling,
   stopJob,
   subscribeJobs,
 } from "./lib/chat-jobs";
+import { plural } from "./lib/format";
 import { commandPrompts, consideredCompanies } from "./lib/chat-policy";
 import { downloadWorkbook } from "./lib/exports";
 import { downloadCompleteSession } from "./lib/session-export";
@@ -70,18 +76,18 @@ import type {
 import PrepareMenu from "./screening/PrepareMenu";
 const SetupController = lazy(() => import("./screening/SetupController"));
 const BingResearchDialog = lazy(() => import("./screening/BingResearchDialog"));
-import BackgroundRuns from "./screening/BackgroundRuns";
+import BackgroundRuns, { type SearchRunView } from "./screening/BackgroundRuns";
 import ScreeningInspector from "./chat/ScreeningInspector";
 import { stageUploads } from "./lib/tool-client";
 import { reviewShortlist, flushCriteriaDraft } from "./lib/review-client";
 import { generateDraft } from "./lib/conversation-client";
-import { backgroundAction, dismissBackground, getBackgroundJobs, startBackgroundPolling, startBackgroundScreening, subscribeBackground } from "./lib/background-client";
+import { backgroundAction, dismissBackground, getBackgroundJobs, isBackgroundActive, startBackgroundPolling, startBackgroundScreening, subscribeBackground } from "./lib/background-client";
 import { previewBingResearch, runBingResearch } from "./lib/research-client";
 import { processStagedUploads } from "./lib/import-pipeline";
 import { researchQuestions } from "./lib/chat-driver";
 import { updateChatState } from "./lib/chat-store";
 
-type Panel = "context" | "artifacts" | "runs" | null;
+type Panel = "context" | null;
 type Dialog = "commands" | "prompts" | "criteria" | null;
 type ResizeSide = "navigation" | "inspector";
 const interfaceKey = "screening-interface-v1";
@@ -127,7 +133,7 @@ function Modal({
     (
       ref.current?.querySelector<HTMLElement>("input,textarea") ??
       ref.current?.querySelector<HTMLElement>("button")
-    )?.focus();
+    )?.focus({ preventScroll: true });
     const trap = (event: KeyboardEvent) => {
       if (document.querySelector(".ui-select-content")) return;
       if (event.key === "Escape") {
@@ -143,16 +149,16 @@ function Modal({
         last = controls[controls.length - 1];
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        last.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     };
     document.addEventListener("keydown", trap);
     return () => {
       document.removeEventListener("keydown", trap);
-      prior?.focus();
+      prior?.focus({ preventScroll: true });
     };
   }, []);
   return (
@@ -450,7 +456,11 @@ export default function App() {
     [logEventId, setLogEventId] = useState<string>(),
     [busy, setBusy] = useState(false),
     [toast, setToast] = useState("");
-  const [chatExpanded, setChatExpanded] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [dismissedSearches, setDismissedSearches] = useState<ReadonlySet<string>>(new Set());
+  const dock = useDock(sidebar && window.innerWidth > 760 ? navigationWidth : 0);
+  const dockRail = mode === "workspace" && !compact && dock.state.mode === "rail";
+  const dockOpen = dock.open;
   const [preview, setPreview] = useState<{ file: StagedFile; url?: string }>();
   const [newName, setNewName] = useState<string>();
   const [rename, setRename] = useState<string>();
@@ -465,8 +475,16 @@ export default function App() {
   const [bingSetup, setBingSetup] = useState<{ sessionId: string; queries: string[] }>();
   const [bingConnected, setBingConnected] = useState(false);
   const backgroundJobs = useSyncExternalStore(subscribeBackground, getBackgroundJobs, getBackgroundJobs);
+  const allJobs = useSyncExternalStore(subscribeJobs, getJobsSnapshot, getJobsSnapshot);
   useEffect(startBackgroundPolling, []);
   useEffect(() => { void fetch("/api/health").then(r => r.json()).then(data => setBingConnected(data.providers?.bing === true)).catch(() => {}); }, []);
+  // Anything that needs the composer calls this first: the full chat opens when
+  // the Workspace chat is hidden (narrow window) and the dock leaves its rail.
+  const revealChat = useCallback(() => {
+    if (mode !== "workspace") return;
+    if (compact) changeMode("chat");
+    else if (dock.state.mode === "rail") flushSync(dockOpen);
+  }, [mode, compact, changeMode, dock.state.mode, dockOpen]);
   const openSetup = useCallback(
     (
       provider: ScreeningProvider,
@@ -478,10 +496,10 @@ export default function App() {
       if (screeningMode === "question") {
         updateChatState(session.id, { model: provider });
         setPanel(null);
-        if (mode === "workspace" && compact) changeMode("chat");
+        revealChat();
         requestAnimationFrame(() => {
           if (request?.trim()) composerRef.current?.setText(request);
-          document.querySelector<HTMLTextAreaElement>(".ct-composer textarea")?.focus();
+          document.querySelector<HTMLTextAreaElement>(".ct-composer textarea")?.focus({ preventScroll: true });
         });
         return;
       }
@@ -494,7 +512,7 @@ export default function App() {
         initialConfig,
       });
     },
-    [session.id, mode, compact, changeMode],
+    [session.id, revealChat],
   );
   useEffect(
     () => () => {
@@ -527,15 +545,15 @@ export default function App() {
   const setDraft = useCallback(
     (text: string) => {
       setPanel(null);
-      if (mode === "workspace" && compact) changeMode("chat");
+      revealChat();
       composerRef.current?.setText(text);
       requestAnimationFrame(() =>
         document
           .querySelector<HTMLTextAreaElement>(".ct-composer textarea")
-          ?.focus(),
+          ?.focus({ preventScroll: true }),
       );
     },
-    [mode, compact, changeMode],
+    [revealChat],
   );
   const addDroppedFiles = useCallback(
     (files: File[]) => {
@@ -543,16 +561,13 @@ export default function App() {
         setToast("Drop files rather than a folder.");
         return;
       }
-      if (mode === "workspace" && compact) changeMode("chat");
+      revealChat();
       setPanel(null);
       void composerRef.current?.addFiles(files).then((count) => {
-        if (count)
-          setToast(
-            `${count} file${count === 1 ? "" : "s"} attached to chat.`,
-          );
+        if (count) setToast(`${plural(count, "file")} attached to chat.`);
       });
     },
-    [mode, compact, changeMode],
+    [revealChat],
   );
   const sendRef = useRef<(text: string, action?: ArtifactAction) => void>(
     () => {},
@@ -565,10 +580,10 @@ export default function App() {
   );
   const send = useCallback(
     (text: string, action?: ArtifactAction) => {
-      if (mode === "workspace" && compact) changeMode("chat");
+      revealChat();
       sendRef.current(text, action);
     },
-    [mode, compact, changeMode],
+    [revealChat],
   );
   const openLog = useCallback((eventId?: string) => {
       setLogEventId(eventId);
@@ -635,7 +650,7 @@ export default function App() {
           updateChatState(session.id, state => ({ ...state, files: state.files.map(file => file.id === action.fileId ? { ...file, passToProvider: action.passToProvider } : file), artifacts: state.artifacts.map(item => item.type === "file" && item.file.id === action.fileId ? { ...item, file: { ...item.file, passToProvider: action.passToProvider } } : item) }));
         } else if (action.type === "review-shortlist") {
           await reviewShortlist(session.id, action.keepCompanyIds, action.planId, action.outputColumns);
-          setToast(`${consideredCompanies(getChatState(session.id)).length.toLocaleString()} companies kept. Recommendations updated.`);
+          setToast(`${plural(consideredCompanies(getChatState(session.id)).length, "company", "companies")} kept. Recommendations updated.`);
         } else if (action.type === "use-answer-in-criteria" && artifact?.type === "research-answer") {
           await addResearchToCriteria(session.id, artifact.answer, artifact.question);
           patchArtifact(session.id, artifact.id, { applied: true });
@@ -726,7 +741,7 @@ export default function App() {
           void stopJob(action.jobId).catch((error) => setToast(String(error)));
         else if (action.type === "upload") {
           setPanel(null);
-          if (compact) changeMode("chat");
+          revealChat();
           requestAnimationFrame(() =>
             document
               .querySelector<HTMLButtonElement>(
@@ -750,7 +765,7 @@ export default function App() {
         if (["save-examples", "upload-source", "review-shortlist", "use-answer-in-criteria"].includes(action.type)) throw error;
       }
     },
-    [session.id, send, openLog, compact, changeMode, mode, openSetup],
+    [session.id, send, openLog, revealChat, changeMode, mode, openSetup],
   );
   const selectSession = (id: string) => {
     sessionStore.selectSession(id);
@@ -864,17 +879,62 @@ export default function App() {
       setInspectorExpanded(true);
     }
   };
-  const runningSessions = snapshot.sessions.filter(
-    (s) => getJob(getChatState(s.id).jobId)?.state === "running",
+  // One discovery search per screening (its latest), listed in the Activity dock.
+  const searches = useMemo<SearchRunView[]>(
+    () =>
+      snapshot.sessions.flatMap((s) => {
+        const job = getJob(getChatState(s.id).jobId);
+        if (!job || dismissedSearches.has(job.id)) return [];
+        return [
+          {
+            id: job.id,
+            sessionId: s.id,
+            title: s.title,
+            state: job.state,
+            startedAt: job.startedAt,
+            finishedAt: job.finishedAt,
+            toolCalls: job.events.filter((e) => e.type === "tool-start").length,
+            error: job.error,
+          },
+        ];
+      }),
+    // allJobs changes whenever any job does; state.jobId covers a new search starting.
+    [snapshot.sessions, allJobs, state.jobId, dismissedSearches],
   );
+  const activityRunning =
+    searches.some((search) => search.state === "running") ||
+    isBackgroundActive(backgroundJobs);
+  const chatBusy = busy || job?.state === "running";
+  const appRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // overflow:clip already stops these boxes from scrolling. If anything still
+    // manages to move them (older engines fall back to overflow:hidden), put the
+    // header straight back.
+    const app = appRef.current;
+    if (!app) return;
+    const guard = (event: Event) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target === app || target.matches(".ct-main, .ct-body")) &&
+        (target.scrollTop !== 0 || target.scrollLeft !== 0)
+      )
+        target.scrollTo(0, 0);
+    };
+    app.addEventListener("scroll", guard, true);
+    return () => app.removeEventListener("scroll", guard, true);
+  }, []);
   return (
     <div
+      ref={appRef}
       data-interface={mode}
       className={`ct-app ${sidebar ? "" : "ct-sidebar-collapsed"} ${mode === "workspace" ? "ct-workspace-mode" : ""}`}
       style={
         {
           "--ct-navigation-width": `${navigationWidth}px`,
           "--ct-inspector-width": `${inspectorWidth}px`,
+          "--ct-dock-width": `${dock.columnWidth}px`,
+          "--ct-dock-open-width": `${dock.openWidth}px`,
         } as CSSProperties
       }
     >
@@ -906,7 +966,7 @@ export default function App() {
               requestAnimationFrame(() =>
                 document
                   .querySelector<HTMLButtonElement>(".ct-nav-toggle")
-                  ?.focus(),
+                  ?.focus({ preventScroll: true }),
               );
             }}
           >
@@ -1020,14 +1080,14 @@ export default function App() {
                 onClick={() => setRename(session.title)}
                 title="Rename screening"
               >
-                {session.title}
+                <span className="ct-session-title-text">{session.title}</span>
                 <ChevronDown size={12} />
               </button>
               <span>
                 {job?.state === "running"
                   ? "Searching companies"
                   : approved(state)
-                    ? `${consideredCompanies(state).length.toLocaleString()} ${consideredCompanies(state).length === 1 ? "company" : "companies"} · criteria approved`
+                    ? `${plural(consideredCompanies(state).length, "company", "companies")} · criteria approved`
                     : state.criteriaText
                       ? "Review criteria before searching"
                       : "Ready when you are"}
@@ -1035,11 +1095,13 @@ export default function App() {
             </div>
           </div>
           <div className="ct-header-actions">
-            <PrepareMenu
-              hasCompanies={state.companies.length > 0}
-              onResearch={() => setBingSetup({ sessionId: session.id, queries: researchQuestions(state.definition) })}
-              onChoose={openSetup}
-            />
+            <div className="ct-header-slot" title="Screen">
+              <PrepareMenu
+                hasCompanies={state.companies.length > 0}
+                onResearch={() => setBingSetup({ sessionId: session.id, queries: researchQuestions(state.definition) })}
+                onChoose={openSetup}
+              />
+            </div>
             <div className="ct-view-switch" aria-label="Choose interface">
               <button
                 type="button"
@@ -1063,44 +1125,40 @@ export default function App() {
             </div>
             <ThemeMenu />
             <button
-              className={`ct-icon-button ${panel === "artifacts" ? "ct-control-active" : ""}`}
+              className={`ct-icon-button ${panel === "context" ? "ct-control-active" : ""}`}
               type="button"
-              onClick={() => {
-                setPreview(undefined);
-                setPanel(panel === "artifacts" ? null : "artifacts");
-              }}
-              aria-label="View chat artifacts"
-              title="Files and results"
+              onClick={openContext}
+              aria-label="Context"
+              aria-pressed={panel === "context"}
+              title="Context"
             >
               <FolderOpen size={17} />
             </button>
             <button
-              className={`ct-icon-button ${panel === "runs" ? "ct-control-active" : ""}`}
+              className={`ct-icon-button ${activityOpen ? "ct-control-active" : ""}`}
               type="button"
-              onClick={() => {
-                setPreview(undefined);
-                setPanel(panel === "runs" ? null : "runs");
-              }}
-              aria-label="View background runs"
-              title="Background runs"
+              onClick={() => setActivityOpen((open) => !open)}
+              aria-label="Activity"
+              aria-pressed={activityOpen}
+              title="Activity"
             >
               <Clock3 size={17} />
-              {runningSessions.length > 0 && (
-                <span className="ct-control-dot" />
-              )}
+              {activityRunning && <span className="ct-control-dot" />}
             </button>
             <button
               className="ct-log-button"
               type="button"
               onClick={() => openLog()}
+              aria-label="Session log"
+              title="Session log"
             >
               <List size={15} />
-              Session log
+              <span>Session log</span>
             </button>
           </div>
         </header>
         <FileDropArea
-          className={`ct-body ct-body-${mode}${chatExpanded && mode === "workspace" ? " ct-chat-expanded" : ""}${preview ? " ct-preview-open" : ""}`}
+          className={`ct-body ct-body-${mode}${preview ? " ct-preview-open" : ""}`}
           onFiles={addDroppedFiles}
         >
           {mode === "workspace" && (
@@ -1121,46 +1179,26 @@ export default function App() {
             </section>
           )}
           <section
-            className={`ct-chat-surface ${mode === "workspace" ? "ct-chat-docked" : ""}`}
+            className={`ct-chat-surface ${mode === "workspace" ? "ct-chat-docked" : ""}${dockRail ? " is-rail" : ""}`}
             aria-label="Screening assistant"
-            inert={mode === "workspace" && compact}
-            aria-hidden={mode === "workspace" && compact ? true : undefined}
+            inert={mode === "workspace" && (compact || dockRail)}
+            aria-hidden={mode === "workspace" && (compact || dockRail) ? true : undefined}
           >
+            {mode === "workspace" && !compact && !dockRail && (
+              <DockResizeHandle
+                width={dock.columnWidth}
+                max={dock.maxWidth}
+                onResize={dock.resize}
+              />
+            )}
             {mode === "workspace" && (
-              <div className="ct-docked-head">
-                <span>
-                  <MessageSquare size={15} />
-                  Screening assistant
-                </span>
-                <div>
-                  <button
-                    className="ct-icon-button"
-                    type="button"
-                    onClick={() => setChatExpanded(!chatExpanded)}
-                    aria-label={
-                      chatExpanded ? "Restore side chat" : "Expand side chat"
-                    }
-                    title={
-                      chatExpanded ? "Restore side chat" : "Expand side chat"
-                    }
-                  >
-                    {chatExpanded ? (
-                      <Minimize2 size={15} />
-                    ) : (
-                      <Maximize2 size={15} />
-                    )}
-                  </button>
-                  <button
-                    className="ct-icon-button"
-                    type="button"
-                    onClick={() => changeMode("chat")}
-                    aria-label="Open full chat"
-                    title="Open full chat"
-                  >
-                    <ArrowRight size={15} />
-                  </button>
-                </div>
-              </div>
+              <DockHead
+                expanded={dock.state.mode === "expanded"}
+                busy={chatBusy}
+                onCollapse={dock.collapse}
+                onToggleExpanded={dock.toggleExpanded}
+                onOpenFullChat={() => changeMode("chat")}
+              />
             )}
             <ChatThread
               key={session.id}
@@ -1176,6 +1214,7 @@ export default function App() {
               onBusyChange={setBusy}
             />
           </section>
+          {dockRail && <DockRail busy={chatBusy} onOpen={dock.open} />}
           {preview && (
             <aside className="ct-pdf-pane" aria-label="Document preview">
               <Suspense
@@ -1195,16 +1234,7 @@ export default function App() {
             </aside>
           )}
           {panel && (
-            <aside
-              className="ct-inspector"
-              aria-label={
-                panel === "context"
-                  ? "Screening context"
-                  : panel === "artifacts"
-                    ? "Chat artifacts"
-                    : "Background runs"
-              }
-            >
+            <aside className="ct-inspector" aria-label="Context">
               <div
                 className="ct-resize-handle ct-resize-inspector"
                 role="separator"
@@ -1224,13 +1254,7 @@ export default function App() {
                 <GripVertical size={14} />
               </div>
               <div className="ct-inspector-head">
-                <h2>
-                  {panel === "context"
-                    ? "Screening context"
-                    : panel === "artifacts"
-                      ? "Screening overview"
-                      : "Background runs"}
-                </h2>
+                <h2>Context</h2>
                 <div className="ct-inspector-actions">
                   <button
                     className="ct-icon-button"
@@ -1252,82 +1276,22 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {panel === "context" || panel === "artifacts" ? (
-                <ScreeningInspector state={state} criteriaFirst={panel === "context"} send={send} edit={() => setDialog("criteria")} preview={artifactId => { void onAction({ type: "preview-file", artifactId }); }} />
-              ) : (
-                <div className="ct-background-list">
-                  {snapshot.sessions.flatMap((s) => {
-                    const job = getJob(getChatState(s.id).jobId);
-                    return job
-                      ? [
-                          <div className="ct-background-card" key={job.id}>
-                            <div>
-                              <strong>{s.title}</strong>
-                              <span
-                                className={`ct-background-state ct-background-${job.state}`}
-                              >
-                                {job.state === "running"
-                                  ? "Running"
-                                  : job.state === "completed"
-                                    ? "Completed"
-                                    : job.state === "cancelled"
-                                      ? "Stopped"
-                                      : "Failed"}
-                              </span>
-                            </div>
-                            <p>
-                              Local MID discovery ·{" "}
-                              {
-                                job.events.filter(
-                                  (e) => e.type === "tool-start",
-                                ).length
-                              }{" "}
-                              tool calls
-                            </p>
-                            <time>
-                              {new Date(job.startedAt).toLocaleString()}
-                            </time>
-                            {job.error && (
-                              <p className="ct-error-copy">{job.error}</p>
-                            )}
-                            <div>
-                              <button
-                                type="button"
-                                className="ct-panel-link"
-                                onClick={() => selectSession(s.id)}
-                              >
-                                Open screening
-                                <ArrowRight size={12} />
-                              </button>
-                              {job.state === "running" && (
-                                <button
-                                  type="button"
-                                  className="ct-panel-link"
-                                  onClick={() => void stopJob(job.id)}
-                                >
-                                  Stop
-                                </button>
-                              )}
-                            </div>
-                          </div>,
-                        ]
-                      : [];
-                  })}
-                  <div className="ct-background-note">
-                    <h3>Agent workers</h3>
-                    <p>
-                      The local job runs the tools shown in its timeline. LLM Suite
-                      subagents and handoffs become available when orchestration
-                      is connected.
-                    </p>
-                    <span>0 external subagents connected</span>
-                  </div>
-                </div>
-              )}
+              <ScreeningInspector state={state} criteriaFirst send={send} edit={() => setDialog("criteria")} preview={artifactId => { void onAction({ type: "preview-file", artifactId }); }} />
             </aside>
           )}
         </FileDropArea>
-        <BackgroundRuns jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"}` }))} onDismiss={dismissBackground} onAction={(id, action) => { void backgroundAction(id, action).then(() => setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated.")).catch(error => setToast(String(error))); }} />
+        <BackgroundRuns
+          jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"}` }))}
+          searches={searches}
+          expanded={activityOpen}
+          onExpandedChange={setActivityOpen}
+          layoutKey={`${mode}:${dockRail ? "rail" : "open"}`}
+          onDismiss={dismissBackground}
+          onAction={(id, action) => { void backgroundAction(id, action).then(() => setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated.")).catch(error => setToast(String(error))); }}
+          onOpenSearch={selectSession}
+          onStopSearch={id => { void stopJob(id).catch(error => setToast(String(error))); }}
+          onDismissSearch={id => setDismissedSearches(previous => new Set(previous).add(id))}
+        />
       </main>
       <SessionLog
         open={log}

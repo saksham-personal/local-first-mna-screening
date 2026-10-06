@@ -344,9 +344,6 @@
   min-height: 0;
   height: auto;
 }
-.ct-body.ct-body-workspace.ct-chat-expanded {
-  grid-template-columns: minmax(0, 1fr) minmax(390px, 55%);
-}
 .ct-body.ct-body-chat.ct-preview-open {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(400px, 42%);
@@ -453,9 +450,6 @@
   }
 }
 @media (max-width: 1000px) {
-  .ct-body.ct-body-workspace.ct-chat-expanded {
-    display: block;
-  }
   .ct-body.ct-preview-open > .ct-pdf-pane {
     position: absolute;
     inset: 0;
@@ -512,5 +506,45 @@
 @media (prefers-reduced-motion: reduce) {
   .ui-select-content {
     animation: none;
+  }
+}
+
+/* Shell header: the title truncates and the action labels collapse to icons
+   (with tooltips) when the header gets narrow, so nothing overlaps or wraps. */
+.ct-header {
+  container: ct-header / inline-size;
+}
+.ct-header-slot {
+  display: flex;
+  flex: none;
+}
+@container ct-header (max-width: 960px) {
+  .ct-header-actions .ct-log-button {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+  .ct-header-actions .ct-log-button > span,
+  .ct-header-actions .ct-log-button > svg:last-child:not(:first-child) {
+    display: none;
+  }
+  .ct-header-actions .ui-select-trigger.theme-control {
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+  .ct-header-actions .theme-control > :not(.ui-select-leading) {
+    display: none;
+  }
+  .ct-header-actions .theme-control .ui-select-leading {
+    display: inline-flex;
+  }
+}
+@media (max-width: 760px) {
+  .ct-header-actions .ct-log-button {
+    width: 28px;
+  }
+  .ct-header-actions .ui-select-trigger.theme-control {
+    width: 32px;
   }
 }
