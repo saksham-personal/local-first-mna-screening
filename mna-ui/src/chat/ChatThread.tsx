@@ -527,7 +527,7 @@ function ComposerMenus({ state }: { state: ChatState }) {
 function ModelMenu({ state }: { state: ChatState }) {
   return (
     <SelectField
-      className="ct-model-select"
+      className={`ct-model-select${state.model === "local" ? "" : " is-provider"}`}
       label="Choose assistant"
       value={state.model}
       onChange={(model) =>
@@ -535,7 +535,11 @@ function ModelMenu({ state }: { state: ChatState }) {
           model: model as ChatState["model"],
         })
       }
-      icon={<span className="ct-model-logo">s</span>}
+      icon={
+        <span className="ct-model-logo">
+          {state.model === "llm_suite" ? "L" : state.model === "copilot" ? "M" : "s"}
+        </span>
+      }
       options={[
         {
           value: "local",

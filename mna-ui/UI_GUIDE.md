@@ -2,7 +2,7 @@
 
 ## Prepare LLMSuite or M365 work
 
-Use **Screen / ask** in the header, choose a provider, then choose company screening or a question. The same setup opens from a chat recommendation or a direct request such as “Ask M365 which products each company offers.” It reads the saved company set and does not send a provider request.
+Use **Screen** in the header and choose LLM Suite or M365 Copilot screening. The same setup opens from a chat recommendation. It reads the saved company set and does not send a provider request. To ask a provider a direct question, switch the composer's assistant selector (highlighted whenever it is not on Screening assistant) and type the question.
 
 Review the input chips. **index** stays pinned. Use **Add sources** to inspect MID, current-screening ISCC, PitchBook, and ROGO columns with actual coverage counts and examples. Name and website independently prefer usable PB, MID, then ISCC values. Description combines the selected source descriptions with labels. Source-specific fields stay blank for companies without that source. LinkedIn is optional and comes from genuine PB data.
 
@@ -84,4 +84,4 @@ The local assistant uses deterministic rules; it does not call an LLM. No extern
 
 Supporting files sent with a short note preserve the current screening. To revise the criteria, use **Edit criteria** or explicitly describe the new business to find. Previewing a PDF from Workspace opens Chat beside the document; changing views closes the preview. `public/examples/screening-brief.pdf` is a two-page fictional sample for trying the reader.
 
-Animations are deliberately light: short fades, small stepped loaders, and looping status pulses. The interface works without WebGL or browser graphics acceleration. If reduced motion is enabled in your operating system, motion stops while status labels and colors remain visible.
+Animations are deliberately light: short fades, one smooth linear spinner for every loader, opacity-only loading skeletons, and looping status pulses. The interface works without WebGL or browser graphics acceleration. If reduced motion is enabled in your operating system, motion stops while status labels and colors remain visible.

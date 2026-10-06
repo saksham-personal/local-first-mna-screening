@@ -22,6 +22,7 @@ import type {
 import type { Company, ExportKind } from "../lib/contracts";
 import { productCopy } from "../lib/product-copy";
 import Tooltip from "../Tooltip";
+import Skeleton from "../ui/Skeleton";
 import { useTheme } from "../lib/theme-store";
 import { renderDiagram } from "../lib/mermaid-renderer";
 import "./artifacts.css";
@@ -215,11 +216,13 @@ function PlanDiagram({ source }: { source: string }) {
         />
       ) : (
         <>
-          <p className="ca-diagram-fallback">
-            {error
-              ? "Diagram preview unavailable. Mermaid source:"
-              : "Loading diagram…"}
-          </p>
+          {error ? (
+            <p className="ca-diagram-fallback">
+              Diagram preview unavailable. Mermaid source:
+            </p>
+          ) : (
+            <Skeleton variant="block" height={150} label="Loading diagram" />
+          )}
           {error && <pre>{source}</pre>}
         </>
       )}
@@ -249,7 +252,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
       return (
         <>
           <p className="ca-note">
-            {artifact.provider === "llm_suite" ? "LLMSuite" : "M365 Copilot"} ·{" "}
+            {artifact.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} ·{" "}
             {artifact.mode === "screening"
               ? "Scored screening"
               : "General question"}
@@ -287,7 +290,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
             Approved input snapshot · executed: false
           </div>
           <p className="ca-note">
-            {saved.provider === "llm_suite" ? "LLMSuite" : "M365 Copilot"} ·{" "}
+            {saved.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} ·{" "}
             {saved.model} ·{" "}
             {saved.mode === "screening" ? "Screening" : "Question"} ·{" "}
             {saved.companyCount.toLocaleString()} companies · {saved.batches}{" "}
@@ -326,7 +329,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
       );
     }
     case "data-table":
-      return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}<Suspense fallback={<p className="ca-note" role="status">Opening table…</p>}>{artifact.reviewable && context ? <ShortlistReview rows={artifact.rows} columns={artifact.columns} context={context} planId={artifact.planId} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} onApply={async (keepCompanyIds, outputColumns) => { await onAction({ type: "review-shortlist", artifactId: artifact.id, keepCompanyIds, outputColumns, planId: artifact.planId }); }} /> : <DataTable rows={artifact.rows} columns={artifact.columns} label={artifact.title} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} />}</Suspense></>;
+      return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}<Suspense fallback={<Skeleton variant="table" rows={5} cols={4} label="Opening table" />}>{artifact.reviewable && context ? <ShortlistReview rows={artifact.rows} columns={artifact.columns} context={context} planId={artifact.planId} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} onApply={async (keepCompanyIds, outputColumns) => { await onAction({ type: "review-shortlist", artifactId: artifact.id, keepCompanyIds, outputColumns, planId: artifact.planId }); }} /> : <DataTable rows={artifact.rows} columns={artifact.columns} label={artifact.title} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} />}</Suspense></>;
     case "fit-examples":
       return <FitExamples artifact={artifact} onAction={onAction} />;
     case "research-answer":

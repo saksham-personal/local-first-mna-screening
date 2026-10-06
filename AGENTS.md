@@ -91,7 +91,7 @@ manual test, stop the server, delete `.screening-data/`, and clear site storage.
 
 Quick manual path: **New screening** → `/example` → approve criteria → wait for
 discovery → review companies → drop files from `public/examples/`
-(`pitchbook-mapping.csv`, `pitchbook-data.xlsx`, `rogo-data.xlsx`) → **Screen / ask**
+(`pitchbook-mapping.csv`, `pitchbook-data.xlsx`, `rogo-data.xlsx`) → **Screen**
 → preview → approve → hide/keep → export.
 
 ### Orchestrator (`mna-orchestrator/`)
@@ -117,11 +117,11 @@ py -3 -m unittest discover -s tests -v
 ## UI conventions
 
 - Use tokens from `src/theme/theme.css` (`--surface`, `--text-muted`, `--border`, `--accent`, `--success`/`--warning`/`--danger`/`--info` + `-soft`). Don't hardcode colors. Accent is `#8F5A39` (brown); keep the palette — refine spacing, hierarchy, typography and consistency rather than recoloring.
-- Every change must work in both light and dark themes and respect `prefers-reduced-motion`. Motion is deliberately minimal (short fades, stepped loaders; no blurs, slide-ins, or hover filters).
+- Every change must work in both light and dark themes and respect `prefers-reduced-motion`. Motion is deliberately minimal (short fades, one smooth `ui-spin` spinner, opacity-only skeletons and pulses; no blurs, slide-ins, or hover filters). Use `ui/Skeleton` for loading states and `ui/HelpTip` for "?" explanations.
 - Fonts: Geist (body/controls/tables), Manrope (headings), both local via Fontsource.
 - Status color always comes with a text label.
 - Desktop dock vs. mobile: below 1001px the hidden chat is `inert`; keep focus management and keyboard access intact (dialogs trap focus and close on Escape).
-- Prefer editing existing shared controls (`SelectField`, `FileDropArea`, `Tooltip`, `controls.css`) over introducing new one-off components or libraries.
+- Prefer editing existing shared controls (`SelectField`, `FileDropArea`, `HelpTip`, `Skeleton`, `controls.css`) over introducing new one-off components or libraries.
 - User-facing copy belongs in `src/lib/product-copy.ts` where a string is shared.
 - Use the in-app browser to verify UI changes visually (both themes, desktop and ~375px width), not just `pnpm build`.
 

@@ -78,8 +78,6 @@
 .sf-staged li > span { display: grid; min-width: 0; gap: 1px; }
 .sf-staged li strong { overflow-wrap: anywhere; color: var(--text); font-size: 12px; font-weight: 600; }
 .sf-staged li small { color: var(--text-muted); font-size: 11px; }
-.sf-spin { animation: sf-spin 1.2s steps(8, end) infinite; }
-@keyframes sf-spin { to { transform: rotate(360deg); } }
 .sf-card button:focus-visible,
 .sf-upload-card button:focus-visible,
 .sf-upload-card label:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -90,7 +88,6 @@
   .sf-option-end { align-items: flex-end; flex-direction: column; gap: 5px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sf-spin,
   .sf-group-toggle > svg:last-child { animation: none; transition: none; }
 }
 .fit-examples { display: grid; gap: 14px; }

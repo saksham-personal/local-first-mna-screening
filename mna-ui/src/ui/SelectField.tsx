@@ -61,7 +61,7 @@ export default function SelectField({
                 key={option.value}
                 value={option.value}
                 disabled={option.disabled}
-                className="ui-select-item"
+                className={`ui-select-item${option.description ? "" : " ui-select-item-plain"}`}
                 textValue={option.label}
               >
                 {option.icon && (

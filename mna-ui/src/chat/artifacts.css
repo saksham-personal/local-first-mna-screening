@@ -436,14 +436,6 @@
 .ca-plan-running .ca-plan-marker {
   color: var(--accent);
 }
-.ca-spin {
-  animation: ca-spin 1.2s steps(8, end) infinite;
-}
-@keyframes ca-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .ca-diagram {
   min-width: 0;
   margin-top: 10px;
@@ -710,10 +702,5 @@
   }
   .ca-option {
     align-items: flex-start;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ca-spin {
-    animation: none;
   }
 }

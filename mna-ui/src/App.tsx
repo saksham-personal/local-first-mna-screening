@@ -39,6 +39,7 @@ import SessionLog from "./SessionLog";
 import Tooltip from "./Tooltip";
 import ThemeMenu from "./theme/ThemeMenu";
 import FileDropArea from "./ui/FileDropArea";
+import Skeleton from "./ui/Skeleton";
 import { promptTemplates } from "./lib/prompt-library";
 import type { ComposerControls } from "./chat/ChatThread";
 import type { StagedFile } from "./lib/chat-contract";
@@ -738,7 +739,7 @@ export default function App() {
           send(artifact?.type === "criteria" && artifact.phase === "business" ? "Approve business criteria" : "Approve final criteria and find companies", action);
         else if (action.type === "choose-option")
           send(
-            `Choose ${action.option === "pitchbook" ? "PitchBook data" : action.option === "rogo" ? "ROGO data" : action.option === "bing" ? "Bing research" : action.option === "llm" ? "LLM Suite screening" : "M365 screening"}`,
+            `Choose ${action.option === "pitchbook" ? "PitchBook data" : action.option === "rogo" ? "ROGO data" : action.option === "bing" ? "Bing research" : action.option === "llm" ? "LLM Suite screening" : "M365 Copilot screening"}`,
             action,
           );
         else if (action.type === "inspect-company")
@@ -1180,8 +1181,8 @@ export default function App() {
             <aside className="ct-pdf-pane" aria-label="Document preview">
               <Suspense
                 fallback={
-                  <div className="ct-preview-loading" role="status">
-                    Opening PDF preview…
+                  <div className="ct-preview-loading">
+                    <Skeleton variant="drawer" label="Opening PDF preview" />
                   </div>
                 }
               >
@@ -1429,8 +1430,8 @@ export default function App() {
       {screeningSetup && (
         <Suspense
           fallback={
-            <div className="ct-toast" role="status">
-              Opening setup…
+            <div className="ct-toast ct-toast-skeleton">
+              <Skeleton variant="line" lines={2} label="Opening setup" />
             </div>
           }
         >
@@ -1443,7 +1444,7 @@ export default function App() {
           />
         </Suspense>
       )}
-      {bingSetup && <Suspense fallback={<div className="ct-toast" role="status">Opening web research…</div>}><BingResearchDialog key={bingSetup.sessionId} companies={consideredCompanies(getChatState(bingSetup.sessionId))} initialQueries={bingSetup.queries} connected={bingConnected} onClose={() => setBingSetup(undefined)} onPreview={input => previewBingResearch(bingSetup.sessionId, input)} onGenerateTemplates={() => generateDraft(bingSetup.sessionId, "bing-templates")} onRun={(token, options) => runBingResearch(bingSetup.sessionId, token, options)} /></Suspense>}
+      {bingSetup && <Suspense fallback={<div className="ct-toast ct-toast-skeleton"><Skeleton variant="line" lines={2} label="Opening web research" /></div>}><BingResearchDialog key={bingSetup.sessionId} companies={consideredCompanies(getChatState(bingSetup.sessionId))} initialQueries={bingSetup.queries} connected={bingConnected} onClose={() => setBingSetup(undefined)} onPreview={input => previewBingResearch(bingSetup.sessionId, input)} onGenerateTemplates={() => generateDraft(bingSetup.sessionId, "bing-templates")} onRun={(token, options) => runBingResearch(bingSetup.sessionId, token, options)} /></Suspense>}
       {toast && (
         <div className="ct-toast" role="status">
           <Check size={15} />

@@ -27,6 +27,7 @@ import {
   X,
 } from "lucide-react";
 import SelectField from "./ui/SelectField";
+import Skeleton from "./ui/Skeleton";
 const CompanyGrid = lazy(() => import("./workspace/CompanyGrid"));
 import ArtifactCard from "./chat/ArtifactCard";
 import type {
@@ -670,8 +671,13 @@ function Companies({
         {state.companies.length ? (
           <Suspense
             fallback={
-              <div className="ws-grid-loading" role="status">
-                Loading company table…
+              <div className="ws-grid-loading">
+                <Skeleton
+                  variant="table"
+                  rows={9}
+                  cols={6}
+                  label="Loading company table"
+                />
               </div>
             }
           >

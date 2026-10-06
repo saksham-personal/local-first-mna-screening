@@ -295,7 +295,7 @@
   height: 9px;
   border: 2px solid var(--accent);
   background: var(--surface-muted);
-  animation: sl-pulse 1.6s steps(8, end) infinite;
+  animation: sl-pulse 1.6s ease-in-out infinite;
 }
 .sl-timing-duration {
   color: var(--text-muted);
@@ -433,7 +433,7 @@
 }
 .sl-status-running i {
   background: var(--accent);
-  animation: sl-pulse 1.5s steps(8, end) infinite;
+  animation: sl-pulse 1.5s ease-in-out infinite;
 }
 .sl-status-error {
   background: var(--danger-soft);

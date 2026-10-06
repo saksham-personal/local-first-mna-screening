@@ -18,24 +18,9 @@ export default function ThemeMenu() {
       onChange={(value) => setThemePreference(value as ThemePreference)}
       icon={<Icon size={15} />}
       options={[
-        {
-          value: "system",
-          label: "System",
-          description: "Follow your device",
-          icon: <Monitor size={16} />,
-        },
-        {
-          value: "light",
-          label: "Light",
-          description: "Light surfaces",
-          icon: <Sun size={16} />,
-        },
-        {
-          value: "dark",
-          label: "Dark",
-          description: "Dark surfaces",
-          icon: <Moon size={16} />,
-        },
+        { value: "system", label: "System", icon: <Monitor size={16} /> },
+        { value: "light", label: "Light", icon: <Sun size={16} /> },
+        { value: "dark", label: "Dark", icon: <Moon size={16} /> },
       ]}
     />
   );
