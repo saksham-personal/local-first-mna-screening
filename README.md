@@ -33,7 +33,9 @@ Keep strong matches and `CHECK` cases, hide weaker matches, select saved
 RESULTS columns as inputs for another pass, and export the considered set. A
 broad 2,500-company set might become 400, then 150, then 55 through analyst
 review; these counts are examples, not automatic quotas. See the
-[workflow](mna-tools/docs/WORKFLOW.md) for the complete loop.
+[workflow](mna-tools/docs/WORKFLOW.md) for the short process map, or the
+[application flow guide](mna-tools/docs/APPLICATION_FLOW_GUIDE.md) for the
+detailed analyst/developer walkthrough, hydration, memory, and LangGraph design.
 
 Uploads have distinct purposes. Company-data spreadsheets are inspected by
 their headers and matched to the run. Chat attachments can be included or

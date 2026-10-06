@@ -2,6 +2,8 @@
 
 This document follows the analyst's current local flow. The Rust service owns run, criteria, candidate, approval, source, and result records. The companion UI owns the chat review steps and displays Rust state. The local example can search fictional MID data. ISCC and live LLMSuite, M365, and Bing connections require deployment configuration and have not been verified in this environment. See [the tool reference](../TOOL_REFERENCE.md) for exact arguments.
 
+For the complete analyst/developer walkthrough, hydration and memory rules, worked shortlist example, and actual versus target LangGraph design, read the [application flow guide](APPLICATION_FLOW_GUIDE.md).
+
 ## Process map
 
 ```mermaid

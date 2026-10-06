@@ -4,6 +4,8 @@ This Rust/Axum service supplies deterministic tools for qualitative discovery, i
 
 Read [the tool reference](TOOL_REFERENCE.md), [backend architecture](docs/BACKEND_ARCHITECTURE.md), [correction status](docs/ARCHITECTURE_CRITIQUE.md), [workflow](docs/WORKFLOW.md) and [operating instructions](docs/OPERATING_INSTRUCTIONS.md).
 
+The [detailed application flow guide](docs/APPLICATION_FLOW_GUIDE.md) explains the analyst journey, iterative shortlist review, hydration, durable memory, and current/target LangGraph design.
+
 ## Start
 
 Build with Rust and a native C compiler for bundled SQLite, or use the delivered Windows executable:
