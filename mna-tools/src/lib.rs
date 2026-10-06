@@ -10,6 +10,7 @@ pub mod identity;
 pub mod projection;
 pub mod protocol;
 pub mod providers;
+pub mod prompts;
 pub mod result_parser;
 pub mod retrieval;
 pub mod review;

@@ -108,7 +108,7 @@ fn accepts_explicit_empty_values_and_rejects_oversize() {
 #[test]
 fn repair_prompt_is_bounded_and_does_not_echo_raw_output() {
     let err = parse_tool_response("secret prose", SEARCH).unwrap_err();
-    let prompt = repair_prompt("private model text", &err, SEARCH);
+    let prompt = repair_prompt("private model text", &err, SEARCH).unwrap();
     assert!(prompt.contains("search_companies"));
     assert!(!prompt.contains("private model text"));
     assert!(prompt.len() < 1000);
