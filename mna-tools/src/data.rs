@@ -7,7 +7,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -35,13 +35,29 @@ struct ImportCompanyFilesArgs {
 struct ImportEnrichmentFilesArgs {
     run_id: String,
     files: Vec<String>,
+    /// Deprecated and ignored. An import never hides companies; review the saved match
+    /// report and call apply_enrichment_review to hide or keep unmatched companies.
     #[serde(default)]
     exclude_unmapped: bool,
+    /// Upload zone the files were dropped in: "pitchbook" or "rogo". Breaks ties between
+    /// ambiguous file shapes and rejects files in the wrong zone with a clear message.
+    #[serde(default)]
+    purpose_hint: Option<String>,
+    /// Optional map of each staged file id to the analyst's original file name, used in
+    /// error messages and the saved report.
+    #[serde(default)]
+    display_names: Option<BTreeMap<String, String>>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct InspectEnrichmentFilesArgs {
     files: Vec<String>,
+    /// Upload zone the files were dropped in: "pitchbook" or "rogo".
+    #[serde(default)]
+    purpose_hint: Option<String>,
+    /// Optional map of each staged file id to the analyst's original file name.
+    #[serde(default)]
+    display_names: Option<BTreeMap<String, String>>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -92,7 +108,10 @@ pub fn input_schema(tool: &str) -> Option<Value> {
         "get_company_identifiers" => schemars::schema_for!(CompanyArgs),
         "get_source_rows" => schemars::schema_for!(SourceRowsArgs),
         "get_candidate_source_data" => schemars::schema_for!(CandidateSourceDataArgs),
-        _ => return None,
+        _ => {
+            return crate::enrichment_report::input_schema(tool)
+                .or_else(|| crate::grid::input_schema(tool))
+        }
     };
     serde_json::to_value(schema).ok()
 }
@@ -112,6 +131,9 @@ impl DataService {
             "get_company_identifiers" => self.get_company_identifiers(parse(arguments)?),
             "get_source_rows" => self.get_source_rows(parse(arguments)?),
             "get_candidate_source_data" => self.get_candidate_source_data(parse(arguments)?),
+            "get_enrichment_report" => crate::enrichment_report::get_report(&self.store, arguments),
+            "get_screening_grid" => crate::grid::screening_grid(&self.store, arguments),
+            "get_company_detail" => crate::grid::company_detail(&self.store, arguments),
             _ => Err(Error::Validation(format!("unknown data tool: {tool}"))),
         }
     }
@@ -370,6 +392,8 @@ impl DataService {
 
     fn inspect_enrichment_files(&self, args: InspectEnrichmentFilesArgs) -> Result<Value> {
         validate_files(&args.files)?;
+        let hint = tabular::Purpose::parse(args.purpose_hint.as_deref())?;
+        let names = DisplayNames::new(args.display_names)?;
         let mut files = Vec::with_capacity(args.files.len());
         let mut import_files = Vec::new();
         let mut pending_files = Vec::new();
@@ -381,29 +405,72 @@ impl DataService {
             ("unrecognized", 0),
         ]);
         for file in args.files {
-            let sheets = tabular::inspect_file(&tabular::resolve_import_path(&file)?)?;
-            let inspected = sheets
-                .iter()
-                .map(|sheet| {
-                    let kind = tabular::sheet_kind(sheet);
-                    let counter = match kind {
-                        Some("PB_MAPPING") => "mapping",
-                        Some("PB_DATA") => "pitchbook",
-                        Some("ROGO") => "rogo",
-                        Some("COMPANY") => "company",
-                        _ => "unrecognized",
-                    };
-                    *counts.get_mut(counter).expect("known inspection count") += 1;
-                    json!({
-                        "sheet": sheet.sheet_name,
-                        "header_row": sheet.header_row,
-                        "kind": kind,
-                        "rows": sheet.rows.len(),
-                        "headers": sheet.headers,
-                    })
-                })
-                .collect::<Vec<_>>();
+            let display = names.display(&file);
+            let sheets = match tabular::resolve_import_path(&file)
+                .and_then(|path| tabular::inspect_file_lenient(&path))
+            {
+                Ok(sheets) => sheets,
+                Err(error) => {
+                    let message = format!("{display}: {error}");
+                    pending_files.push(file.clone());
+                    files.push(json!({
+                        "file": file,
+                        "display_name": display,
+                        "eligible": false,
+                        "roles": Vec::<&str>::new(),
+                        "sheets": Vec::<Value>::new(),
+                        "reason": message,
+                        "error": message,
+                    }));
+                    continue;
+                }
+            };
+            let mut inspected = Vec::new();
+            let mut problem: Option<String> = None;
+            for read in sheets {
+                match read.result {
+                    Ok(sheet) => {
+                        let kind = tabular::enrichment_kind(&sheet, hint);
+                        let counter = match kind {
+                            Some("PB_MAPPING") => "mapping",
+                            Some("PB_DATA") => "pitchbook",
+                            Some("ROGO") => "rogo",
+                            Some("COMPANY") => "company",
+                            _ => "unrecognized",
+                        };
+                        *counts.get_mut(counter).expect("known inspection count") += 1;
+                        let mut entry = json!({
+                            "sheet": sheet.sheet_name,
+                            "header_row": sheet.header_row,
+                            "kind": kind,
+                            "rows": sheet.rows.len(),
+                            "headers": sheet.headers,
+                        });
+                        if let Some(message) = zone_mismatch(kind, hint, &display) {
+                            entry["error"] = json!(message);
+                            problem.get_or_insert(message);
+                        }
+                        inspected.push(entry);
+                    }
+                    Err(error) => {
+                        *counts
+                            .get_mut("unrecognized")
+                            .expect("known inspection count") += 1;
+                        let message = format!("{display}: {error}");
+                        inspected.push(json!({
+                            "sheet": read.sheet_name,
+                            "header_row": Value::Null,
+                            "kind": Value::Null,
+                            "rows": 0,
+                            "headers": Vec::<String>::new(),
+                            "error": message,
+                        }));
+                        problem.get_or_insert(message);
+                    }
+                }
+            }
             let eligible = !inspected.is_empty()
+                && problem.is_none()
                 && inspected.iter().all(|sheet| {
                     matches!(
                         sheet["kind"].as_str(),
@@ -416,10 +483,12 @@ impl DataService {
                 .collect::<BTreeSet<_>>();
             let reason = if eligible {
                 None
+            } else if let Some(message) = problem {
+                Some(message)
             } else if inspected.is_empty() {
-                Some("no populated sheets")
+                Some("no populated sheets".to_owned())
             } else {
-                Some("contains a non-enrichment or unrecognized sheet")
+                Some("contains a non-enrichment or unrecognized sheet".to_owned())
             };
             if eligible {
                 import_files.push(file.clone());
@@ -428,6 +497,7 @@ impl DataService {
             }
             files.push(json!({
                 "file": file,
+                "display_name": display,
                 "eligible": eligible,
                 "roles": roles,
                 "sheets": inspected,
@@ -444,38 +514,101 @@ impl DataService {
 
     fn import_enrichment_files(&self, args: ImportEnrichmentFilesArgs) -> Result<Value> {
         validate_files(&args.files)?;
+        // `exclude_unmapped` is deprecated and ignored: an import never changes which
+        // companies are considered. The analyst reviews the saved match report and applies
+        // that decision explicitly through apply_enrichment_review.
+        let _deprecated_exclude_unmapped = args.exclude_unmapped;
+        let hint = tabular::Purpose::parse(args.purpose_hint.as_deref())?;
+        let names = DisplayNames::new(args.display_names.clone())?;
         let mut mappings = Vec::<SheetRows>::new();
         let mut pb_data = Vec::<SheetRows>::new();
         let mut rogo = Vec::<SheetRows>::new();
+        let mut file_entries = Vec::<Value>::new();
+        let mut problems = Vec::<String>::new();
         let mut total_rows = 0usize;
         for file in &args.files {
-            for sheet in tabular::read_file(&tabular::resolve_import_path(file)?)? {
-                total_rows += sheet.rows.len();
-                if total_rows > 250_000 {
-                    return Err(Error::Validation(
-                        "Enrichment import exceeds 250000 total rows".into(),
-                    ));
+            let display = names.display(file);
+            let sheets = match tabular::resolve_import_path(file)
+                .and_then(|path| tabular::inspect_file_lenient(&path))
+            {
+                Ok(sheets) => sheets,
+                Err(error) => {
+                    let message = format!("{display}: {error}");
+                    problems.push(message.clone());
+                    file_entries.push(json!({"file":file,"display_name":display,"status":"error","error":message,"sheets":Vec::<Value>::new()}));
+                    continue;
                 }
-                match tabular::sheet_kind(&sheet) {
-                    Some("PB_MAPPING") => mappings.push(sheet),
-                    Some("PB_DATA") => pb_data.push(sheet),
-                    Some("ROGO") => rogo.push(sheet),
-                    _ => {
-                        return Err(Error::Validation(format!(
-                            "unrecognized enrichment sheet: {}/{}",
-                            sheet.file_name, sheet.sheet_name
-                        )))
+            };
+            let mut sheet_entries = Vec::<Value>::new();
+            let mut imported_sheets = 0usize;
+            for read in sheets {
+                let sheet = match read.result {
+                    Ok(sheet) => sheet,
+                    Err(error) => {
+                        let message = format!("{display}: {error}");
+                        problems.push(message.clone());
+                        sheet_entries.push(json!({"sheet":read.sheet_name,"kind":Value::Null,"status":"error","error":message,"rows":0}));
+                        continue;
+                    }
+                };
+                let kind = tabular::enrichment_kind(&sheet, hint);
+                let rows = sheet.rows.len();
+                let mut entry = json!({"sheet":sheet.sheet_name,"header_row":sheet.header_row,"kind":kind,"rows":rows});
+                if let Some(message) = zone_mismatch(kind, hint, &display) {
+                    entry["status"] = json!("rejected");
+                    entry["error"] = json!(message);
+                    problems.push(message);
+                } else if !matches!(kind, Some("PB_MAPPING" | "PB_DATA" | "ROGO")) {
+                    let message = if kind == Some("COMPANY") {
+                        format!("{display} (sheet {}): This looks like a MID company file (ECID/CID columns). Import it as MID data, not as enrichment.", sheet.sheet_name)
+                    } else {
+                        format!("{display} (sheet {}): unrecognized sheet. Expected PitchBook mapping (pk, PBId, Company Profile), PitchBook data (Company ID, Companies) or ROGO (Website) columns.", sheet.sheet_name)
+                    };
+                    entry["status"] = json!(if kind == Some("COMPANY") {
+                        "rejected"
+                    } else {
+                        "skipped"
+                    });
+                    entry["error"] = json!(message);
+                    problems.push(message);
+                } else if total_rows + rows > 250_000 {
+                    let message = format!("{display} (sheet {}): enrichment import exceeds 250000 total rows", sheet.sheet_name);
+                    entry["status"] = json!("error");
+                    entry["error"] = json!(message);
+                    problems.push(message);
+                } else {
+                    total_rows += rows;
+                    entry["status"] = json!("imported");
+                    imported_sheets += 1;
+                    match kind {
+                        Some("PB_MAPPING") => mappings.push(sheet),
+                        Some("PB_DATA") => pb_data.push(sheet),
+                        _ => rogo.push(sheet),
                     }
                 }
+                sheet_entries.push(entry);
             }
+            let status = if sheet_entries.is_empty() {
+                "skipped"
+            } else if imported_sheets == sheet_entries.len() {
+                "imported"
+            } else if imported_sheets > 0 {
+                "partial"
+            } else {
+                "rejected"
+            };
+            let mut entry = json!({"file":file,"display_name":display,"status":status,"sheets":sheet_entries});
+            if status == "skipped" {
+                entry["error"] = json!(format!("{display}: no populated sheets"));
+            }
+            file_entries.push(entry);
         }
         if mappings.is_empty() && pb_data.is_empty() && rogo.is_empty() {
-            return Err(Error::Validation("no enrichment sheets found".into()));
-        }
-        if args.exclude_unmapped && mappings.is_empty() {
-            return Err(Error::Validation(
-                "exclude_unmapped requires a PitchBook mapping sheet".into(),
-            ));
+            return Err(Error::Validation(if problems.is_empty() {
+                "no enrichment sheets found".into()
+            } else {
+                problems.join("; ")
+            }));
         }
         let mut parquet_paths = Vec::new();
         let mut new_parquet_paths = Vec::new();
@@ -492,85 +625,73 @@ impl DataService {
         let mut mapped_companies = BTreeSet::new();
         let mut pb_companies = BTreeSet::new();
         let mut rogo_companies = BTreeSet::new();
+        let mut pb_facts = crate::enrichment_report::PitchbookFacts::default();
+        let mut rogo_facts = crate::enrichment_report::RogoFacts::default();
+        let files_json = Value::Array(file_entries.clone());
         let outcome = self.store.with_connection(|connection| {
             let tx = connection.transaction()?;
             require_run(&tx, &args.run_id)?;
             for sheet in &mappings {
                 for row in &sheet.rows {
                     result.mapping_rows += 1;
-                    let profile = field_text(row, &["Company Profile"]);
+                    let (profile_yes, pbid) = mapping_fields(row);
                     let pk = field_text(row, &["pk"]);
-                    let pbid = normalized_identifier(get_field(row, &["PBId"]));
-                    let company_id = pk
+                    let resolved = pk
                         .as_deref()
                         .map(|pk| resolve_pk_in_tx(&tx, pk))
                         .transpose()?
                         .flatten();
-                    let company_id = match company_id {
-                        Some(id) if is_candidate(&tx, &args.run_id, &id)? => Some(id),
+                    let candidate = match &resolved {
+                        Some(id) if is_candidate(&tx, &args.run_id, id)? => Some(id.clone()),
                         _ => None,
                     };
-                    save_enrichment_row(&tx, "PB_MAPPING", company_id.as_deref(), row, None)?;
-                    if (!profile
-                        .as_deref()
-                        .is_some_and(|p| p.eq_ignore_ascii_case("yes"))
-                        || pbid.is_none())
-                        && company_id.is_some()
-                    {
-                        crate::review::hide_explicit_unmapped_pb(
-                            &tx,
-                            &args.run_id,
-                            company_id.as_deref().expect("candidate"),
-                            if pbid.is_none() {
-                                "pitchbook_unmapped"
-                            } else {
-                                "pitchbook_non_company"
-                            },
-                        )?;
+                    save_enrichment_row(&tx, "PB_MAPPING", candidate.as_deref(), row, None)?;
+                    if let Some(company_id) = &candidate {
+                        pb_facts.mapping.insert(company_id.clone(), (profile_yes, pbid.is_some()));
                     }
-                    if !profile
-                        .as_deref()
-                        .is_some_and(|p| p.eq_ignore_ascii_case("yes"))
-                    {
+                    if !profile_yes {
                         result.mapping_skipped_non_company += 1;
                         continue;
                     }
-                    match (company_id, pbid) {
+                    match (candidate, pbid) {
                         (Some(company_id), Some(pbid)) => {
-                            let already_mapped = lookup_identifier(&tx, "PBID", &pbid)?.is_some();
-                            match put_identifier(&tx, "PBID", &pbid, &company_id) {
-                                Ok(()) => {
-                                    crate::review::restore_pb_mapping(
-                                        &tx,
-                                        &args.run_id,
-                                        &company_id,
-                                    )?;
+                            match set_current_pbid(&tx, &company_id, &pbid) {
+                                Ok(changed) => {
                                     mapped_companies.insert(company_id);
-                                    if !already_mapped {
+                                    if changed {
                                         result.pbid_populated += 1;
                                     }
                                 }
                                 Err(Error::Conflict(reason)) => {
                                     quarantine(&tx, "PB_MAPPING", &reason, row)?;
                                     result.quarantined += 1;
+                                    pb_facts.conflicts.insert(company_id);
                                 }
-                                Err(e) => return Err(e),
+                                Err(error) => return Err(error),
                             }
                         }
-                        _ => {
+                        (Some(_), None) => {
                             quarantine(
                                 &tx,
                                 "PB_MAPPING",
-                                "Company Profile Yes row lacks resolvable pk or PBId",
+                                "Company Profile Yes row lacks a PBId",
                                 row,
                             )?;
                             result.quarantined += 1;
                         }
+                        (None, _) => {
+                            let reason = if resolved.is_some() {
+                                "Company Profile Yes row: pk resolves to a company that is not a candidate in this run"
+                            } else if pk.is_some() {
+                                "Company Profile Yes row: pk does not resolve to a known company"
+                            } else {
+                                "Company Profile Yes row lacks a pk"
+                            };
+                            quarantine(&tx, "PB_MAPPING", reason, row)?;
+                            result.quarantined += 1;
+                        }
                     }
                 }
-            }
-            if args.exclude_unmapped {
-                crate::review::hide_all_unmapped_pb(&tx, &args.run_id)?;
             }
             for (sheet, path) in pb_data.iter().zip(&parquet_paths) {
                 for row in &sheet.rows {
@@ -587,7 +708,7 @@ impl DataService {
                     };
                     save_enrichment_row(&tx, "PB_DATA", company_id.as_deref(), row, Some(path))?;
                     if let Some(company_id) = company_id {
-                        upsert_pb_compact(&tx, &company_id, row)?;
+                        replace_pb_compact(&tx, &company_id, row)?;
                         pb_companies.insert(company_id);
                         result.pb_hydrated += 1;
                     } else {
@@ -599,48 +720,119 @@ impl DataService {
             for sheet in &rogo {
                 for row in &sheet.rows {
                     result.rogo_rows += 1;
-                    let site = field_text(row, &["Website", "Websites"]);
-                    let normalized = site.as_deref().and_then(normalize_website);
-                    let selected = normalized
-                        .as_deref()
-                        .and_then(|key| pb_sites.get(key).or_else(|| canonical_sites.get(key)));
-                    let company_id = match selected {
-                        Some(ids) if ids.len() == 1 => ids.first().cloned(),
-                        Some(_) => {
+                    rogo_facts.rows += 1;
+                    let site = rogo_website(row);
+                    let normalized = site
+                        .as_ref()
+                        .and_then(|(_, value)| normalize_website(value));
+                    let selection = match normalized.as_deref() {
+                        Some(key) => match_rogo_website(key, &pb_sites, &canonical_sites),
+                        None => RogoMatch::Unmatched,
+                    };
+                    let company_id = match selection {
+                        RogoMatch::Matched(id) => Some(id),
+                        RogoMatch::Ambiguous(ids) => {
                             quarantine(&tx, "ROGO", "website matches multiple companies", row)?;
                             result.quarantined += 1;
+                            rogo_facts.ambiguous.push((
+                                site.as_ref().map(|(_, value)| value.clone()),
+                                normalized.clone().unwrap_or_default(),
+                                ids,
+                            ));
                             None
                         }
-                        None => {
+                        RogoMatch::Unmatched => {
                             result.rogo_unmatched += 1;
+                            rogo_facts
+                                .unmatched
+                                .push((rogo_facts.rows, site.as_ref().map(|(_, value)| value.clone())));
                             None
                         }
                     };
                     save_enrichment_row(&tx, "ROGO", company_id.as_deref(), row, None)?;
                     if let Some(company_id) = company_id {
-                        merge_rogo(&tx, &company_id, row)?;
+                        merge_rogo(
+                            &tx,
+                            &company_id,
+                            row,
+                            site.as_ref().map(|(key, _)| key.as_str()),
+                        )?;
+                        *rogo_facts.matched.entry(company_id.clone()).or_default() += 1;
                         rogo_companies.insert(company_id);
                         result.rogo_hydrated += 1;
                     }
                 }
             }
-            let selection_revision = crate::review::record_pb_import_review(&tx, &args.run_id)?;
+            // Imports never change considered flags, so there is no review row to record.
             let (considered_count, hidden_count): (i64, i64) = tx.query_row(
-                "SELECT considered_count,hidden_count FROM shortlist_reviews WHERE rowid=?",
-                [selection_revision],
+                "SELECT COALESCE(SUM(considered),0),COUNT(*)-COALESCE(SUM(considered),0) FROM candidates WHERE run_id=?",
+                [&args.run_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
+            let selection_revision: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(rowid),0) FROM shortlist_reviews WHERE run_id=?",
+                [&args.run_id],
+                |r| r.get(0),
+            )?;
+            let mut reports = Vec::new();
+            if !mappings.is_empty() || !pb_data.is_empty() {
+                let counts = json!({
+                    "mapping_rows": result.mapping_rows,
+                    "mapping_skipped_non_company": result.mapping_skipped_non_company,
+                    "mapping_unique_companies": mapped_companies.len(),
+                    "pbid_populated": result.pbid_populated,
+                    "pb_data_rows": result.pb_data_rows,
+                    "pb_hydrated_rows": result.pb_hydrated,
+                    "pb_unique_companies": pb_companies.len(),
+                    "pb_unmatched_rows": result.pb_unmatched,
+                    "quarantined": result.quarantined,
+                });
+                reports.push(crate::enrichment_report::save_pitchbook_report(
+                    &tx,
+                    &args.run_id,
+                    &files_json,
+                    &counts,
+                    &pb_facts,
+                )?);
+            }
+            if !rogo.is_empty() {
+                let counts = json!({
+                    "rogo_rows": result.rogo_rows,
+                    "rogo_hydrated_rows": result.rogo_hydrated,
+                    "rogo_unique_companies": rogo_companies.len(),
+                    "rogo_unmatched_rows": result.rogo_unmatched,
+                });
+                reports.push(crate::enrichment_report::save_rogo_report(
+                    &tx,
+                    &args.run_id,
+                    &files_json,
+                    &counts,
+                    &rogo_facts,
+                )?);
+            }
             tx.commit()?;
-            Ok((selection_revision, considered_count, hidden_count))
+            Ok((selection_revision, considered_count, hidden_count, reports))
         });
         if outcome.is_err() {
             for path in &new_parquet_paths {
                 let _ = std::fs::remove_file(path);
             }
         }
-        let (selection_revision, considered_count, hidden_count) = outcome?;
+        let (selection_revision, considered_count, hidden_count, reports) = outcome?;
+        let purpose = match (
+            !mappings.is_empty() || !pb_data.is_empty(),
+            !rogo.is_empty(),
+        ) {
+            (true, true) => "mixed",
+            (true, false) => "pitchbook",
+            _ => "rogo",
+        };
+        let report_id = reports
+            .first()
+            .map(|report| report["report_id"].clone())
+            .unwrap_or(Value::Null);
         Ok(
-            json!({"run_id":args.run_id,"mapping_rows":result.mapping_rows,"mapping_skipped_non_company":result.mapping_skipped_non_company,"pbid_populated":result.pbid_populated,"mapping_unique_companies":mapped_companies.len(),"pb_data_rows":result.pb_data_rows,"pb_hydrated":result.pb_hydrated,"pb_unique_companies":pb_companies.len(),"pb_unmatched":result.pb_unmatched,"rogo_rows":result.rogo_rows,"rogo_hydrated":result.rogo_hydrated,"rogo_unique_companies":rogo_companies.len(),"rogo_unmatched":result.rogo_unmatched,"quarantined":result.quarantined,"selection_revision":selection_revision,"considered_count":considered_count,"hidden_count":hidden_count,"parquet_files":parquet_paths.iter().map(|p|p.to_string_lossy().to_string()).collect::<Vec<_>>() }),
+            json!({"run_id":args.run_id,"purpose":purpose,"report_id":report_id,"reports":reports,"files":file_entries,"mapping_rows":result.mapping_rows,"mapping_skipped_non_company":result.mapping_skipped_non_company,"pbid_populated":result.pbid_populated,"mapping_unique_companies":mapped_companies.len(),"pb_data_rows":result.pb_data_rows,"pb_hydrated":result.pb_hydrated,"pb_unique_companies":pb_companies.len(),"pb_unmatched":result.pb_unmatched,"rogo_rows":result.rogo_rows,"rogo_hydrated":result.rogo_hydrated,"rogo_unique_companies":rogo_companies.len(),"rogo_unmatched":result.rogo_unmatched,"quarantined":result.quarantined,"selection_revision":selection_revision,"considered_count":considered_count,"hidden_count":hidden_count,"parquet_files":parquet_paths.iter().map(|p|p.to_string_lossy().to_string()).collect::<Vec<_>>() }),
         )
     }
 
@@ -750,6 +942,22 @@ fn source_value_present(value: &Value) -> bool {
         }
         _ => true,
     }
+}
+
+/// Merge source rows given newest first: the first usable value of each column wins, so a
+/// newer blank value falls back to an older nonblank one.
+pub(crate) fn merge_usable_fields(records: &[Value]) -> Map<String, Value> {
+    let mut merged = Map::new();
+    for record in records {
+        if let Some(object) = record.as_object() {
+            for (key, value) in object {
+                if !merged.contains_key(key) && source_value_present(value) {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    merged
 }
 
 fn hydrate_pb_parquet(
@@ -957,8 +1165,22 @@ fn require_run(connection: &Connection, run_id: &str) -> Result<()> {
         Err(Error::NotFound(format!("run not found: {run_id}")))
     }
 }
+/// Content hash that identifies one quarantined row. Re-importing the same row for the same
+/// reason must not add another quarantine record.
+pub(crate) fn quarantine_hash(source: &str, reason: &str, row_json: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(reason.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(row_json.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 fn quarantine(tx: &Transaction<'_>, source: &str, reason: &str, row: &Value) -> Result<()> {
-    tx.execute("INSERT INTO identity_quarantine(quarantine_id,source,reason,row_json,created_at) VALUES(?,?,?,?,?)",params![id("Q"),source,reason,serde_json::to_string(row)?,now()])?;
+    let raw = serde_json::to_string(row)?;
+    let hash = quarantine_hash(source, reason, &raw);
+    tx.execute("INSERT OR IGNORE INTO identity_quarantine(quarantine_id,source,reason,row_json,created_at,content_hash) VALUES(?,?,?,?,?,?)",params![id("Q"),source,reason,raw,now(),hash])?;
     Ok(())
 }
 fn has_source(tx: &Transaction<'_>, company_id: &str, source: &str) -> Result<bool> {
@@ -1130,7 +1352,61 @@ fn update_canonical(
         &["Description", "Descriptions", "Business Description"],
     );
     let state = field_text(row, &["HQ State", "State"]);
-    tx.execute("UPDATE companies SET name=COALESCE(?,name),website=COALESCE(?,website),city=COALESCE(?,city),description=COALESCE(?,description),metadata_json=json_set(metadata_json,'$.preferred_source',?,'$.hq_state',COALESCE(?,json_extract(metadata_json,'$.hq_state'))),updated_at=? WHERE company_id=?",params![name,website,city,description,source,state,now(),company_id])?;
+    let (old_name, old_website, old_city, old_description, old_metadata): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = tx.query_row(
+        "SELECT name,website,city,description,metadata_json FROM companies WHERE company_id=?",
+        [company_id],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+            ))
+        },
+    )?;
+    let new_name = name.unwrap_or_else(|| old_name.clone());
+    let new_website = website.or_else(|| old_website.clone());
+    let new_city = city.or_else(|| old_city.clone());
+    let new_description = description.or_else(|| old_description.clone());
+    let mut metadata: Value = serde_json::from_str(&old_metadata).unwrap_or_else(|_| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({});
+    }
+    let old_source = metadata["preferred_source"].as_str().map(str::to_owned);
+    let old_state = metadata["hq_state"].as_str().map(str::to_owned);
+    let new_state = state.or_else(|| old_state.clone());
+    // A re-import of identical data must not touch the row: updated_at feeds the
+    // prepared-plan data hash, so a needless bump would stale an approved plan.
+    if new_name == old_name
+        && new_website == old_website
+        && new_city == old_city
+        && new_description == old_description
+        && old_source.as_deref() == Some(source)
+        && new_state == old_state
+    {
+        return Ok(());
+    }
+    metadata["preferred_source"] = json!(source);
+    metadata["hq_state"] = json!(new_state);
+    tx.execute(
+        "UPDATE companies SET name=?,website=?,city=?,description=?,metadata_json=?,updated_at=? WHERE company_id=?",
+        params![
+            new_name,
+            new_website,
+            new_city,
+            new_description,
+            metadata.to_string(),
+            now(),
+            company_id
+        ],
+    )?;
     Ok(())
 }
 
@@ -1165,15 +1441,117 @@ fn save_enrichment_row(
     } else {
         raw
     };
-    tx.execute("INSERT INTO enrichment_rows(enrichment_id,kind,company_id,row_hash,row_json,parquet_path,imported_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(kind,row_hash) DO UPDATE SET company_id=COALESCE(excluded.company_id,enrichment_rows.company_id),parquet_path=COALESCE(excluded.parquet_path,enrichment_rows.parquet_path)",
+    // The DO UPDATE only fires when the link or locator actually changes, so re-importing an
+    // identical file is a true no-op (no trigger, no source-version bump).
+    tx.execute("INSERT INTO enrichment_rows(enrichment_id,kind,company_id,row_hash,row_json,parquet_path,imported_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(kind,row_hash) DO UPDATE SET company_id=COALESCE(excluded.company_id,enrichment_rows.company_id),parquet_path=COALESCE(excluded.parquet_path,enrichment_rows.parquet_path) WHERE enrichment_rows.company_id IS NOT COALESCE(excluded.company_id,enrichment_rows.company_id) OR enrichment_rows.parquet_path IS NOT COALESCE(excluded.parquet_path,enrichment_rows.parquet_path)",
         params![id("ENR"),kind,company_id,fingerprint,stored,parquet_path.map(|p|p.to_string_lossy().to_string()),now()])?;
     Ok(())
 }
 
-fn upsert_pb_compact(tx: &Transaction<'_>, company_id: &str, row: &Value) -> Result<()> {
-    tx.execute("INSERT INTO company_enrichment(company_id,pb_website,pb_name,pb_description,pb_linkedin_url,pb_hq_location,pb_active_investors,pb_universe,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(company_id) DO UPDATE SET pb_website=COALESCE(excluded.pb_website,company_enrichment.pb_website),pb_name=COALESCE(excluded.pb_name,company_enrichment.pb_name),pb_description=COALESCE(excluded.pb_description,company_enrichment.pb_description),pb_linkedin_url=COALESCE(excluded.pb_linkedin_url,company_enrichment.pb_linkedin_url),pb_hq_location=COALESCE(excluded.pb_hq_location,company_enrichment.pb_hq_location),pb_active_investors=COALESCE(excluded.pb_active_investors,company_enrichment.pb_active_investors),pb_universe=COALESCE(excluded.pb_universe,company_enrichment.pb_universe),updated_at=excluded.updated_at",
-        params![company_id,field_text(row,&["Website"]),field_text(row,&["Companies"]),field_text(row,&["Description"]),field_text(row,&["LinkedIn URL"]),field_text(row,&["HQ Location"]),field_text(row,&["Active Investors"]),field_text(row,&["Universe"]),now()])?;
+type PbCompact = [Option<String>; 7];
+
+fn pb_compact_values(row: &Value) -> PbCompact {
+    [
+        field_text(row, &["Website"]),
+        field_text(row, &["Companies", "Company Name"]),
+        field_text(row, &["Description"]),
+        field_text(row, &["LinkedIn URL"]),
+        field_text(row, &["HQ Location"]),
+        field_text(row, &["Active Investors"]),
+        field_text(row, &["Universe"]),
+    ]
+}
+
+/// Replace the compact PitchBook fields with the incoming data row (newest import wins; an
+/// older record is never mixed in). A re-import of the same values writes nothing.
+fn replace_pb_compact(tx: &Transaction<'_>, company_id: &str, row: &Value) -> Result<bool> {
+    let values = pb_compact_values(row);
+    let existing: Option<PbCompact> = tx
+        .query_row(
+            "SELECT pb_website,pb_name,pb_description,pb_linkedin_url,pb_hq_location,pb_active_investors,pb_universe FROM company_enrichment WHERE company_id=?",
+            [company_id],
+            |r| {
+                Ok([
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ])
+            },
+        )
+        .optional()?;
+    if existing.as_ref() == Some(&values) {
+        return Ok(false);
+    }
+    tx.execute("INSERT INTO company_enrichment(company_id,pb_website,pb_name,pb_description,pb_linkedin_url,pb_hq_location,pb_active_investors,pb_universe,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(company_id) DO UPDATE SET pb_website=excluded.pb_website,pb_name=excluded.pb_name,pb_description=excluded.pb_description,pb_linkedin_url=excluded.pb_linkedin_url,pb_hq_location=excluded.pb_hq_location,pb_active_investors=excluded.pb_active_investors,pb_universe=excluded.pb_universe,updated_at=excluded.updated_at",
+        params![company_id,values[0],values[1],values[2],values[3],values[4],values[5],values[6],now()])?;
+    Ok(true)
+}
+
+/// Forget the compact PitchBook fields. They described a PBID the company no longer has.
+fn clear_pb_compact(tx: &Transaction<'_>, company_id: &str) -> Result<()> {
+    tx.execute(
+        "UPDATE company_enrichment SET pb_website=NULL,pb_name=NULL,pb_description=NULL,pb_linkedin_url=NULL,pb_hq_location=NULL,pb_active_investors=NULL,pb_universe=NULL,updated_at=? WHERE company_id=? AND (pb_website IS NOT NULL OR pb_name IS NOT NULL OR pb_description IS NOT NULL OR pb_linkedin_url IS NOT NULL OR pb_hq_location IS NOT NULL OR pb_active_investors IS NOT NULL OR pb_universe IS NOT NULL)",
+        params![now(), company_id],
+    )?;
     Ok(())
+}
+
+/// Profile/PBId of one PitchBook mapping row. Only Company Profile = Yes counts as a company.
+pub(crate) fn mapping_fields(row: &Value) -> (bool, Option<String>) {
+    let profile = field_text(row, &tabular::PB_PROFILE_HEADERS);
+    let pbid = normalized_identifier(get_field(row, &tabular::PB_ID_HEADERS));
+    (
+        profile
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("yes")),
+        pbid,
+    )
+}
+
+/// A company has one current PBID. A Company Profile = Yes mapping row replaces the
+/// previous identifier (and detaches PitchBook data that belonged to it). A PBID that already
+/// belongs to another company is a conflict and is never reassigned. Returns whether the
+/// company's current PBID actually changed.
+fn set_current_pbid(tx: &Transaction<'_>, company_id: &str, pbid: &str) -> Result<bool> {
+    if let Some(owner) = lookup_identifier(tx, "PBID", pbid)? {
+        if owner != company_id {
+            return Err(Error::Conflict(format!(
+                "PBID {pbid} belongs to another company"
+            )));
+        }
+    }
+    let mut statement = tx.prepare(
+        "SELECT identifier FROM company_identifiers WHERE company_id=? AND kind='PBID' ORDER BY identifier",
+    )?;
+    let current = statement
+        .query_map([company_id], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    if current.len() == 1 && current[0] == pbid {
+        return Ok(false);
+    }
+    for old in current.iter().filter(|old| old.as_str() != pbid) {
+        tx.execute(
+            "DELETE FROM company_identifiers WHERE kind='PBID' AND identifier=? AND company_id=?",
+            params![old, company_id],
+        )?;
+        // Wide PitchBook data for the old PBID no longer describes this company.
+        tx.execute(
+            "UPDATE enrichment_rows SET company_id=NULL WHERE kind='PB_DATA' AND company_id=? AND UPPER(TRIM(COALESCE(json_extract(row_json,'$.\"Company ID\"'),'')))=?",
+            params![company_id, old.to_ascii_uppercase()],
+        )?;
+    }
+    if !current.is_empty() {
+        clear_pb_compact(tx, company_id)?;
+    }
+    if !current.iter().any(|existing| existing == pbid) {
+        put_identifier(tx, "PBID", pbid, company_id)?;
+    }
+    Ok(true)
 }
 
 fn normalize_website(site: &str) -> Option<String> {
@@ -1198,36 +1576,158 @@ fn normalize_website(site: &str) -> Option<String> {
     }
 }
 
-type WebsiteMap = HashMap<String, Vec<String>>;
+/// host -> (company_id, considered) for every candidate of the run, hidden ones included.
+type WebsiteMap = HashMap<String, Vec<(String, bool)>>;
 
 fn website_maps(tx: &Transaction<'_>, run_id: &str) -> Result<(WebsiteMap, WebsiteMap)> {
-    let mut pb = HashMap::<String, Vec<String>>::new();
-    let mut statement=tx.prepare("SELECT e.company_id,e.pb_website FROM company_enrichment e JOIN candidates c ON c.company_id=e.company_id WHERE c.run_id=? AND e.pb_website IS NOT NULL")?;
+    let mut pb = WebsiteMap::new();
+    let mut statement=tx.prepare("SELECT e.company_id,e.pb_website,c.considered FROM company_enrichment e JOIN candidates c ON c.company_id=e.company_id WHERE c.run_id=? AND e.pb_website IS NOT NULL")?;
     for row in statement.query_map([run_id], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)? != 0,
+        ))
     })? {
-        let (id, site) = row?;
+        let (id, site, considered) = row?;
         if let Some(key) = normalize_website(&site) {
-            pb.entry(key).or_default().push(id);
+            pb.entry(key).or_default().push((id, considered));
         }
     }
-    let mut canonical = HashMap::<String, Vec<String>>::new();
-    let mut statement=tx.prepare("SELECT c.company_id,c.website,e.pb_website FROM companies c JOIN candidates x ON x.company_id=c.company_id LEFT JOIN company_enrichment e ON e.company_id=c.company_id WHERE x.run_id=? AND c.website IS NOT NULL")?;
+    let mut canonical = WebsiteMap::new();
+    let mut statement=tx.prepare("SELECT c.company_id,c.website,e.pb_website,x.considered FROM companies c JOIN candidates x ON x.company_id=c.company_id LEFT JOIN company_enrichment e ON e.company_id=c.company_id WHERE x.run_id=? AND c.website IS NOT NULL")?;
     for row in statement.query_map([run_id], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)? != 0,
         ))
     })? {
-        let (id, site, pb_site) = row?;
+        let (id, site, pb_site, considered) = row?;
         let old = normalize_website(&site);
         let preferred = pb_site.as_deref().and_then(normalize_website);
         if let Some(key) = old.filter(|old| preferred.as_ref().is_none_or(|new| new == old)) {
-            canonical.entry(key).or_default().push(id);
+            canonical.entry(key).or_default().push((id, considered));
         }
     }
     Ok((pb, canonical))
+}
+
+enum RogoMatch {
+    Matched(String),
+    Ambiguous(BTreeSet<String>),
+    Unmatched,
+}
+
+/// A ROGO row hydrates the one company that owns its host. Ambiguity means two or more
+/// DISTINCT companies share the host; a hidden candidate never makes a considered match
+/// ambiguous, but a hidden-only match is still hydrated because enrichment is company-global.
+fn match_rogo_website(host: &str, pb: &WebsiteMap, canonical: &WebsiteMap) -> RogoMatch {
+    let Some(entries) = pb.get(host).or_else(|| canonical.get(host)) else {
+        return RogoMatch::Unmatched;
+    };
+    let mut distinct = BTreeMap::<&str, bool>::new();
+    for (company_id, considered) in entries {
+        let seen = distinct.entry(company_id.as_str()).or_insert(false);
+        *seen |= *considered;
+    }
+    let considered = distinct
+        .iter()
+        .filter(|(_, considered)| **considered)
+        .map(|(id, _)| (*id).to_owned())
+        .collect::<BTreeSet<_>>();
+    let pool = if considered.is_empty() {
+        distinct
+            .keys()
+            .map(|id| (*id).to_owned())
+            .collect::<BTreeSet<_>>()
+    } else {
+        considered
+    };
+    match pool.len() {
+        0 => RogoMatch::Unmatched,
+        1 => RogoMatch::Matched(pool.into_iter().next().expect("one company")),
+        _ => RogoMatch::Ambiguous(pool),
+    }
+}
+
+/// The website a ROGO row is keyed on: the first non-blank value among the accepted website
+/// header aliases, with the actual header it came from.
+fn rogo_website(row: &Value) -> Option<(String, String)> {
+    let object = row.as_object()?;
+    for alias in tabular::ROGO_WEBSITE_HEADERS {
+        let wanted = normalize_header(alias);
+        for (key, value) in object {
+            if normalize_header(key) != wanted {
+                continue;
+            }
+            if let Some(text) = value.as_str().map(str::trim).filter(|v| !v.is_empty()) {
+                return Some((key.clone(), text.to_owned()));
+            }
+        }
+    }
+    None
+}
+
+/// Reject a file dropped in the wrong zone with a message the analyst can act on.
+fn zone_mismatch(
+    kind: Option<&str>,
+    hint: Option<tabular::Purpose>,
+    display: &str,
+) -> Option<String> {
+    match (hint, kind) {
+        (Some(tabular::Purpose::Pitchbook), Some("ROGO")) => Some(format!(
+            "{display}: This looks like a ROGO file. Drop it in ROGO data."
+        )),
+        (Some(tabular::Purpose::Rogo), Some("PB_MAPPING" | "PB_DATA")) => Some(format!(
+            "{display}: This looks like a PitchBook file. Drop it in PitchBook data."
+        )),
+        (Some(tabular::Purpose::Pitchbook), Some("COMPANY")) => Some(format!(
+            "{display}: This looks like a MID company file, not PitchBook data."
+        )),
+        (Some(tabular::Purpose::Rogo), Some("COMPANY")) => Some(format!(
+            "{display}: This looks like a MID company file, not ROGO data."
+        )),
+        _ => None,
+    }
+}
+
+/// Analyst-facing file names for messages and reports. The bridge supplies the original
+/// names of staged uploads; otherwise the staged file's own name is shown.
+struct DisplayNames(BTreeMap<String, String>);
+
+impl DisplayNames {
+    fn new(names: Option<BTreeMap<String, String>>) -> Result<Self> {
+        let names = names.unwrap_or_default();
+        if names.len() > 256 {
+            return Err(Error::Validation(
+                "display_names accepts at most 256 entries".into(),
+            ));
+        }
+        for (file, name) in &names {
+            if file.is_empty()
+                || name.trim().is_empty()
+                || name.chars().count() > 300
+                || name.chars().any(char::is_control)
+            {
+                return Err(Error::Validation(
+                    "display_names values must be 1..=300 printable characters".into(),
+                ));
+            }
+        }
+        Ok(Self(names))
+    }
+
+    fn display(&self, file: &str) -> String {
+        self.0.get(file).cloned().unwrap_or_else(|| {
+            Path::new(file)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(file)
+                .to_owned()
+        })
+    }
 }
 
 fn is_candidate(tx: &Transaction<'_>, run_id: &str, company_id: &str) -> Result<bool> {
@@ -1241,7 +1741,15 @@ fn is_candidate(tx: &Transaction<'_>, run_id: &str, company_id: &str) -> Result<
         .is_some())
 }
 
-fn merge_rogo(tx: &Transaction<'_>, company_id: &str, row: &Value) -> Result<()> {
+/// Merge a ROGO row into the company's ROGO fields. The website column the row was matched on
+/// is the key, not data, and is skipped. Returns false (and writes nothing) when the merge
+/// changes no value, so an identical re-import never touches the company's enrichment row.
+fn merge_rogo(
+    tx: &Transaction<'_>,
+    company_id: &str,
+    row: &Value,
+    matched_header: Option<&str>,
+) -> Result<bool> {
     let old: Option<String> = tx
         .query_row(
             "SELECT rogo_json FROM company_enrichment WHERE company_id=?",
@@ -1249,10 +1757,11 @@ fn merge_rogo(tx: &Transaction<'_>, company_id: &str, row: &Value) -> Result<()>
             |r| r.get(0),
         )
         .optional()?;
-    let mut merged = old
+    let previous = old
         .map(|s| serde_json::from_str::<Value>(&s))
         .transpose()?
         .unwrap_or_else(|| json!({}));
+    let mut merged = previous.clone();
     let object = merged
         .as_object_mut()
         .ok_or_else(|| Error::Internal("invalid ROGO JSON".into()))?;
@@ -1261,13 +1770,17 @@ fn merge_rogo(tx: &Transaction<'_>, company_id: &str, row: &Value) -> Result<()>
         .ok_or_else(|| Error::Validation("ROGO row must be an object".into()))?
     {
         if !matches!(normalize_header(key).as_str(), "website" | "websites")
+            && matched_header != Some(key.as_str())
             && !value.as_str().is_some_and(|v| v.trim().is_empty())
         {
             object.insert(key.clone(), value.clone());
         }
     }
+    if merged == previous {
+        return Ok(false);
+    }
     tx.execute("INSERT INTO company_enrichment(company_id,rogo_json,updated_at) VALUES(?,?,?) ON CONFLICT(company_id) DO UPDATE SET rogo_json=excluded.rogo_json,updated_at=excluded.updated_at",params![company_id,merged.to_string(),now()])?;
-    Ok(())
+    Ok(true)
 }
 
 fn write_json_parquet(path: &Path, rows: &[Value]) -> Result<()> {
@@ -1629,10 +2142,28 @@ pub(crate) fn candidate_source_page(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let has_more = ids.len() > limit;
     let ids = ids.into_iter().take(limit).collect::<Vec<_>>();
+    let rows = hydrate_source_rows(connection, run_id, &ids)?;
+    let next_cursor = if has_more { ids.last().cloned() } else { None };
+    let response = json!({"run_id":run_id,"total":total,"rows":rows,"next_cursor":next_cursor});
+    if enforce_page_limit && serde_json::to_vec(&response)?.len() > 2 * 1024 * 1024 {
+        return Err(Error::Validation(
+            "candidate source page exceeds 2 MB; retry with a smaller limit".into(),
+        ));
+    }
+    Ok(response)
+}
+
+/// Hydrate full source data (MID, run-scoped ISCC, PitchBook, ROGO, selected results and
+/// Bing research, each with provenance) for exactly the supplied companies, in order.
+pub(crate) fn hydrate_source_rows(
+    connection: &Connection,
+    run_id: &str,
+    ids: &[String],
+) -> Result<Vec<Value>> {
     let mut rows = Vec::with_capacity(ids.len());
     let review_columns = crate::review::review_columns(connection, run_id)?;
     let mut pb_locators = BTreeMap::<String, Vec<(usize, String, usize)>>::new();
-    for company_id in &ids {
+    for company_id in ids {
         let mut sources = json!({"MID":{},"ISCC":{},"PB":{},"ROGO":{},"RESULTS":{},"BING":{}});
         let mut provenance = json!({"MID":[],"ISCC":[],"PB":[],"ROGO":[],"RESULTS":[],"BING":{}});
         for source in ["MID", "ISCC"] {
@@ -1672,8 +2203,9 @@ pub(crate) fn candidate_source_page(
             sources[source] = Value::Object(merged);
             provenance[source] = Value::Array(lineage);
         }
+        // A company has at most one current PBID (enforced by a unique index).
         let pbid: Option<String> = connection.query_row(
-                    "SELECT identifier FROM company_identifiers WHERE company_id=? AND kind='PBID' ORDER BY identifier LIMIT 1",
+                    "SELECT identifier FROM company_identifiers WHERE company_id=? AND kind='PBID'",
                     [company_id], |row| row.get(0),
                 ).optional()?;
         let enrichment = connection.query_row(
@@ -1791,14 +2323,7 @@ pub(crate) fn candidate_source_page(
         rows.push(json!({"pk":company_id,"PBId":pbid,"sources":sources,"provenance":provenance}));
     }
     hydrate_pb_parquet(&mut rows, pb_locators)?;
-    let next_cursor = if has_more { ids.last().cloned() } else { None };
-    let response = json!({"run_id":run_id,"total":total,"rows":rows,"next_cursor":next_cursor});
-    if enforce_page_limit && serde_json::to_vec(&response)?.len() > 2 * 1024 * 1024 {
-        return Err(Error::Validation(
-            "candidate source page exceeds 2 MB; retry with a smaller limit".into(),
-        ));
-    }
-    Ok(response)
+    Ok(rows)
 }
 
 fn bounded_bing_text(value: &Value, max_chars: usize) -> String {

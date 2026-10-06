@@ -1,9 +1,11 @@
 pub mod agent_commands;
 pub mod context;
 pub mod data;
+pub mod enrichment_report;
 pub mod error;
 pub mod execution;
 pub mod gateway;
+pub mod grid;
 pub mod identity;
 pub mod projection;
 pub mod protocol;
