@@ -1,0 +1,25 @@
+# Development environment for this worktree. All paths stay on E:.
+# Usage: . .\scripts\dev-env.ps1   (dot-source, then run cargo / pnpm in the same shell)
+$wt = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$tc = 'C:\Users\eskay\Documents\Codex\2026-10-02\x20-im\work\toolchain'
+$env:RUSTUP_HOME = Join-Path $tc 'rustup'
+$rustBin = Join-Path $tc 'rustup\toolchains\stable-x86_64-pc-windows-gnu\bin'
+$gnuBin = Join-Path $tc 'w64devkit\bin'
+$env:CARGO_HOME = Join-Path $wt '.cargo-home'
+$env:CARGO_TARGET_DIR = Join-Path $wt '.cargo-target'
+$env:CARGO_BUILD_JOBS = '2'
+$env:CARGO_BUILD_TARGET = 'x86_64-pc-windows-gnu'
+$env:RUSTC = Join-Path $rustBin 'rustc.exe'
+$env:RUSTDOC = Join-Path $rustBin 'rustdoc.exe'
+$env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = Join-Path $gnuBin 'gcc.exe'
+$env:CC_x86_64_pc_windows_gnu = Join-Path $gnuBin 'gcc.exe'
+$env:AR_x86_64_pc_windows_gnu = Join-Path $gnuBin 'ar.exe'
+$env:LIBRARY_PATH = Join-Path $env:RUSTUP_HOME 'toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\lib\self-contained'
+$env:COREPACK_HOME = Join-Path $wt '.corepack'
+$env:npm_config_store_dir = Join-Path $wt '.pnpm-store'
+$env:SCREENING_UI_PORT = '4273'
+$env:SCREENING_DEV_PORT = '5273'
+$env:SCREENING_BRIDGE_PORT = '7419'
+$env:SCREENING_RUST_PORT = '17418'
+$env:SCREENING_RUST_BINARY = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-gnu\release\mna-tools.exe'
+$env:PATH = "$rustBin;$gnuBin;$env:PATH"

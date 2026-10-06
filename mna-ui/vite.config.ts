@@ -1,11 +1,14 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { pdfAssets } from "./server/pdf-assets";
+import { ports } from "./server/ports.mjs";
+
+const bridge = `http://127.0.0.1:${ports.bridge}`;
 
 export default defineConfig({
   plugins: [react(), pdfAssets()],
   server: {
-    proxy: { "/api": "http://127.0.0.1:7319" },
+    proxy: { "/api": bridge },
     watch: {
       ignored: [
         "**/.playwright-cli/**",
@@ -15,7 +18,7 @@ export default defineConfig({
       ],
     },
   },
-  preview: { proxy: { "/api": "http://127.0.0.1:7319" } },
+  preview: { proxy: { "/api": bridge } },
   build: {
     rollupOptions: {
       output: {

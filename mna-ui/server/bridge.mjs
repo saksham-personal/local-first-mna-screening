@@ -9,16 +9,17 @@ import { createDurableScreeningPreparation } from './durable-screening.mjs';
 import { createBackgroundScreening } from './background-screening.mjs';
 import { createBingResearch } from './bing-research.mjs';
 import { createProviderConversation } from './provider-conversation.mjs';
+import { ports, allowedOrigins, allowedHosts } from './ports.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
-const rustAddress = 'http://127.0.0.1:17318';
+const rustAddress = `http://127.0.0.1:${ports.rust}`;
 const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
 const allowed = new Set(['get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
 for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection']) allowed.add(tool);
-const origins = new Set(['http://127.0.0.1:4173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://localhost:5173']);
-const hosts = new Set(['127.0.0.1:7319', 'localhost:7319', '127.0.0.1:4173', 'localhost:4173', '127.0.0.1:5173', 'localhost:5173']);
+const origins = allowedOrigins;
+const hosts = allowedHosts;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const fileKinds = new Map([
   ['.pdf', { kind: 'pdf', parseKind: 'document', importable: false, contentType: 'application/pdf' }],
@@ -151,7 +152,7 @@ export async function startBridge() {
   const analystKey = randomBytes(32).toString('hex');
   const controllerKey = randomBytes(32).toString('hex');
   const externalEnabled = process.env.SCREENING_ENABLE_EXTERNAL === 'true';
-  const env = { ...process.env, MNA_ENABLE_EXTERNAL: String(externalEnabled), MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_CONTROLLER_KEY: controllerKey, MNA_BIND: '127.0.0.1:17318', MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
+  const env = { ...process.env, MNA_ENABLE_EXTERNAL: String(externalEnabled), MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_CONTROLLER_KEY: controllerKey, MNA_BIND: `127.0.0.1:${ports.rust}`, MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
   for (const key of Object.keys(env)) if (/(?:OPENAI|ANTHROPIC|AZURE_OPENAI|GOOGLE|GEMINI|COHERE|BING|M365|ISCC|MEILI|LLMSUITE|PROVIDER_(?:URL|ENDPOINT|API_KEY))/i.test(key) && !(externalEnabled && /^MNA_(?:LLMSUITE|M365|BING|ISCC)_/.test(key))) delete env[key];
   const rust = spawn(binary, [], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let launchError = '';
@@ -169,7 +170,7 @@ export async function startBridge() {
   }
   if (!ready) {
     rust.kill();
-    throw new Error(launchError || 'The Rust tool server did not start. Check that port 17318 is free.');
+    throw new Error(launchError || `The Rust tool server did not start. Check that port ${ports.rust} is free.`);
   }
 
   const call = (tool, args, analystApproved, signal) => rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal);
@@ -200,7 +201,7 @@ export async function startBridge() {
     const origin = req.headers.origin;
     if (origin && !origins.has(origin)) return respond(res, 403, { error: 'This local endpoint accepts the Screening UI only.' });
     if (!hosts.has(req.headers.host ?? '')) return respond(res, 403, { error: 'This local endpoint accepts localhost requests only.' });
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1:7319');
+    const url = new URL(req.url ?? '/', `http://127.0.0.1:${ports.bridge}`);
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
@@ -272,7 +273,7 @@ export async function startBridge() {
     }
   });
   try {
-    await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(7319, '127.0.0.1', resolveListen); });
+    await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(ports.bridge, '127.0.0.1', resolveListen); });
   } catch (error) {
     rust.kill();
     throw error;
