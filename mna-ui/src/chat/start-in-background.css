@@ -1,0 +1,60 @@
+.ca-start-row .ca-primary-action:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.ca-run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.ca-run-status i {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.ca-run-running,
+.ca-run-queued {
+  color: var(--info);
+}
+.ca-run-running i,
+.ca-run-queued i {
+  background: var(--info);
+  animation: ca-run-pulse 1.8s ease-in-out infinite;
+}
+.ca-run-completed {
+  color: var(--success);
+}
+.ca-run-completed i {
+  background: var(--success);
+}
+.ca-run-error {
+  color: var(--danger);
+}
+.ca-run-error i {
+  background: var(--danger);
+}
+.ca-run-blocked,
+.ca-run-paused {
+  color: var(--warning);
+}
+.ca-run-blocked i,
+.ca-run-paused i {
+  background: var(--warning);
+}
+@keyframes ca-run-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ca-run-running i,
+  .ca-run-queued i {
+    animation: none;
+  }
+}

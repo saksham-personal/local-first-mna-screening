@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { formatDuration, recordedSpan } from "../lib/session-trajectory";
+import { formatTime } from "../lib/format";
 import SelectField from "../ui/SelectField";
 import type { SessionEvent } from "../lib/session-contract";
 
@@ -8,13 +9,7 @@ type SessionTimingProps = {
   selectedId?: string;
   onSelect: (event: SessionEvent) => void;
 };
-const clock = (value: number) =>
-  new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    fractionalSecondDigits: 1,
-  });
+const clock = (value: number) => formatTime(value, { seconds: true });
 
 export default function SessionTiming({
   events,
@@ -75,8 +70,8 @@ export default function SessionTiming({
         <div className="sl-timing-scroll">
           <div className="sl-timing-axis" aria-hidden="true">
             <span>{clock(projection.first)}</span>
-            <span>{clock(projection.first + projection.range / 2)}</span>
-            <span>{clock(projection.last)}</span>
+            <span>+{formatDuration(projection.range / 2)}</span>
+            <span>+{formatDuration(projection.range)}</span>
           </div>
           <div className="sl-timing-lanes">
             {projection.spans.map(({ event, start, finish, durationMs }) => {

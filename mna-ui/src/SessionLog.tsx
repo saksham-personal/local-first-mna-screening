@@ -21,6 +21,7 @@ import {
   groupTrajectoryEvents,
   recordedSpan,
 } from "./lib/session-trajectory";
+import { formatDateTime, plural } from "./lib/format";
 import SelectField from "./ui/SelectField";
 import SessionTiming from "./chat/SessionTiming";
 import "./session-log.css";
@@ -47,15 +48,8 @@ const statusText = (status: SessionEvent["status"]) =>
         : status === "running"
           ? "Running"
           : "Pending";
-const readableTime = (value: string) => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "medium",
-      });
-};
+const readableTime = (value: string) =>
+  formatDateTime(value, { seconds: true }) || value;
 const jsonText = (value: unknown) => {
   try {
     return JSON.stringify(value, null, 2);
@@ -281,7 +275,7 @@ function Inspector({
                 onTab(TABS[index]);
                 document
                   .getElementById(`sl-tab-${TABS[index].toLowerCase()}`)
-                  ?.focus();
+                  ?.focus({ preventScroll: true });
               }
             }}
           >
@@ -481,7 +475,7 @@ export default function SessionLog({
     requestAnimationFrame(() =>
       drawerRef.current
         ?.querySelector<HTMLElement>("[data-autofocus]")
-        ?.focus(),
+        ?.focus({ preventScroll: true }),
     );
     const onKey = (event: KeyboardEvent) => {
       // Portaled selects own their focus and first Escape. Keep the log open
@@ -505,17 +499,17 @@ export default function SessionLog({
         last = controls.at(-1)!;
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        last.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     };
     document.addEventListener("keydown", onKey, true);
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", onKey, true);
-      opener.current?.focus();
+      opener.current?.focus({ preventScroll: true });
     };
   }, [open]);
 
@@ -672,7 +666,7 @@ export default function SessionLog({
             </div>
             <p>
               {session?.title ?? "Session unavailable"}
-              {session ? ` · ${session.events.length} events` : ""}
+              {session ? ` · ${plural(session.events.length, "event")}` : ""}
             </p>
           </div>
           <button
@@ -831,8 +825,7 @@ export default function SessionLog({
                           <div className="sl-turn-boundary">
                             {group.label}
                             <span>
-                              {group.events.length}{" "}
-                              {group.events.length === 1 ? "record" : "records"}
+                              {plural(group.events.length, "record")}
                             </span>
                           </div>
                           {group.events.map((event) => {

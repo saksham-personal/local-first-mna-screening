@@ -49,6 +49,17 @@
 .br-dock-summary small { color: var(--text-muted); font-size: 11px; }
 .br-dock-progress { display: block; height: 3px; margin-top: 4px; overflow: hidden; border-radius: 4px; background: var(--surface-muted); }
 .br-dock-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.br-dock-badge {
+  display: none;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  color: var(--on-accent);
+  background: var(--accent);
+  font: 600 11px/1.5 var(--font-body);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .br-dock-details {
   display: grid;
   gap: 9px;
@@ -57,6 +68,12 @@
   padding: 0 9px 9px;
   border-top: 1px solid var(--border);
 }
+.br-group { display: grid; min-width: 0; }
+.br-group + .br-group { margin-top: 4px; border-top: 1px solid var(--border); }
+.br-group-title { display: flex; align-items: center; gap: 7px; margin: 10px 4px 0; color: var(--text-muted); font: 650 11px/1.4 var(--font-body); letter-spacing: 0.02em; }
+.br-group-title span { padding: 0 6px; border-radius: 8px; color: var(--text-muted); background: var(--surface-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+.br-empty { margin: 0; padding: 12px 6px 6px; color: var(--text-muted); font-size: 12px; }
+.br-search-error { color: var(--danger); }
 .br-run { min-width: 0; padding: 11px 4px 8px; border-bottom: 1px solid var(--border); }
 .br-run:last-child { border-bottom: 0; }
 .br-run-heading { display: flex; align-items: flex-start; gap: 8px; }
@@ -100,10 +117,30 @@
 .br-updated { display: block; margin-top: 6px; color: var(--text-faint); font-size: 10px; }
 .br-dock button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @keyframes br-pulse { 50% { opacity: .45; } }
-@media (max-width: 520px) {
-  .br-host { padding-inline: 10px; }
-  .br-dock { width: 100%; }
-  .br-dock-details { max-height: min(30dvh, 300px, var(--br-available-room, 300px)); }
+@media (max-width: 760px) {
+  /* Phones: closed, the dock is a small pill that floats above the composer so it
+     never covers a primary action. Open, it is a sheet the analyst dismisses. */
+  .br-host {
+    position: absolute;
+    z-index: 40;
+    inset: auto 0 calc(var(--br-composer-offset, 0px) + 8px);
+    justify-content: flex-start;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    pointer-events: none;
+  }
+  .br-dock { width: auto; max-width: 100%; pointer-events: auto; border-radius: 999px; }
+  .br-dock.is-expanded { width: 100%; border-radius: 14px; box-shadow: 0 8px 28px var(--shadow-color); }
+  .br-dock:not(.is-expanded) .br-dock-toggle { width: auto; min-height: 38px; gap: 8px; padding: 5px 13px 5px 12px; }
+  .br-dock:not(.is-expanded) .br-dock-summary small,
+  .br-dock:not(.is-expanded) .br-dock-progress,
+  .br-dock:not(.is-expanded) .br-dock-toggle > svg { display: none; }
+  .br-dock:not(.is-expanded) .br-dock-badge { display: inline-block; }
+  .br-dock-details { max-height: min(46dvh, 380px, var(--br-available-room, 380px)); }
+  /* Keep the last row of content clear of the pill. */
+  .ct-main:has(.br-host) .ct-viewport { padding-bottom: 58px; }
+  .ct-main:has(.br-host) .ws-content { padding-bottom: 68px; }
 }
 @media (max-height: 540px) {
   .ct-main:has(.br-host) .ct-header { height: 56px; min-height: 56px; }
