@@ -97,6 +97,13 @@ const article = (phrase: string) => {
   return /^[aeiou]/i.test(word) && !/^(?:uni|use|usu|uti|eu|one)/i.test(word) ? "an" : "a";
 };
 
+/** "Claims Management Software" reads as a title; in a sentence it is "claims management software".
+ * Acronyms and mixed-case names (SaaS, ERP, iPaaS) are not Title Case, so they are left alone. */
+function titleCaseToPlain(text: string): string {
+  const words = text.split(/\s+/).filter((word) => /[A-Za-z]/.test(word) && !/^(?:and|of|for|in|to|the|a|an|on|with|by|&)$/i.test(word));
+  return words.length > 1 && words.every((word) => /^[A-Z][a-z]+(?:-[a-z]+)*[.,;:]?$/.test(word)) ? text.toLowerCase() : text;
+}
+
 /** The core business of a definition as plain text, without lead-in or exclusions. */
 export function coreBusinessPhrase(definition: string): string {
   let text = String(definition ?? "").replace(/\s+/g, " ").trim();
@@ -113,7 +120,7 @@ export function coreBusinessPhrase(definition: string): string {
   }
   text = trim(text);
   if (text.length > 300) text = trim(text.slice(0, 300).replace(/\s+\S*$/, ""));
-  return text;
+  return titleCaseToPlain(text);
 }
 
 function question(core: string): string {
