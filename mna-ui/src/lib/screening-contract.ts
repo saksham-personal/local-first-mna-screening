@@ -18,6 +18,8 @@ export type ScreeningConfig = {
   model: string;
   batchSize: number;
   prompt: string;
+  /** The analyst's own request, kept apart from the generated prompt text. */
+  request?: string;
   inputColumns: string[];
   outputColumns: string[];
   identitySources: IdentitySources;

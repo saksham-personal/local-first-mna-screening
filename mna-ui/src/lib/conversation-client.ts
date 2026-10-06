@@ -15,7 +15,8 @@ export function askProvider(sessionId: string, provider: ScreeningProvider, ques
   const state = getChatState(sessionId);
   return conversation(sessionId, "ask", { sessionId, requestId, runId: state.backendRunId, provider, question, attachments: files.filter(file => file.purpose === "chat" || !file.purpose).map(file => ({ id: file.id, include: file.passToProvider !== false })) });
 }
-export function generateDraft(sessionId: string, purpose: "screening-prompt" | "bing-templates" | "criteria", extra: { request?: string; outputColumns?: string[]; requestId?: string } = {}) {
+export type GeneratePurpose = "screening-prompt" | "bing-templates" | "criteria" | "criteria-from-examples" | "criteria-from-research";
+export function generateDraft(sessionId: string, purpose: GeneratePurpose, extra: { request?: string; outputColumns?: string[]; requestId?: string; researchQuestion?: string; researchResult?: string } = {}) {
   const state = getChatState(sessionId);
-  return conversation(sessionId, "generate", { sessionId, requestId: extra.requestId ?? crypto.randomUUID(), purpose, runId: state.backendRunId, criteriaText: state.criteriaText, businessDefinition: state.definition, goodFitExamples: state.goodFitExamples, badFitExamples: state.badFitExamples, ...extra });
+  return conversation(sessionId, "generate", { sessionId, requestId: extra.requestId ?? crypto.randomUUID(), purpose, runId: state.backendRunId, criteriaText: state.criteriaText, businessDefinition: state.definition, goodFitExamples: state.goodFitExamples, badFitExamples: state.badFitExamples, deferred: state.ignored, ...extra });
 }

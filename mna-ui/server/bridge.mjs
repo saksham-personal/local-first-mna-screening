@@ -9,6 +9,7 @@ import { createDurableScreeningPreparation } from './durable-screening.mjs';
 import { createBackgroundScreening } from './background-screening.mjs';
 import { createBingResearch } from './bing-research.mjs';
 import { createProviderConversation } from './provider-conversation.mjs';
+import { handlePromptRoute } from './prompt-routes.mjs';
 import { ports, allowedOrigins, allowedHosts } from './ports.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -203,6 +204,7 @@ export async function startBridge() {
     if (!hosts.has(req.headers.host ?? '')) return respond(res, 403, { error: 'This local endpoint accepts localhost requests only.' });
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${ports.bridge}`);
     try {
+      if (await handlePromptRoute(req, res, url, { respond, body })) return;
       if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
       if (req.method === 'GET' && url.pathname === '/api/jobs') return respond(res, 200, { jobs: jobs.list() });

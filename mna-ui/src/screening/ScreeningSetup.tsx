@@ -27,11 +27,7 @@ import type {
   ScreeningPreview,
   ScreeningProvider,
 } from "../lib/screening-contract";
-import {
-  defaultScreeningConfig,
-  recommendedPrompt,
-  suggestOutputColumns,
-} from "../lib/screening-data";
+import { defaultScreeningConfig } from "../lib/screening-data";
 import Tooltip from "../Tooltip";
 import ColumnChips from "./ColumnChips";
 import "./screening-setup.css";
@@ -49,6 +45,8 @@ type Props = {
     preview: ScreeningPreview,
   ) => Promise<PreparedScreening>;
   onHydrate: (files: File[], source: DataSource) => Promise<void>;
+  /** Builds the prompt text from the criteria, examples, columns and request (bridge prompt files). */
+  onBuildPrompt?: (config: ScreeningConfig) => Promise<string>;
   onGeneratePrompt?: (config: ScreeningConfig) => Promise<{ executed: boolean; text?: string; message?: string }>;
   onClose: () => void;
 };
@@ -107,16 +105,6 @@ function isSpreadsheet(file: File) {
   return /\.(csv|xlsx)$/i.test(file.name);
 }
 
-function requestFromPrompt(prompt?: string) {
-  return (
-    prompt
-      ?.match(
-        /(?:^|\n)Analyst request:\s*\n([\s\S]*?)\n\n(?:For company rows:\s*)?Return one Markdown table/i,
-      )?.[1]
-      ?.trim() ?? ""
-  );
-}
-
 export default function ScreeningSetup({
   provider,
   initialMode = "screening",
@@ -127,17 +115,15 @@ export default function ScreeningSetup({
   onPreview,
   onApprove,
   onHydrate,
+  onBuildPrompt,
   onGeneratePrompt,
   onClose,
 }: Props) {
   const headingId = useId();
   const keepLinkedIn = provider === "copilot" && catalog.sources.some(source => source.source === "PB" && source.fields.some(field => /linkedin/i.test(field.id) && field.count > 0));
-  const [request, setRequest] = useState(
-    initialPrompt ?? requestFromPrompt(initialConfig?.prompt),
-  );
   const [config, setConfig] = useState<ScreeningConfig>(() => {
     const config = normalized(
-      initialConfig ??
+      (initialConfig && { ...initialConfig, request: initialConfig.request ?? initialPrompt ?? "" }) ||
         defaultScreeningConfig(
           provider,
           initialMode,
@@ -186,45 +172,54 @@ export default function ScreeningSetup({
     if (keepLinkedIn) setConfig(current => current.inputColumns.includes("LinkedIn URL") ? current : { ...current, inputColumns: [...current.inputColumns, "LinkedIn URL"] });
   }, [catalogSignature]);
 
-  const changeMode = (mode: ScreeningMode) => {
-    if (mode === config.mode) return;
-    const outputColumns = suggestOutputColumns(request, mode);
-    edit({
-      ...config,
-      mode,
-      outputColumns,
-      prompt: recommendedPrompt(mode, criteriaText, request, outputColumns),
-    });
+  // The prompt text is generated from the criteria, examples, columns and request. A manual edit is
+  // never replaced automatically: only the analyst's "Rebuild from criteria" (or the AI button) does that.
+  const promptEdited = useRef(Boolean(initialConfig));
+  const buildToken = useRef(0);
+  const firstBuild = useRef(true);
+  const configRef = useRef(config);
+  configRef.current = config;
+  const [buildingPrompt, setBuildingPrompt] = useState(false);
+
+  const rebuildPrompt = async (manual: boolean) => {
+    if (!onBuildPrompt) return;
+    const token = ++buildToken.current;
+    setBuildingPrompt(true);
+    if (manual) setPromptNotice("");
+    try {
+      const prompt = await onBuildPrompt(normalized(configRef.current));
+      if (token !== buildToken.current) return;
+      promptEdited.current = false;
+      version.current += 1;
+      setPreview(null);
+      setConfig((current) => normalized({ ...current, prompt }));
+      if (manual) setPromptNotice("Prompt rebuilt from the criteria.");
+    } catch (caught) {
+      if (token === buildToken.current) setPromptNotice(`Using the built-in template. ${errorMessage(caught)}`);
+    } finally {
+      if (token === buildToken.current) setBuildingPrompt(false);
+    }
   };
 
-  const changeRequest = (value: string) => {
-    setRequest(value);
-    edit({
-      ...config,
-      prompt: recommendedPrompt(
-        config.mode,
-        criteriaText,
-        value,
-        config.outputColumns,
-      ),
-    });
-  };
+  const buildKey = JSON.stringify([config.mode, config.inputColumns, config.outputColumns, config.request ?? ""]);
+  useEffect(() => {
+    const first = firstBuild.current;
+    firstBuild.current = false;
+    if (!onBuildPrompt) return;
+    if (promptEdited.current) {
+      if (!first) setPromptNotice("Columns changed. Your prompt edits were kept; use Rebuild from criteria to refresh it.");
+      return;
+    }
+    const handle = window.setTimeout(() => void rebuildPrompt(false), first ? 0 : 300);
+    return () => window.clearTimeout(handle);
+  }, [buildKey]);
 
   const changeOutput = (columns: string[]) => {
     const outputColumns = [
       "index",
       ...unique(columns).filter((column) => column.toLocaleLowerCase() !== "index"),
     ];
-    edit({
-      ...config,
-      outputColumns,
-      prompt: recommendedPrompt(
-        config.mode,
-        criteriaText,
-        request,
-        outputColumns,
-      ),
-    });
+    edit({ ...config, outputColumns });
   };
 
   const generatePrompt = async () => {
@@ -239,6 +234,9 @@ export default function ScreeningSetup({
         setPromptNotice(result.message || "Prompt generation is unavailable right now.");
         return;
       }
+      promptEdited.current = true;
+      buildToken.current += 1;
+      setBuildingPrompt(false);
       edit({ ...config, prompt: result.text.trim() });
       setPromptNotice("Prompt generated.");
     } catch (caught) {
@@ -473,14 +471,37 @@ export default function ScreeningSetup({
                   <textarea
                     className="ss-prompt"
                     value={config.prompt}
-                    onChange={(event) => { setPromptNotice(""); edit({ ...config, prompt: event.target.value }); }}
+                    onChange={(event) => {
+                      setPromptNotice("");
+                      promptEdited.current = true;
+                      buildToken.current += 1;
+                      setBuildingPrompt(false);
+                      edit({ ...config, prompt: event.target.value });
+                    }}
+                    readOnly={buildingPrompt}
+                    aria-busy={buildingPrompt}
                     rows={7}
                     spellCheck={false}
                   />
-                  {onGeneratePrompt && <button type="button" className="ss-generate" aria-label="Generate prompt with AI" title="Generate prompt with AI" onClick={() => void generatePrompt()} disabled={generatingPrompt || busy}><Sparkles size={16} />{generatingPrompt ? <LoaderCircle className="ss-spin" size={14} /> : null}</button>}
+                  {onGeneratePrompt && <button type="button" className="ss-generate" aria-label="Generate prompt with AI" title="Generate prompt with AI" onClick={() => void generatePrompt()} disabled={generatingPrompt || busy || buildingPrompt}><Sparkles size={16} />{generatingPrompt ? <LoaderCircle className="ss-spin" size={14} /> : null}</button>}
                 </div>
-                {promptNotice && <small className="ss-prompt-notice" role="status">{promptNotice}</small>}
               </label>
+              {(buildingPrompt || promptNotice || onBuildPrompt) && (
+                <small className="ss-prompt-notice" role="status">
+                  {buildingPrompt ? (
+                    <>
+                      <LoaderCircle className="ss-spin" size={12} /> Building the prompt from your criteria…
+                    </>
+                  ) : (
+                    promptNotice
+                  )}{" "}
+                  {onBuildPrompt && (
+                    <button type="button" className="ss-link" onClick={() => void rebuildPrompt(true)} disabled={buildingPrompt || generatingPrompt || busy}>
+                      Rebuild from criteria
+                    </button>
+                  )}
+                </small>
+              )}
               {provider === "llm_suite" && (
                 <p className="ss-timing">
                   {catalog.total.toLocaleString()} companies ·{" "}
@@ -508,7 +529,7 @@ export default function ScreeningSetup({
                   type="button"
                   className="ss-secondary"
                   onClick={runPreview}
-                  disabled={busy || uploading}
+                  disabled={busy || uploading || buildingPrompt}
                 >
                   {previewing ? (
                     <>

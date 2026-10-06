@@ -18,6 +18,28 @@ export function suggestOutputColumns(
   request: string,
   mode: ScreeningMode,
 ): string[];
+export const FIT_SCORE_RULE: string;
+export type ScreeningPromptInput = {
+  mode: ScreeningMode;
+  definition?: string;
+  goodFits?: string[];
+  badFits?: string[];
+  deferred?: string[];
+  inputColumns?: string[];
+  outputColumns?: string[];
+  request?: string;
+};
+export function inputGlossary(inputColumns?: string[]): string;
+export function scoreColumns(outputColumns: string[]): string[];
+export function screeningPromptRequest(input: ScreeningPromptInput): {
+  id: "screening-scored" | "screening-question";
+  vars: Record<string, string>;
+};
+export function buildScreeningPrompt(
+  input: ScreeningPromptInput,
+  render: (id: string, vars: Record<string, string>) => string,
+): string;
+/** @deprecated Local fallback. Use buildScreeningPrompt (server) or POST /api/prompts/screening-draft (browser). */
 export function recommendedPrompt(
   mode: ScreeningMode,
   criteriaText: string,
