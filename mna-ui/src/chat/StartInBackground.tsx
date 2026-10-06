@@ -50,7 +50,13 @@ export default function StartInBackground({
     () => undefined,
   );
   const [starting, setStarting] = useState(false);
-  const label = starting ? "Starting…" : job ? "Started" : "Start in background";
+  const label = starting
+    ? "Starting…"
+    : job
+      ? job.state === "blocked"
+        ? "Blocked"
+        : "Started"
+      : "Start in background";
   return (
     <div className="ca-action-row ca-start-row">
       <button
@@ -64,7 +70,7 @@ export default function StartInBackground({
           ).finally(() => setStarting(false));
         }}
       >
-        {job && <Check size={13} aria-hidden="true" />}
+        {job && job.state !== "blocked" && <Check size={13} aria-hidden="true" />}
         {label}
       </button>
       {(starting || job) && (

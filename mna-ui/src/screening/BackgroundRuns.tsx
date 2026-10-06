@@ -104,7 +104,7 @@ export default function BackgroundRuns({ jobs, searches = [], expanded, onExpand
   const totalBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.total), 0);
   const completedBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.completed), 0);
   const aggregatePercent = totalBatches > 0 ? Math.min(100, (completedBatches / totalBatches) * 100) : 0;
-  const summary = items === 0 ? "Nothing running" : [activeCount ? `${activeCount} active` : plural(items, "item"), totalBatches > 0 ? `${completedBatches} of ${totalBatches} batches` : ""].filter(Boolean).join(" · ");
+  const summary = items === 0 ? "Nothing running" : [activeCount ? `${activeCount} active` : plural(items, "item"), totalBatches > 0 ? `${completedBatches} of ${plural(totalBatches, "batch", "batches")}` : ""].filter(Boolean).join(" · ");
 
   return (
     <div className="br-host" ref={hostRef}>

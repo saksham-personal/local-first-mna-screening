@@ -174,10 +174,17 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--sl-line);
 }
+/* The timing panel gives way to the event list instead of overlapping it. */
 .sl-timing {
-  flex: none;
+  container: sl-timing / inline-size;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 11px 18px 9px;
   border-bottom: 1px solid var(--sl-line);
   background: var(--surface-muted);
@@ -207,6 +214,8 @@
   white-space: nowrap;
 }
 .sl-timing-scroll {
+  flex: 0 1 auto;
+  min-height: 36px;
   max-height: 172px;
   overflow: auto;
   scrollbar-width: thin;
@@ -214,8 +223,10 @@
 }
 .sl-timing-axis {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
   margin: 0 83px 3px 138px;
+  white-space: nowrap;
   color: var(--text-muted);
   font:
     9px ui-monospace,
@@ -309,7 +320,7 @@
   font-size: 11px;
 }
 .sl-timeline-scroll {
-  min-height: 0;
+  min-height: 96px;
   flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
@@ -978,5 +989,23 @@
   .sl-status-running i,
   .sl-timing-span.is-running {
     animation: none;
+  }
+}
+
+/* Narrow ledger: thin the axis to its two ends and drop the hint text. */
+@container sl-timing (max-width: 440px) {
+  .sl-timing-axis span:nth-child(2) {
+    visibility: hidden;
+  }
+  .sl-timing-heading {
+    flex-wrap: wrap;
+  }
+  .sl-timing-heading > div > span {
+    display: none;
+  }
+}
+@media (max-height: 640px) {
+  .sl-timing-legend {
+    display: none;
   }
 }
