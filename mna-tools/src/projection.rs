@@ -116,6 +116,77 @@ fn text_field(source: &Value, keys: &[&str]) -> Option<String> {
     })
 }
 
+pub const PB_DESCRIPTION_LABEL: &str = "PitchBook Latest Description";
+pub const MID_DESCRIPTION_LABEL: &str = "MID Description";
+pub const ISCC_DESCRIPTION_LABEL: &str = "ISCC Description";
+pub const LEGACY_DESCRIPTION_LABEL: &str = "Legacy stored description (source row unavailable)";
+
+/// Labeled descriptions in the projection's preferred order (PitchBook, MID, ISCC), limited to
+/// the sources the analyst selected. Also reports whether none of the three source objects
+/// carries any usable value (a legacy company whose canonical row has no stored source rows).
+pub fn description_lines(
+    pb: &Value,
+    mid: &Value,
+    iscc: &Value,
+    identity: &IdentitySources,
+) -> (Vec<(&'static str, String)>, bool) {
+    let mut lines = Vec::new();
+    for (label, key, value, fields) in [
+        (
+            PB_DESCRIPTION_LABEL,
+            "PB",
+            pb,
+            vec!["PB_Description", "Description"],
+        ),
+        (
+            MID_DESCRIPTION_LABEL,
+            "MID",
+            mid,
+            vec!["Description", "Business Description", "Company Description"],
+        ),
+        (
+            ISCC_DESCRIPTION_LABEL,
+            "ISCC",
+            iscc,
+            vec!["Description", "Business Description", "Company Description"],
+        ),
+    ] {
+        if !identity.description.iter().any(|s| s == key) {
+            continue;
+        }
+        if let Some(text) = text_field(value, &fields) {
+            lines.push((label, text));
+        }
+    }
+    let legacy = [pb, mid, iscc]
+        .iter()
+        .all(|s| s.as_object().is_none_or(|m| !m.values().any(usable)));
+    (lines, legacy)
+}
+
+/// Append the canonical stored description when no source row exists for a legacy company.
+pub fn legacy_description(
+    lines: &mut Vec<(&'static str, String)>,
+    canonical: Option<&str>,
+    identity: &IdentitySources,
+) {
+    if identity.description.is_empty() {
+        return;
+    }
+    if let Some(text) = canonical.filter(|s| !s.trim().is_empty()) {
+        lines.push((LEGACY_DESCRIPTION_LABEL, text.to_owned()));
+    }
+}
+
+/// The single projected `Description` string: one `label: text` line per source.
+pub fn join_descriptions(lines: &[(&'static str, String)]) -> String {
+    lines
+        .iter()
+        .map(|(label, text)| format!("{label}: {text}"))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+}
+
 pub fn valid_pb_linkedin(value: &str) -> bool {
     url::Url::parse(value).ok().is_some_and(|url| {
         matches!(url.scheme(), "http" | "https")
@@ -370,47 +441,14 @@ pub fn snapshot_selected(
             &identity.website,
             &["PB_Website", "Website", "Websites", "Company Website"],
         );
-        let mut descriptions = Vec::new();
-        for (source, value, fields) in [
-            (
-                "PitchBook Latest Description",
-                pb,
-                vec!["PB_Description", "Description"],
-            ),
-            (
-                "MID Description",
-                mid,
-                vec!["Description", "Business Description", "Company Description"],
-            ),
-            (
-                "ISCC Description",
-                iscc,
-                vec!["Description", "Business Description", "Company Description"],
-            ),
-        ] {
-            let key = if source.starts_with("PitchBook") {
-                "PB"
-            } else if source.starts_with("MID") {
-                "MID"
-            } else {
-                "ISCC"
-            };
-            if !identity.description.iter().any(|s| s == key) {
-                continue;
-            }
-            if let Some(text) = text_field(value, &fields) {
-                descriptions.push(format!("{source}: {text}"));
-            }
-        }
+        let (mut descriptions, legacy_sources) = description_lines(pb, mid, iscc, identity);
         let linkedin =
             text_field(pb, &["PB_LinkedIn URL", "LinkedIn URL"]).filter(|v| valid_pb_linkedin(v));
         if linkedin.is_some() {
             pb_linkedin_count += 1;
         }
         let pb_hydrated = pb.as_object().is_some_and(|v| v.values().any(usable));
-        let legacy = [pb, mid, iscc]
-            .iter()
-            .all(|s| s.as_object().is_none_or(|m| !m.values().any(usable)));
+        let legacy = legacy_sources;
         if legacy {
             let record = canonical
                 .iter()
@@ -422,18 +460,9 @@ pub fn snapshot_selected(
             if !identity.website.is_empty() {
                 website = record["website"].as_str().map(str::to_owned);
             }
-            if !identity.description.is_empty() {
-                if let Some(text) = record["description"]
-                    .as_str()
-                    .filter(|s| !s.trim().is_empty())
-                {
-                    descriptions.push(format!(
-                        "Legacy stored description (source row unavailable): {text}"
-                    ));
-                }
-            }
+            legacy_description(&mut descriptions, record["description"].as_str(), identity);
         }
-        let mut projected = json!({"index":rows.len()+1,"pk":pk,"PBId":if pb_hydrated {row["PBId"].clone()} else {Value::Null},"Company Name":name,"Website":website,"Description":descriptions.join("\r\n"),"LinkedIn URL":linkedin});
+        let mut projected = json!({"index":rows.len()+1,"pk":pk,"PBId":if pb_hydrated {row["PBId"].clone()} else {Value::Null},"Company Name":name,"Website":website,"Description":join_descriptions(&descriptions),"LinkedIn URL":linkedin});
         for (source, column, alias) in &source_fields {
             projected[alias] = row["sources"][source][column].clone();
         }

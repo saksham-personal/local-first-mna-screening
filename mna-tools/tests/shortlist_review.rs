@@ -176,7 +176,7 @@ fn explicit_pb_hide_never_restores_manual_review() {
     let store = seeded();
     store
         .with_connection(|conn| {
-            mna_tools::review::hide_explicit_unmapped_pb(conn, "R", "A", "pitchbook_unmapped")
+            mna_tools::review::hide_for_pitchbook(conn, "R", "A", "pitchbook_unmatched")
                 .map(|_| ())
         })
         .unwrap();
@@ -194,7 +194,7 @@ fn explicit_pb_hide_never_restores_manual_review() {
         .unwrap();
     store
         .with_connection(|conn| {
-            mna_tools::review::hide_explicit_unmapped_pb(conn, "R", "A", "pitchbook_unmapped")
+            mna_tools::review::hide_for_pitchbook(conn, "R", "A", "pitchbook_unmatched")
                 .map(|_| ())
         })
         .unwrap();
@@ -204,6 +204,12 @@ fn explicit_pb_hide_never_restores_manual_review() {
             .unwrap()["considered_count"],
         0
     );
+    // An unknown reason is rejected.
+    assert!(store
+        .with_connection(|conn| {
+            mna_tools::review::hide_for_pitchbook(conn, "R", "B", "because").map(|_| ())
+        })
+        .is_err());
 }
 
 #[test]
@@ -301,7 +307,7 @@ fn schema_revision_survives_reopen() {
     let version: i64 = reopened
         .with_connection(|conn| Ok(conn.pragma_query_value(None, "user_version", |r| r.get(0))?))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     drop(reopened);
     assert!(Store::open(&path).is_ok());
 }
@@ -335,7 +341,7 @@ fn source_hash_is_run_wide_and_tracks_description_changes() {
 }
 
 #[test]
-fn pb_mapping_auto_hide_and_correction_preserve_manual_hides() {
+fn pitchbook_import_never_changes_considered_flags_or_manual_hides() {
     let dir = tempfile::tempdir().unwrap();
     std::env::set_var("MNA_IMPORT_DIR", dir.path());
     let store = seeded();
@@ -346,29 +352,23 @@ fn pb_mapping_auto_hide_and_correction_preserve_manual_hides() {
         format!("{header}A,PB1,Alpha,alpha.example,No,No,No,No\n"),
     )
     .unwrap();
+    // exclude_unmapped is deprecated and ignored; a "No" row no longer hides anything.
     let first = data
         .execute(
             "import_enrichment_files",
             &json!({"run_id":"R","files":["first.csv"],"exclude_unmapped":true}),
         )
         .unwrap();
-    assert_eq!(first["considered_count"], 0);
-    assert_eq!(first["hidden_count"], 2);
+    assert_eq!(first["considered_count"], 2);
+    assert_eq!(first["hidden_count"], 0);
+    assert_eq!(first["selection_revision"], 0);
+    assert_eq!(first["mapping_skipped_non_company"], 1);
     store
         .execute(
             "review_shortlist",
-            &json!({"run_id":"R","keep_company_ids":[]}),
+            &json!({"run_id":"R","keep_company_ids":["B"]}),
         )
         .unwrap();
-    assert_eq!(
-        store
-            .execute(
-                "get_shortlist_context",
-                &json!({"run_id":"R","include_hidden":true})
-            )
-            .unwrap()["candidates"][0]["consideration_reason"],
-        "pitchbook_non_company"
-    );
     std::fs::write(
         dir.path().join("corrected.csv"),
         format!("{header}A,PB1,Alpha,alpha.example,Yes,No,No,No\n"),
@@ -380,29 +380,19 @@ fn pb_mapping_auto_hide_and_correction_preserve_manual_hides() {
             &json!({"run_id":"R","files":["corrected.csv"],"exclude_unmapped":true}),
         )
         .unwrap();
+    // A stays manually hidden: a Yes mapping never restores a manual decision.
     assert_eq!(corrected["considered_count"], 1);
-    store
+    assert_eq!(corrected["pbid_populated"], 1);
+    let context = store
         .execute(
-            "review_shortlist",
-            &json!({"run_id":"R","keep_company_ids":[]}),
+            "get_shortlist_context",
+            &json!({"run_id":"R","include_hidden":true}),
         )
         .unwrap();
-    let after = data
-        .execute(
-            "import_enrichment_files",
-            &json!({"run_id":"R","files":["corrected.csv"],"exclude_unmapped":true}),
-        )
-        .unwrap();
-    assert_eq!(after["considered_count"], 0);
-    assert_eq!(
-        store
-            .execute(
-                "get_shortlist_context",
-                &json!({"run_id":"R","include_hidden":true})
-            )
-            .unwrap()["candidates"][0]["consideration_reason"],
-        "manual"
-    );
+    assert_eq!(context["candidates"][0]["consideration_reason"], "manual");
+    assert_eq!(context["candidates"][0]["PBId"], "PB1");
+    // Imports never add a review row, so the selection revision is the analyst's own.
+    assert_eq!(corrected["selection_revision"], context["selection_revision"]);
 }
 
 #[test]

@@ -52,7 +52,7 @@ pub struct ToolDefinition {
 pub fn tool_definitions() -> Vec<ToolDefinition> {
     let groups: &[(&str, &str, &str, bool)] = &[
         ("get_shortlist_context", "Read considered companies, hidden count, source coverage and chosen results for this screening run", "review", false),
-        ("get_criteria_history", "Read every criteria revision and its analyst approval; the previous revision is the last criteria", "review", false),
+        ("get_criteria_history", "Read every criteria revision with its Intake Form, exclusions, validity period (created_at to superseded_at) and analyst approval; last_criteria is the newest revision", "review", false),
         (
             "search_companies",
             "Search canonical core-business descriptions; report non-core filters as unused",
@@ -290,15 +290,33 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         (
             "inspect_enrichment_files",
-            "Inspect uploaded sheet headers and identify PitchBook mapping, PitchBook data, and ROGO files without importing",
+            "Inspect uploaded sheet headers and identify PitchBook mapping, PitchBook data, and ROGO files without importing; an optional purpose_hint rejects files dropped in the wrong zone",
             "data",
             false,
         ),
         (
             "import_enrichment_files",
-            "Detect and join user-supplied PitchBook and ROGO files with import metrics",
+            "Detect and join user-supplied PitchBook and ROGO files, never changing which companies are considered; saves and returns a match report",
             "data",
             true,
+        ),
+        (
+            "get_enrichment_report",
+            "Read the saved PitchBook or ROGO match report of an import: matched companies, unmatched companies with a reason, unmatched and ambiguous ROGO rows",
+            "data",
+            false,
+        ),
+        (
+            "get_screening_grid",
+            "Page every company of a run for the grid in one pass: source, scores, PitchBook/ROGO/Bing coverage, combined description and considered/hidden state",
+            "data",
+            false,
+        ),
+        (
+            "get_company_detail",
+            "Read one company's identifiers, every source field grouped by MID, ISCC, PitchBook and ROGO, labelled descriptions and recent activity",
+            "data",
+            false,
         ),
         (
             "export_candidate_set",
@@ -833,6 +851,7 @@ async fn admin(
             | "shortlist-review"
             | "criteria-save"
             | "criteria-approve"
+            | "enrichment-review"
     );
     if if controller_operation {
         !authenticated_controller(&headers, &state)
@@ -886,6 +905,7 @@ async fn admin(
         "shortlist-review" => "review_shortlist",
         "criteria-save" => "save_criteria_revision",
         "criteria-approve" => "approve_criteria_revision",
+        "enrichment-review" => "apply_enrichment_review",
         _ => return Error::NotFound("Unknown admin operation".into()).into_response(),
     };
     match state.runtime.dispatch(tool, arguments, true).await {
@@ -960,8 +980,9 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("review_shortlist", "/admin/shortlist-review"),
         ("save_criteria_revision", "/admin/criteria-save"),
         ("approve_criteria_revision", "/admin/criteria-approve"),
+        ("apply_enrichment_review", "/admin/enrichment-review"),
         ("dispatch_provider_text", "/admin/provider-text"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 

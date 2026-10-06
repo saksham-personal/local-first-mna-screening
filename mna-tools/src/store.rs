@@ -22,6 +22,8 @@ const EXECUTION_MIGRATION: &str = include_str!("../migrations/004_execution.sql"
 const TRUST_MIGRATION: &str = include_str!("../migrations/005_trust.sql");
 const RETRIEVAL_RECOVERY_MIGRATION: &str = include_str!("../migrations/006_retrieval_recovery.sql");
 const SHORTLIST_REVIEW_MIGRATION: &str = include_str!("../migrations/007_shortlist_review.sql");
+const INTAKE_REPORTS_MIGRATION: &str = include_str!("../migrations/008_intake_reports.sql");
+const SCHEMA_VERSION: i64 = 8;
 const MAX_TEXT: usize = 100_000;
 const MAX_LIST: usize = 1_000;
 
@@ -37,7 +39,7 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 7 {
+        if version > SCHEMA_VERSION {
             return Err(Error::Conflict(
                 "Database schema is newer than this service supports".into(),
             ));
@@ -80,6 +82,14 @@ impl Store {
                 ))
             }
         }
+        // 008 contains ALTER TABLE ... ADD COLUMN, so it is applied exactly once. All of its
+        // statements run in this transaction; the column probe is therefore a safe marker.
+        let intake_applied: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('criteria_revisions') WHERE name='intake_form_json')",[],|r|r.get(0))?;
+        if !intake_applied {
+            transaction.execute_batch(INTAKE_REPORTS_MIGRATION)?;
+            backfill_quarantine_hashes(&transaction)?;
+        }
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -193,7 +203,7 @@ impl Store {
         if !arguments.is_object() {
             return Err(Error::Validation("tool arguments must be an object".into()));
         }
-        let max_arguments = if tool == "review_shortlist" {
+        let max_arguments = if matches!(tool, "review_shortlist" | "apply_enrichment_review") {
             16_000_000
         } else {
             1_000_000
@@ -247,7 +257,8 @@ impl Store {
             | "review_shortlist"
             | "save_criteria_revision"
             | "approve_criteria_revision"
-            | "get_criteria_history" => crate::review::execute(self, tool, arguments),
+            | "get_criteria_history"
+            | "apply_enrichment_review" => crate::review::execute(self, tool, arguments),
             "save_checkpoint" => self.save_checkpoint(parse(tool, arguments)?),
             "get_checkpoint" => self.get_checkpoint(parse(tool, arguments)?),
             _ => Err(Error::Validation(format!("unknown state tool: {tool}"))),
@@ -501,6 +512,46 @@ impl Store {
         tx.execute("INSERT INTO agent_events(event_id,run_id,event_type,payload_json,major,created_at) VALUES(?,?,?,?,?,?)", params![id("EVT"),run_id,event_type,encode(payload)?,major as i32,now()])?;
         Ok(())
     }
+}
+
+/// Fill `identity_quarantine.content_hash` for rows that predate migration 008 and drop the
+/// older copies of identical rows so the unique index stays satisfiable.
+fn backfill_quarantine_hashes(tx: &Transaction<'_>) -> Result<()> {
+    let mut seen = BTreeSet::<String>::new();
+    let mut duplicates = Vec::<String>::new();
+    let mut hashes = Vec::<(String, String)>::new();
+    {
+        let mut statement = tx.prepare("SELECT quarantine_id,source,reason,row_json FROM identity_quarantine WHERE content_hash IS NULL ORDER BY created_at,rowid")?;
+        for row in statement.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })? {
+            let (quarantine_id, source, reason, row_json) = row?;
+            let hash = crate::data::quarantine_hash(&source, &reason, &row_json);
+            if seen.insert(hash.clone()) {
+                hashes.push((quarantine_id, hash));
+            } else {
+                duplicates.push(quarantine_id);
+            }
+        }
+    }
+    for quarantine_id in duplicates {
+        tx.execute(
+            "DELETE FROM identity_quarantine WHERE quarantine_id=?",
+            [quarantine_id],
+        )?;
+    }
+    for (quarantine_id, hash) in hashes {
+        tx.execute(
+            "UPDATE identity_quarantine SET content_hash=? WHERE quarantine_id=?",
+            params![hash, quarantine_id],
+        )?;
+    }
+    Ok(())
 }
 
 fn parse<T: DeserializeOwned>(tool: &str, value: &Value) -> Result<T> {
