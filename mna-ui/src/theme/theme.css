@@ -767,19 +767,6 @@ dd {
 .ws-root .ws-primary:active {
   transform: translateY(1px);
 }
-.help-tip-content {
-  background: var(--surface-raised);
-  color: var(--text);
-  border-color: var(--border);
-  box-shadow: var(--shadow);
-}
-.help-tip-trigger {
-  color: var(--text-muted);
-}
-.help-tip-trigger:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
 @media (max-width: 760px) {
   .ct-header {
     height: auto;

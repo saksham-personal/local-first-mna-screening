@@ -1099,3 +1099,20 @@
     width: 100%;
   }
 }
+
+/* Overview stats: two even columns whenever the workspace pane is narrow
+   (for example at 800px with the assistant docked). */
+@container (max-width: 640px) {
+  .ws-root .ws-overview .ws-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 0;
+  }
+  .ws-root .ws-overview .ws-summary-grid .ws-stat {
+    padding: 0 12px;
+    border-right: 0;
+  }
+  .ws-root .ws-overview .ws-summary-grid .ws-stat:nth-child(odd) {
+    padding-left: 0;
+    border-right: 1px solid var(--border);
+  }
+}
