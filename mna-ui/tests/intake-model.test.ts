@@ -174,6 +174,17 @@ test("the printed form extractor rejects impossible calendar dates", () => {
   assert.equal(result.fields.dueDate, "");
 });
 
+test("a later prose mention of a label does not erase an earlier value", () => {
+  const result = extractIntakeFieldsFromText("Industry: Diversified\nSector: Basic Materials\nNotes: we want the leaders in the Industry\nleaders in the sector: x");
+  assert.equal(result.fields.industry, "Diversified");
+  assert.equal(result.fields.sector, "Basic Materials");
+});
+
+test("ownership matching does not read Non-sponsor owned as Sponsor owned", () => {
+  const result = extractIntakeFieldsFromText("Ownership preference: Non-sponsor owned / Family or founder owned");
+  assert.deepEqual(result.fields.ownershipPreference, ["Non-sponsor owned / Family or founder owned"]);
+});
+
 test("characterCount counts without imposing a maximum", () => {
   assert.equal(characterCount("a".repeat(100_001)), 100_001);
 });

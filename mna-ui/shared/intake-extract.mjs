@@ -49,8 +49,22 @@ function matchOption(value, options) {
 }
 
 function matchOptions(value, options) {
-  const haystack = normalized(value);
-  return options.filter((option) => haystack.includes(normalized(option)));
+  // Longest options first; a matched option is blanked out so a shorter option
+  // inside it (e.g. "Sponsor owned" in "Non-sponsor owned") does not also match.
+  let haystack = normalized(value);
+  const found = new Set();
+  for (const option of [...options].sort((a, b) => normalized(b).length - normalized(a).length)) {
+    const needle = normalized(option);
+    if (needle && haystack.includes(needle)) {
+      found.add(option);
+      haystack = haystack.split(needle).join(" ");
+    }
+  }
+  return options.filter((option) => found.has(option));
+}
+
+function hasValue(value) {
+  return Array.isArray(value) ? value.length > 0 : typeof value === "string" ? value.length > 0 : value !== undefined;
 }
 
 function validDate(yearValue, month, day) {
@@ -142,6 +156,8 @@ export function extractIntakeFieldsFromText(text) {
       matched.push(occurrence.field.label);
       if (!value) continue;
       const { key, kind } = occurrence.field;
+      // A later occurrence of a label (often prose) never overwrites a value already found.
+      if (hasValue(fields[key])) continue;
       if (kind === "date") fields[key] = dateValue(value);
       else if (kind === "request") fields[key] = matchOption(value, REQUEST_TYPES) ?? "";
       else if (kind === "industry") fields[key] = matchOption(value, INDUSTRIES) ?? "";
