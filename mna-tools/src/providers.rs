@@ -187,7 +187,7 @@ impl Providers {
     pub async fn execute(&self, tool: &str, arguments: &Value) -> Result<Value> {
         match tool {
             "search_iscc" => {
-                let mut result = self.search_provider("iscc", arguments).await?;
+                let mut result = self.search_provider("iscc", arguments, None).await?;
                 let ignored = arguments
                     .get("filters")
                     .and_then(Value::as_object)
@@ -197,15 +197,35 @@ impl Providers {
                 result["search_scope"] = json!("qualitative_core_business");
                 Ok(result)
             }
-            "bing_search" => self.search_provider("bing", arguments).await,
-            "m365_research" => self.search_provider("m365", arguments).await,
+            "bing_search" => self.search_provider("bing", arguments, None).await,
+            "m365_research" => self.search_provider("m365", arguments, None).await,
             "fetch_url" => self.fetch_url(arguments).await,
             "extract_url_context" => self.extract_url_context(arguments).await,
             _ => Err(Error::NotFound(format!("unknown provider tool: {tool}"))),
         }
     }
 
-    async fn search_provider(&self, provider: &str, arguments: &Value) -> Result<Value> {
+    pub(crate) async fn simulated_iscc(
+        &self,
+        arguments: &Value,
+        rows: Vec<Value>,
+    ) -> Result<Value> {
+        let mut result = self.search_provider("iscc", arguments, Some(rows)).await?;
+        result["ignored_search_filters"] = json!(arguments
+            .get("filters")
+            .and_then(Value::as_object)
+            .map(|f| f.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default());
+        result["search_scope"] = json!("qualitative_core_business");
+        Ok(result)
+    }
+
+    async fn search_provider(
+        &self,
+        provider: &str,
+        arguments: &Value,
+        simulated_rows: Option<Vec<Value>>,
+    ) -> Result<Value> {
         let (query, limit, payload) = match provider {
             "iscc" => {
                 let args: IsccSearchArgs = parse(arguments)?;
@@ -264,6 +284,16 @@ impl Providers {
             return Err(Error::Validation(format!(
                 "limit must be between 1 and {max_results}"
             )));
+        }
+        if crate::simulate::enabled() && (simulated_rows.is_some() || provider == "bing") {
+            let raw = if let Some(rows) = simulated_rows {
+                json!({"rows":rows.into_iter().take(limit).collect::<Vec<_>>()})
+            } else {
+                crate::simulate::bing_results(&query)
+            };
+            let mut result = normalize_provider_response(provider, &json!(query), raw, limit)?;
+            result["simulated"] = json!(true);
+            return Ok(result);
         }
         if !self.config.external_enabled {
             return Err(Error::ProviderUnavailable(

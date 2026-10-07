@@ -987,7 +987,12 @@ impl WorkflowService {
             snippets.pop();
             value["sources"] = json!(snippets);
         }
-        let evidence=self.store.execute("save_evidence",&json!({"run_id":args["run_id"],"company_id":company_id,"claim":"bing_research_observation","value":value,"source_type":"bing","source_reference":result["query_id"],"confidence":"low","extraction_method":"Bounded search excerpts; research lead, not a verified fit conclusion. Full response is retained in search history."}))?;
+        let evidence_args = json!({"run_id":args["run_id"],"company_id":company_id,"claim":"bing_research_observation","value":value,"source_type":"bing","source_reference":result["query_id"],"confidence":"low","extraction_method":"Bounded search excerpts; research lead, not a verified fit conclusion. Full response is retained in search history."});
+        let evidence = if result["simulated"] == true {
+            self.store.save_simulated_evidence(&evidence_args)?
+        } else {
+            self.store.execute("save_evidence", &evidence_args)?
+        };
         result["evidence_id"] = evidence["evidence_id"].clone();
         Ok(())
     }

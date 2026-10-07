@@ -19,6 +19,7 @@ pub mod retrieval;
 pub mod review;
 pub mod runtime;
 pub mod search;
+pub mod simulate;
 pub mod store;
 pub mod tabular;
 pub mod trust;

@@ -1080,12 +1080,13 @@ async fn provider_status(State(state): State<ApiState>, headers: HeaderMap) -> R
     if !authenticated(&headers, &state, false) {
         return unauthorized(false);
     }
+    let simulated = crate::simulate::enabled();
     let enabled = std::env::var("MNA_ENABLE_EXTERNAL").ok().as_deref() == Some("true");
     let paths:Vec<_>=[("llm_suite","LLMSUITE"),("copilot","M365"),("bing_grounding","BING"),("iscc","ISCC")].into_iter().map(|(name,prefix)|{
         let configured=std::env::var(format!("MNA_{prefix}_ENDPOINT")).is_ok_and(|v|!v.trim().is_empty());
-        json!({"path":name,"implementation_status":if configured {"configured_but_unverified"} else {"planned"},"adapter_implemented":true,"endpoint_configured":configured,"execution_enabled":enabled,"executed":false})
+        json!({"path":name,"simulated":simulated,"implementation_status":if simulated {"simulated"} else if configured {"configured_but_unverified"} else {"planned"},"adapter_implemented":true,"endpoint_configured":configured,"execution_enabled":enabled || simulated,"executed":false})
     }).collect();
-    Json(json!({"paths":paths,"local_preparation":{"implementation_status":"implemented","executed":false},"local_retrieval":crate::retrieval::RetrievalConfig::from_env().map(|c|c.status()).unwrap_or_else(|_|json!({"implementation_status":"planned","configuration_error":true,"executed":false}))})).into_response()
+    Json(json!({"simulated":simulated,"paths":paths,"local_preparation":{"implementation_status":"implemented","executed":false},"local_retrieval":crate::retrieval::RetrievalConfig::from_env().map(|c|c.status()).unwrap_or_else(|_|json!({"implementation_status":"planned","configuration_error":true,"executed":false}))})).into_response()
 }
 
 #[cfg(test)]

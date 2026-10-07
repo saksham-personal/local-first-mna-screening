@@ -504,7 +504,7 @@ impl ExecutionService {
                         for row in rows {
                             let index=row["index"].as_i64().ok_or_else(||Error::Internal("parser omitted index".into()))?;
                             let company_id:String=tx.query_row("SELECT company_id FROM execution_index_map WHERE plan_id=? AND job_id=? AND row_index=?",params![j.plan_id,a.job_id,index],|r|r.get(0))?;
-                            tx.execute("INSERT INTO model_assessments(assessment_id,run_id,plan_id,job_id,company_id,row_index,provider,prompt,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",params![id("MA"),j.run_id,j.plan_id,a.job_id,company_id,index,j.payload["provider"].as_str(),j.payload["prompt"].as_str(),encoded(&row)?,now])?;
+                            tx.execute("INSERT INTO model_assessments(assessment_id,run_id,plan_id,job_id,company_id,row_index,provider,prompt,result_json,created_at,simulated) VALUES(?,?,?,?,?,?,?,?,?,?,?)",params![id("MA"),j.run_id,j.plan_id,a.job_id,company_id,index,j.payload["provider"].as_str(),j.payload["prompt"].as_str(),encoded(&row)?,now,j.payload["adapter_configuration_hash"] == json!(crate::simulate::adapter_hash(j.payload["provider"].as_str().unwrap_or(""))?)])?;
                         }
                     }
                     tx.execute("UPDATE execution_jobs SET state='SUCCEEDED',response_hash=?,raw_response=?,completed_at=?,updated_at=? WHERE job_id=?",params![response_hash,a.response_text,now,now,a.job_id])?;
@@ -879,6 +879,11 @@ fn require_lease(j: &Job, token: &str) -> Result<()> {
     Ok(())
 }
 fn adapter_configured(payload: &Value) -> bool {
+    if crate::simulate::enabled()
+        && matches!(payload["provider"].as_str(), Some("llm_suite" | "copilot"))
+    {
+        return true;
+    }
     if std::env::var("MNA_ENABLE_EXTERNAL").ok().as_deref() != Some("true") {
         return false;
     }
@@ -891,6 +896,9 @@ fn adapter_configured(payload: &Value) -> bool {
         && std::env::var(token).is_ok_and(|v| !v.trim().is_empty())
 }
 fn adapter_configuration_hash(provider: &str) -> Result<String> {
+    if crate::simulate::enabled() && matches!(provider, "llm_suite" | "copilot") {
+        return crate::simulate::adapter_hash(provider);
+    }
     let endpoint = match provider {
         "llm_suite" => std::env::var("MNA_LLMSUITE_ENDPOINT").unwrap_or_default(),
         "copilot" => std::env::var("MNA_M365_ENDPOINT").unwrap_or_default(),

@@ -66,6 +66,8 @@ struct ExportCandidateSetArgs {
     export_type: String,
     #[serde(default)]
     file_name: Option<String>,
+    #[serde(default)]
+    allow_simulated: bool,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -146,10 +148,26 @@ impl DataService {
         query_id: Option<&str>,
         rows: &[Value],
     ) -> Result<Value> {
+        self.ingest_iscc_rows_with_simulation(run_id, query_id, rows, false)
+    }
+
+    pub fn ingest_iscc_rows_with_simulation(
+        &self,
+        run_id: Option<&str>,
+        query_id: Option<&str>,
+        rows: &[Value],
+        simulated: bool,
+    ) -> Result<Value> {
         if rows.len() > 1_000 {
             return Err(Error::Validation("ISCC response exceeds 1000 rows".into()));
         }
-        self.ingest_source_rows("ISCC", run_id.unwrap_or(""), query_id.unwrap_or(""), rows)
+        self.ingest_source_rows(
+            "ISCC",
+            run_id.unwrap_or(""),
+            query_id.unwrap_or(""),
+            rows,
+            simulated,
+        )
     }
 
     fn import_company_files(&self, args: ImportCompanyFilesArgs) -> Result<Value> {
@@ -183,7 +201,7 @@ impl DataService {
         if rows.len() > 250_000 {
             return Err(Error::Validation("MID import exceeds 250000 rows".into()));
         }
-        let mut result = self.ingest_source_rows("MID", "", "", &rows)?;
+        let mut result = self.ingest_source_rows("MID", "", "", &rows, false)?;
         result["sheets"] = Value::Array(sheets);
         Ok(result)
     }
@@ -194,6 +212,7 @@ impl DataService {
         run_scope: &str,
         query_scope: &str,
         rows: &[Value],
+        simulated: bool,
     ) -> Result<Value> {
         if !matches!(source, "MID" | "ISCC") {
             return Err(Error::Validation("source must be MID or ISCC".into()));
@@ -223,9 +242,15 @@ impl DataService {
                 }
             }
             for row in rows {
-                if let Some(company_id) =
-                    ingest_source_row(&tx, source, run_scope, query_scope, row, &mut result)?
-                {
+                if let Some(company_id) = ingest_source_row_with_simulation(
+                    &tx,
+                    source,
+                    run_scope,
+                    query_scope,
+                    row,
+                    &mut result,
+                    simulated,
+                )? {
                     if source == "ISCC" {
                         let score = get_field(
                             row,
@@ -836,7 +861,13 @@ impl DataService {
                 "export_type must be PITCHBOOK, LLM or FULL".into(),
             ));
         }
-        let file_name = args.file_name.unwrap_or_else(|| {
+        let simulated = self
+            .store
+            .with_connection(|conn| export_has_simulated(conn, &args.run_id))?;
+        if simulated && !args.allow_simulated {
+            return Err(simulated_export_error());
+        }
+        let mut file_name = args.file_name.unwrap_or_else(|| {
             format!(
                 "{}-{}-{}.xlsx",
                 args.run_id,
@@ -848,6 +879,9 @@ impl DataService {
             return Err(Error::Validation(
                 "export filename must end in .xlsx".into(),
             ));
+        }
+        if simulated {
+            file_name.insert_str(file_name.len() - 5, "-SIMULATED");
         }
         let path = tabular::resolve_export_path(&file_name)?;
         if path.exists() {
@@ -863,7 +897,10 @@ impl DataService {
         ));
         if export_type == "FULL" {
             let outcome = self.store.with_connection(|connection| {
-                write_full_export(connection, &args.run_id, &temporary)
+                if !simulated && export_has_simulated(connection, &args.run_id)? {
+                    return Err(simulated_export_error());
+                }
+                write_full_export(connection, &args.run_id, &temporary, simulated)
             });
             let (companies, mid_rows, iscc_rows) = match outcome {
                 Ok(outcome) => outcome,
@@ -879,6 +916,7 @@ impl DataService {
         }
         let data=self.store.with_connection(|connection|{
             require_run(connection,&args.run_id)?;
+            if !simulated && export_has_simulated(connection, &args.run_id)? { return Err(simulated_export_error()); }
             let mut statement=connection.prepare("SELECT c.company_id,c.name,c.website,c.city,c.description,json_extract(c.metadata_json,'$.hq_state') FROM candidates x JOIN companies c ON c.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 ORDER BY c.company_id")?;
             let companies=statement.query_map([&args.run_id],|r|Ok(ExportCompany{company_id:r.get(0)?,name:r.get(1)?,website:r.get(2)?,city:r.get(3)?,description:r.get(4)?,state:r.get(5)?}))?
                 .collect::<std::result::Result<Vec<_>,_>>()?;
@@ -902,7 +940,7 @@ impl DataService {
         if data.0.len() >= 1_048_576 || data.2.len() >= 1_048_576 || data.3.len() >= 1_048_576 {
             return Err(Error::Validation("Excel sheet row limit exceeded".into()));
         }
-        let written = write_export(&temporary, &export_type, &data);
+        let written = write_export(&temporary, &export_type, &data, simulated);
         if let Err(error) = written {
             let _ = std::fs::remove_file(&temporary);
             return Err(error);
@@ -1060,6 +1098,18 @@ pub(crate) fn ingest_source_row(
     row: &Value,
     result: &mut IngestCounters,
 ) -> Result<Option<String>> {
+    ingest_source_row_with_simulation(tx, source, run_scope, query_scope, row, result, false)
+}
+
+fn ingest_source_row_with_simulation(
+    tx: &Transaction<'_>,
+    source: &str,
+    run_scope: &str,
+    query_scope: &str,
+    row: &Value,
+    result: &mut IngestCounters,
+    simulated: bool,
+) -> Result<Option<String>> {
     result.processed += 1;
     let ecid = normalized_identifier(get_field(row, crate::identity::ECID_KEYS));
     let cid = normalized_identifier(get_field(row, crate::identity::CID_KEYS));
@@ -1129,8 +1179,8 @@ pub(crate) fn ingest_source_row(
         ],
     )
     .and_then(as_score);
-    result.source_rows_added += tx.execute("INSERT OR IGNORE INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                    params![id("SRC"),source,run_scope,query_scope,found.company_id,hash,raw,score,now()])?;
+    result.source_rows_added += tx.execute("INSERT OR IGNORE INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at,simulated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    params![id("SRC"),source,run_scope,query_scope,found.company_id,hash,raw,score,now(),simulated])?;
     if source == "MID" || found.created || !has_source(tx, &found.company_id, "MID")? {
         update_canonical(tx, &found.company_id, source, row)?;
     }
@@ -1966,10 +2016,36 @@ fn publish_export(temporary: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+fn simulated_export_error() -> Error {
+    Error::Validation("This export includes simulated data. Turn off simulation or pass allow_simulated to export a labelled copy.".into())
+}
+
+fn export_has_simulated(connection: &Connection, run_id: &str) -> Result<bool> {
+    require_run(connection, run_id)?;
+    Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM candidates c WHERE c.run_id=?1 AND c.considered=1 AND (
+        EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.simulated=1 AND (s.source='MID' OR s.run_scope=c.run_id)) OR
+        EXISTS(SELECT 1 FROM model_assessments a WHERE a.run_id=c.run_id AND a.simulated=1 AND (a.company_id=c.company_id OR EXISTS(SELECT 1 FROM company_identifiers i WHERE i.kind='PK' AND i.identifier=a.company_id AND i.company_id=c.company_id))) OR
+        EXISTS(SELECT 1 FROM evidence e WHERE e.run_id=c.run_id AND e.simulated=1 AND (e.company_id=c.company_id OR EXISTS(SELECT 1 FROM company_identifiers i WHERE i.kind='PK' AND i.identifier=e.company_id AND i.company_id=c.company_id)))))", [run_id], |r| r.get(0))?)
+}
+
+fn write_simulated_note(workbook: &mut rust_xlsxwriter::Workbook) -> Result<()> {
+    let sheet = workbook.add_worksheet();
+    sheet.set_name("SIMULATED").map_err(xlsx_error)?;
+    sheet
+        .write_string(
+            0,
+            0,
+            "SIMULATED: Development data. No corporate provider research was performed.",
+        )
+        .map_err(xlsx_error)?;
+    Ok(())
+}
+
 fn write_full_export(
     connection: &Connection,
     run_id: &str,
     path: &Path,
+    simulated: bool,
 ) -> Result<(usize, usize, usize)> {
     use rust_xlsxwriter::Workbook;
     require_run(connection, run_id)?;
@@ -1979,6 +2055,10 @@ fn write_full_export(
         |r| r.get(0),
     )?;
     let mut workbook = Workbook::new();
+    if simulated {
+        write_simulated_note(&mut workbook)?;
+    }
+    let offset = u16::from(simulated);
     let mut counts = [0usize, 0usize];
     for (index, source) in ["MID", "ISCC"].iter().enumerate() {
         let sql="SELECT s.company_id,s.row_json FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND c.considered=1 AND s.source=? AND (s.source='MID' OR s.run_scope=c.run_id) ORDER BY s.company_id,s.imported_at,s.source_row_id";
@@ -1999,10 +2079,15 @@ fn write_full_export(
         let headers = headers.into_iter().collect::<Vec<_>>();
         let sheet = workbook.add_worksheet_with_constant_memory();
         sheet.set_name(*source).map_err(xlsx_error)?;
-        sheet.write_string(0, 0, "pk").map_err(xlsx_error)?;
+        if simulated {
+            sheet
+                .write_string(0, 0, "Data origin")
+                .map_err(xlsx_error)?;
+        }
+        sheet.write_string(0, offset, "pk").map_err(xlsx_error)?;
         for (col, header) in headers.iter().enumerate() {
             sheet
-                .write_string(0, (col + 1) as u16, header)
+                .write_string(0, (col + 1) as u16 + offset, header)
                 .map_err(xlsx_error)?;
         }
         let mut statement = connection.prepare(sql)?;
@@ -2013,10 +2098,15 @@ fn write_full_export(
         {
             let (company_id, raw) = record?;
             let row: Value = serde_json::from_str(&raw)?;
+            if simulated {
+                sheet
+                    .write_string(row_number, 0, "SIMULATED")
+                    .map_err(xlsx_error)?;
+            }
             sheet
                 .write_string(
                     row_number,
-                    0,
+                    offset,
                     crate::identity::safe_spreadsheet_text(&company_id),
                 )
                 .map_err(xlsx_error)?;
@@ -2032,7 +2122,7 @@ fn write_full_export(
                 sheet
                     .write_string(
                         row_number,
-                        (col + 1) as u16,
+                        (col + 1) as u16 + offset,
                         crate::identity::safe_spreadsheet_text(&value),
                     )
                     .map_err(xlsx_error)?;
@@ -2043,13 +2133,13 @@ fn write_full_export(
     Ok((companies, counts[0], counts[1]))
 }
 
-fn write_export(path: &Path, kind: &str, data: &ExportData) -> Result<()> {
+fn write_export(path: &Path, kind: &str, data: &ExportData, simulated: bool) -> Result<()> {
     use rust_xlsxwriter::Workbook;
     let mut workbook = Workbook::new();
     if kind == "PITCHBOOK" || kind == "LLM" {
         let sheet = workbook.add_worksheet_with_constant_memory();
         sheet.set_name(kind).map_err(xlsx_error)?;
-        let headers = if kind == "PITCHBOOK" {
+        let mut headers = if kind == "PITCHBOOK" {
             vec![
                 "pk",
                 "Company Name",
@@ -2068,6 +2158,9 @@ fn write_export(path: &Path, kind: &str, data: &ExportData) -> Result<()> {
                 "Description",
             ]
         };
+        if simulated {
+            headers.insert(0, "Data origin");
+        }
         for (col, header) in headers.iter().enumerate() {
             sheet
                 .write_string(0, col as u16, *header)
@@ -2079,7 +2172,7 @@ fn write_export(path: &Path, kind: &str, data: &ExportData) -> Result<()> {
                 .get(&company.company_id)
                 .map(String::as_str)
                 .unwrap_or("UNKNOWN");
-            let values = if kind == "PITCHBOOK" {
+            let mut values = if kind == "PITCHBOOK" {
                 vec![
                     company.company_id.as_str(),
                     company.name.as_str(),
@@ -2098,10 +2191,13 @@ fn write_export(path: &Path, kind: &str, data: &ExportData) -> Result<()> {
                     company.description.as_deref().unwrap_or(""),
                 ]
             };
+            if simulated {
+                values.insert(0, "SIMULATED");
+            }
             for (col, value) in values.iter().enumerate() {
-                if kind == "LLM" && col == 0 {
+                if kind == "LLM" && col == usize::from(simulated) {
                     sheet
-                        .write_number((i + 1) as u32, 0, (i + 1) as f64)
+                        .write_number((i + 1) as u32, col as u16, (i + 1) as f64)
                         .map_err(xlsx_error)?;
                 } else {
                     sheet
@@ -2115,6 +2211,10 @@ fn write_export(path: &Path, kind: &str, data: &ExportData) -> Result<()> {
             }
         }
     } else {
+        if simulated {
+            write_simulated_note(&mut workbook)?;
+        }
+        let offset = u16::from(simulated);
         for (name, rows) in [("MID", &data.2), ("ISCC", &data.3)] {
             let sheet = workbook.add_worksheet();
             sheet.set_name(name).map_err(xlsx_error)?;
@@ -2125,17 +2225,27 @@ fn write_export(path: &Path, kind: &str, data: &ExportData) -> Result<()> {
                 }
             }
             let headers = headers.into_iter().collect::<Vec<_>>();
-            sheet.write_string(0, 0, "pk").map_err(xlsx_error)?;
+            if simulated {
+                sheet
+                    .write_string(0, 0, "Data origin")
+                    .map_err(xlsx_error)?;
+            }
+            sheet.write_string(0, offset, "pk").map_err(xlsx_error)?;
             for (col, header) in headers.iter().enumerate() {
                 sheet
-                    .write_string(0, (col + 1) as u16, header)
+                    .write_string(0, (col + 1) as u16 + offset, header)
                     .map_err(xlsx_error)?;
             }
             for (i, (company_id, row)) in rows.iter().enumerate() {
+                if simulated {
+                    sheet
+                        .write_string((i + 1) as u32, 0, "SIMULATED")
+                        .map_err(xlsx_error)?;
+                }
                 sheet
                     .write_string(
                         (i + 1) as u32,
-                        0,
+                        offset,
                         crate::identity::safe_spreadsheet_text(company_id),
                     )
                     .map_err(xlsx_error)?;
@@ -2151,7 +2261,7 @@ fn write_export(path: &Path, kind: &str, data: &ExportData) -> Result<()> {
                     sheet
                         .write_string(
                             (i + 1) as u32,
-                            (col + 1) as u16,
+                            (col + 1) as u16 + offset,
                             crate::identity::safe_spreadsheet_text(&value),
                         )
                         .map_err(xlsx_error)?;
