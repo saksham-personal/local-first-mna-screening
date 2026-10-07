@@ -967,5 +967,91 @@
       "type": "object"
     },
     "name": "dispatch_provider_text"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/index-build-start",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "activate_on_success": {
+          "default": true,
+          "type": "boolean"
+        },
+        "file": {
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "name"
+      ],
+      "title": "StartArgs",
+      "type": "object"
+    },
+    "name": "start_index_build"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/index-build-cancel",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "build_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "build_id"
+      ],
+      "title": "BuildArgs",
+      "type": "object"
+    },
+    "name": "cancel_index_build"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/mid-bundle-activate",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_id"
+      ],
+      "title": "BundleArgs",
+      "type": "object"
+    },
+    "name": "activate_mid_bundle"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/mid-bundle-delete",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_id"
+      ],
+      "title": "BundleArgs",
+      "type": "object"
+    },
+    "name": "delete_mid_bundle"
   }
 ]
