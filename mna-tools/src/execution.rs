@@ -1032,7 +1032,7 @@ struct RoundJobCounts {
     other: i64,
 }
 
-fn screening_provider_label(provider: &str) -> String {
+pub(crate) fn screening_provider_label(provider: &str) -> String {
     let normalized = provider.to_ascii_lowercase().replace(['_', '-', ' '], "");
     match normalized.as_str() {
         "llmsuite" => "LLM Suite".into(),
@@ -1042,22 +1042,29 @@ fn screening_provider_label(provider: &str) -> String {
 }
 
 fn score_bucket(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(raw)) if raw.trim().eq_ignore_ascii_case("check") => "CHECK".into(),
-        Some(Value::String(raw)) => numeric_score_bucket(raw.trim().parse::<f64>().ok()),
-        Some(Value::Number(number)) => numeric_score_bucket(number.as_f64()),
+    match screening_score_value(value) {
+        Value::String(value) => value,
+        Value::Number(value) => value.to_string(),
         _ => "blank".into(),
     }
 }
 
-fn numeric_score_bucket(score: Option<f64>) -> String {
+pub(crate) fn screening_score_value(value: Option<&Value>) -> Value {
+    let score = match value {
+        Some(Value::String(raw)) if raw.trim().eq_ignore_ascii_case("check") => {
+            return json!("CHECK");
+        }
+        Some(Value::String(raw)) => raw.trim().parse::<f64>().ok(),
+        Some(Value::Number(number)) => number.as_f64(),
+        _ => None,
+    };
     match score {
         Some(score)
             if score.is_finite() && (0.0..=10.0).contains(&score) && score.fract() == 0.0 =>
         {
-            (score as i64).to_string()
+            json!(score as i64)
         }
-        _ => "blank".into(),
+        _ => Value::Null,
     }
 }
 

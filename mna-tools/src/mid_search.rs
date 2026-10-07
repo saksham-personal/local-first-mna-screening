@@ -7,7 +7,7 @@ use rusqlite::{params, OptionalExtension};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -251,6 +251,26 @@ fn expression(s: &str) -> Result<(Expr, Vec<String>)> {
     }
     Ok((tree, tokens))
 }
+
+/// Format a saved keyword query the same way `search_mid` displays it to users.
+/// The database stores the expression and keyword definitions separately, so this
+/// helper rebuilds the display string from those persisted values.
+pub(crate) fn display_keyword_query(rationale: &str, expression: &str, keywords: &Value) -> String {
+    let by_id: HashMap<&str, &str> = keywords
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|keyword| Some((keyword.get("id")?.as_str()?, keyword.get("text")?.as_str()?)))
+        .collect();
+    let spaced = expression.replace('(', " ( ").replace(')', " ) ");
+    let tokens = spaced
+        .split_whitespace()
+        .map(|token| by_id.get(token).copied().unwrap_or(token))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{rationale} ({tokens})")
+}
+
 fn add(store: &Store, run: &str, query: &Value, companies: &[Value]) -> Result<()> {
     // The store's public mutation accepts at most 1,000 records per call.
     for chunk in companies.chunks(1000) {
@@ -298,7 +318,7 @@ pub fn search(store: &Store, arguments: &Value) -> Result<Value> {
             .collect::<Vec<_>>()
             .join(" OR ")
     });
-    let (tree, tokens) = expression(&expr)?;
+    let (tree, _tokens) = expression(&expr)?;
     let mut positives = BTreeSet::new();
     let mut negatives = BTreeSet::new();
     tree.ids(false, &mut positives, &mut negatives);
@@ -422,14 +442,10 @@ pub fn search(store: &Store, arguments: &Value) -> Result<Value> {
             })
         })
         .collect::<Vec<_>>();
-    let display = format!(
-        "{} ({})",
-        args.rationale,
-        tokens
-            .iter()
-            .map(|t| keywords.get(t).map(|k| k.text.clone()).unwrap_or(t.clone()))
-            .collect::<Vec<_>>()
-            .join(" ")
+    let display = display_keyword_query(
+        &args.rationale,
+        &expr,
+        &serde_json::to_value(&args.keywords)?,
     );
     let mut result = json!({"bundle_id":bundle.id,"rationale":args.rationale,"expression":expr,"display_query":display,"total_matched":total,"returned":rows.len(),"keyword_stats":args.keywords.iter().map(|k|json!({"id":k.id,"text":k.text,"match":k.r#match,"hits":hits[&k.id].len()})).collect::<Vec<_>>(),"results":rows,"added_to_run":args.add_to_run,"search_scope":"qualitative_core_business"});
     let record = store.record_search(Some(&args.run_id), "MID", &display, arguments, &result)?;
