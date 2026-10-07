@@ -19,6 +19,7 @@ type Props = {
   modal?: boolean;
   onInteractOutside?: ComponentProps<typeof Dialog.Content>["onInteractOutside"];
   onPointerDownOutside?: ComponentProps<typeof Dialog.Content>["onPointerDownOutside"];
+  onEscapeKeyDown?: ComponentProps<typeof Dialog.Content>["onEscapeKeyDown"];
 };
 
 const EMPTY_OPTION = "__intake_empty__";
@@ -97,7 +98,7 @@ function ChipMultiSelect({
   </fieldset>;
 }
 
-export default function IntakeForm({ open, initial, sourceFileName, onViewDocument, onCancel, onSubmit, busy = false, modal = true, onInteractOutside, onPointerDownOutside }: Props) {
+export default function IntakeForm({ open, initial, sourceFileName, onViewDocument, onCancel, onSubmit, busy = false, modal = true, onInteractOutside, onPointerDownOutside, onEscapeKeyDown }: Props) {
   const headingId = useId();
   const descriptionId = useId();
   const [form, setForm] = useState<IntakeFormData>(() => normalizeIntake(initial));
@@ -127,7 +128,7 @@ export default function IntakeForm({ open, initial, sourceFileName, onViewDocume
   return <Dialog.Root modal={modal} open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onCancel(); }}>
     {open && <Dialog.Portal>
       <Dialog.Overlay className="if-overlay" />
-      <Dialog.Content onInteractOutside={onInteractOutside} onPointerDownOutside={onPointerDownOutside} className="if-dialog" aria-labelledby={headingId} aria-describedby={descriptionId} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}>
+      <Dialog.Content onInteractOutside={onInteractOutside} onPointerDownOutside={onPointerDownOutside} className="if-dialog" aria-labelledby={headingId} aria-describedby={descriptionId} onEscapeKeyDown={(event) => { onEscapeKeyDown?.(event); if (busy) event.preventDefault(); }}>
         <header className="if-header">
           <div>
             <span className="if-eyebrow">Screening request</span>

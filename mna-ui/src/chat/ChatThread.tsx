@@ -353,7 +353,7 @@ function UserMessage() {
     let label = String(custom.label ?? "Screening action");
     if (action?.type === "approve-criteria") {
       const approval = snapshot.sessions.find(session => session.id === scope.sessionId)?.events.find(event => event.kind === "approval" && event.title === "Discovery criteria approved" && ((event.result as Record<string, unknown> | undefined)?.sourceArtifactId === action.artifactId || (event.result as Record<string, unknown> | undefined)?.artifactId === action.artifactId));
-      label = approval ? `Approved criteria v${(approval.result as Record<string, unknown>)?.revision}` : "Reviewing criteria approval";
+      label = approval ? `Approved criteria v${(approval.result as Record<string, unknown>)?.revision}` : "Approval requested";
     } else if (action?.type === "inspect-company") {
       label = `Opened ${state.companies.find(company => company.pk === action.companyId)?.name ?? action.companyId}`;
     }

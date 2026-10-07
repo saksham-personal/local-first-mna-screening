@@ -202,3 +202,17 @@
 @media (prefers-reduced-motion: reduce) {
   .if-dialog *, .if-dialog *::before, .if-dialog *::after { scroll-behavior: auto !important; }
 }
+
+/* Intake PDF open beside the form: the document window sits above the (non-modal)
+   dialog, and on wide screens the dialog moves left so both are visible. */
+body:has(.if-dialog) .document-window {
+  z-index: 1100;
+}
+
+@media (min-width: 1280px) {
+  body:has(.document-window) .if-dialog {
+    inset: 50% auto auto 16px;
+    width: min(880px, calc(100vw - 616px));
+    transform: translateY(-50%);
+  }
+}

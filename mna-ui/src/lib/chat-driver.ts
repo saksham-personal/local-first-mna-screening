@@ -160,8 +160,6 @@ export function reviseCriteria(
     intakeForm: revisionData ? revisionData.intakeForm : old.intakeForm,
     goodFitExamples: revisionData?.goodFitExamples ?? old.goodFitExamples,
     badFitExamples: revisionData?.badFitExamples ?? old.badFitExamples,
-    companies: [],
-    counts: { midOnly: 0, isccOnly: 0, both: 0 },
     criteriaMessageId,
   });
   for (const artifact of old.artifacts)

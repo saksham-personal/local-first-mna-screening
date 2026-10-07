@@ -122,7 +122,7 @@ test("stale approval actions cannot save or approve after a different draft is c
   });
 });
 
-test("criteria edits clear displayed results while retaining the earlier search for cancellation", async () => {
+test("criteria edits keep earlier results and the earlier search until a new search replaces them", async () => {
   await withBackend(async () => {
     const id = session();
     reviseCriteria(id, "Claims software", "Claims software");
@@ -135,8 +135,7 @@ test("criteria edits clear displayed results while retaining the earlier search 
     assert.equal(state.jobId, "earlier-search");
     assert.equal(state.jobContext?.revision, originalRevision);
     assert.notEqual(state.revision, originalRevision);
-    assert.deepEqual(state.counts, { midOnly: 0, isccOnly: 0, both: 0 });
-    assert.deepEqual(state.companies, []);
+    assert.deepEqual(state.counts, { midOnly: 7, isccOnly: 0, both: 0 });
   });
 });
 

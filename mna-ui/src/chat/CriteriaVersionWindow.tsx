@@ -17,7 +17,13 @@ export default function CriteriaVersionWindow({ version, sessionId, onClose }: {
     try {
       const job = getJob(getChatState(sessionId).jobId);
       if (job?.state === "running") await stopJob(job.id);
+      const before = getChatState(sessionId).criteriaSaveToken;
       const artifact = reviseCriteria(sessionId, version.criteriaText, version.definition, version.deferred, undefined, { intakeForm: version.intakeForm, goodFitExamples: version.good.join("\n"), badFitExamples: version.bad.join("\n") });
+      if (getChatState(sessionId).criteriaSaveToken === before) {
+        // Identical to the current unapproved draft: nothing new was created.
+        setError("This version is already the current draft.");
+        return;
+      }
       await flushCriteriaDraft(sessionId);
       const messageId = crypto.randomUUID();
       updateChatState(sessionId, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
