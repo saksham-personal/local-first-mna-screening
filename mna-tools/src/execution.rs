@@ -62,6 +62,11 @@ struct PlanIdArgs {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ScreeningRoundsArgs {
+    run_id: String,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ApproveArgs {
     plan_id: String,
     digest: String,
@@ -199,6 +204,7 @@ impl ExecutionService {
             "get_execution_job" => self.get_job(parse(args)?),
             "get_execution_progress" => self.progress(parse(args)?),
             "get_model_assessments" => self.assessments(parse(args)?),
+            "get_screening_rounds" => self.screening_rounds(parse(args)?),
             "reserve_llmsuite_slot" => {
                 let a: SlotArgs = parse(args)?;
                 self.reserve_llmsuite_slot(&a.purpose, &a.request_key)
@@ -342,7 +348,15 @@ impl ExecutionService {
             if p.digest!=a.digest { return Err(Error::Conflict("approval digest differs from immutable proposal".into())); }
             if p.status=="APPROVED" {
                 let existing:(String,String,String)=tx.query_row("SELECT approval_key,digest,approved_by FROM prepared_plan_approvals WHERE plan_id=?",[&a.plan_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-                if existing==(a.approval_key.clone(),a.digest.clone(),a.approved_by.clone()) { tx.commit()?; return Ok(json!({"plan_id":a.plan_id,"status":"APPROVED","idempotent":true})); }
+                if existing==(a.approval_key.clone(),a.digest.clone(),a.approved_by.clone()) {
+                    let round_no: Option<i64> = if p.spec["mode"] == "screening" {
+                        tx.query_row("SELECT round_no FROM screening_rounds WHERE plan_id=?", [&a.plan_id], |r| r.get(0)).optional()?
+                    } else { None };
+                    tx.commit()?;
+                    let mut result=json!({"plan_id":a.plan_id,"status":"APPROVED","idempotent":true});
+                    if let Some(round_no)=round_no { result["round_no"]=json!(round_no); }
+                    return Ok(result);
+                }
                 return Err(Error::Conflict("plan already has a different immutable approval".into()));
             }
             if p.status!="PROPOSED" { return Err(Error::Conflict(format!("plan is {}",p.status))); }
@@ -375,8 +389,15 @@ impl ExecutionService {
             }
             tx.execute("INSERT INTO prepared_plan_approvals(plan_id,approval_key,digest,approved_by,approved_at) VALUES(?,?,?,?,?)",params![a.plan_id,a.approval_key,a.digest,a.approved_by,now])?;
             tx.execute("UPDATE prepared_plans SET status='APPROVED',approved_at=?,approved_by=? WHERE plan_id=?",params![now,a.approved_by,a.plan_id])?;
+            let round_no=if spec.mode=="screening" {
+                let round_no:i64=tx.query_row("SELECT COALESCE(MAX(round_no),0)+1 FROM screening_rounds WHERE run_id=?",[&p.run_id],|r|r.get(0))?;
+                tx.execute("INSERT INTO screening_rounds(run_id,round_no,plan_id,provider,created_at) VALUES(?,?,?,?,?)",params![p.run_id,round_no,a.plan_id,spec.provider,now])?;
+                Some(round_no)
+            } else { None };
             tx.commit()?;
-            Ok(json!({"plan_id":a.plan_id,"status":"APPROVED","job_count":batches.len(),"idempotent":false}))
+            let mut result=json!({"plan_id":a.plan_id,"status":"APPROVED","job_count":batches.len(),"idempotent":false});
+            if let Some(round_no)=round_no { result["round_no"]=json!(round_no); }
+            Ok(result)
         })
     }
 
@@ -622,6 +643,70 @@ impl ExecutionService {
         let mut answers=Vec::new();let mut answer_stmt=conn.prepare("SELECT plan_id,job_id,provider,question,answer,created_at FROM execution_question_answers WHERE run_id=? ORDER BY created_at")?;
         for row in answer_stmt.query_map([&a.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {let(plan,job,provider,question,answer,created)=row?;if a.plan_id.as_ref().is_some_and(|v|v!=&plan)||a.company_id.is_some(){continue;}let eligible=*eligibility.entry(plan.clone()).or_insert_with(||load_plan(conn,&plan).is_ok_and(|p|p.status=="APPROVED" && require_fresh(conn,&p).is_ok()));answers.push(json!({"plan_id":plan,"job_id":job,"provider":provider,"question":question,"answer":answer,"created_at":created,"eligible_for_current_use":eligible}));}
         Ok(json!({"run_id":a.run_id,"assessments":out,"count":out.len(),"question_answers":answers}))})
+    }
+
+    fn screening_rounds(&self, a: ScreeningRoundsArgs) -> Result<Value> {
+        bounded("run_id", &a.run_id, 160)?;
+        self.store.with_connection(|conn| {
+            let mut stmt=conn.prepare("SELECT sr.round_no,sr.plan_id,sr.provider,sr.created_at,ppa.approved_by,p.spec_json FROM screening_rounds sr JOIN prepared_plans p ON p.plan_id=sr.plan_id JOIN prepared_plan_approvals ppa ON ppa.plan_id=sr.plan_id WHERE sr.run_id=? ORDER BY sr.round_no")?;
+            let mut rounds=Vec::new();
+            for row in stmt.query_map([&a.run_id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {
+                let(round_no,plan_id,provider,created_at,approved_by,spec_json)=row?;
+                let spec:ProposeArgs=serde_json::from_str(&spec_json)?;
+                let mut jobs=RoundJobCounts::default();
+                let mut job_stmt=conn.prepare("SELECT state,COUNT(*) FROM execution_jobs WHERE plan_id=? GROUP BY state")?;
+                for job in job_stmt.query_map([&plan_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?)))? {
+                    let(state,count)=job?;
+                    jobs.total+=count;
+                    match state.as_str() {
+                        "READY" | "WAITING_RATE" => jobs.ready+=count,
+                        "LEASED" | "RUNNING" | "AMBIGUOUS" => jobs.running+=count,
+                        "SUCCEEDED" => jobs.done+=count,
+                        "FAILED" => jobs.failed+=count,
+                        _ => jobs.other+=count,
+                    }
+                }
+                let mut score_distribution=serde_json::Map::new();
+                for column in &spec.score_columns {
+                    let mut buckets=serde_json::Map::new();
+                    for score in 0..=10 { buckets.insert(score.to_string(),json!(0)); }
+                    buckets.insert("CHECK".into(),json!(0));
+                    buckets.insert("blank".into(),json!(0));
+                    score_distribution.insert(column.clone(),Value::Object(buckets));
+                }
+                let mut assessed_companies=std::collections::HashSet::new();
+                let mut simulated=false;
+                let mut assessment_stmt=conn.prepare("SELECT company_id,result_json,simulated FROM model_assessments WHERE run_id=? AND plan_id=?")?;
+                for assessment in assessment_stmt.query_map(params![a.run_id,plan_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?)))? {
+                    let(company_id,result_json,assessment_simulated)=assessment?;
+                    assessed_companies.insert(company_id);
+                    simulated|=assessment_simulated!=0;
+                    let result:Value=serde_json::from_str(&result_json)?;
+                    for column in &spec.score_columns {
+                        let bucket=score_bucket(result.get(column));
+                        let counts=score_distribution.get_mut(column).and_then(Value::as_object_mut).ok_or_else(||Error::Internal("score distribution column missing".into()))?;
+                        let count=counts.get(&bucket).and_then(Value::as_u64).unwrap_or(0);
+                        counts.insert(bucket,json!(count+1));
+                    }
+                }
+                rounds.push(json!({
+                    "round_no":round_no,
+                    "plan_id":plan_id,
+                    "provider":provider,
+                    "provider_label":screening_provider_label(&provider),
+                    "created_at":created_at,
+                    "approved_by":approved_by,
+                    "deployment":spec.deployment,
+                    "output_columns":spec.output_columns,
+                    "score_columns":spec.score_columns,
+                    "jobs":jobs,
+                    "assessed_companies":assessed_companies.len(),
+                    "score_distribution":Value::Object(score_distribution),
+                    "simulated":simulated
+                }));
+            }
+            Ok(json!({"run_id":a.run_id,"rounds":rounds}))
+        })
     }
 
     /// Shared durable gate for all LLM Suite roles, including workers outside this module.
@@ -922,9 +1007,49 @@ pub fn input_schema(tool: &str) -> Option<Value> {
         "get_execution_job" => schema!(JobIdArgs),
         "get_execution_progress" => schema!(PlanIdArgs),
         "get_model_assessments" => schema!(AssessmentsArgs),
+        "get_screening_rounds" => schema!(ScreeningRoundsArgs),
         "reserve_llmsuite_slot" => schema!(SlotArgs),
         "consume_llmsuite_slot" => schema!(SlotArgs),
         _ => None,
+    }
+}
+
+#[derive(Default, Serialize)]
+struct RoundJobCounts {
+    total: i64,
+    ready: i64,
+    running: i64,
+    done: i64,
+    failed: i64,
+    other: i64,
+}
+
+fn screening_provider_label(provider: &str) -> String {
+    let normalized = provider.to_ascii_lowercase().replace(['_', '-', ' '], "");
+    match normalized.as_str() {
+        "llmsuite" => "LLM Suite".into(),
+        "copilot" | "m365copilot" | "m365" => "M365 Copilot".into(),
+        _ => provider.to_owned(),
+    }
+}
+
+fn score_bucket(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(raw)) if raw.trim().eq_ignore_ascii_case("check") => "CHECK".into(),
+        Some(Value::String(raw)) => numeric_score_bucket(raw.trim().parse::<f64>().ok()),
+        Some(Value::Number(number)) => numeric_score_bucket(number.as_f64()),
+        _ => "blank".into(),
+    }
+}
+
+fn numeric_score_bucket(score: Option<f64>) -> String {
+    match score {
+        Some(score)
+            if score.is_finite() && (0.0..=10.0).contains(&score) && score.fract() == 0.0 =>
+        {
+            (score as i64).to_string()
+        }
+        _ => "blank".into(),
     }
 }
 
