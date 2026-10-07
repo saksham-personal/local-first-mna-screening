@@ -42,6 +42,7 @@ import {
 } from "./chat-policy";
 import { sessionStore } from "./session-store";
 import { attachmentAccept, attachmentError } from "./attachment-policy";
+import { plural } from "./format";
 import {
   callTool,
   stageUploads,
@@ -484,7 +485,7 @@ export function createChatAdapter(
           await flushCriteriaDraft(sessionId);
           content.push({
             type: "text",
-            text: "This example uses fictional companies and working tools. Review the business criteria above, then approve the search. MID is available locally; ISCC and model services are not connected.",
+            text: "This example searches fictional MID data. Review and approve the criteria before discovery. ISCC and model services are disconnected.",
           });
         } else if (
           /^\/export$|^(?:show|open)(?: the)? session log$/i.test(text)
@@ -492,7 +493,7 @@ export function createChatAdapter(
           callbacks.openLog();
           content.push({
             type: "text",
-            text: "The session log has the complete tool history, timings, and download options. ZIP includes original uploaded files.",
+            text: "The session log includes tool history, timings, and downloads. ZIP keeps original files.",
           });
         } else if (
           /^\/criteria$|^(?:review|show)(?: the)? criteria$/i.test(text)
@@ -501,7 +502,7 @@ export function createChatAdapter(
           else
             content.push({
               type: "text",
-              text: "Describe the company’s core products or services, or attach your DDI. I’ll show a draft for your review.",
+              text: "Describe the core business or attach an Intake Form. Review the draft before discovery.",
             });
         } else if (
           /^\/(?:companies|data|review)$|^(?:show|review)(?: the)? (?:companies|company data|shortlist)$/i.test(text)
@@ -627,7 +628,7 @@ export function createChatAdapter(
             content.push({
               type: "text",
               text: target
-                ? "That company is not in this saved company list. Choose a company from an artifact or the @ menu."
+                ? "That company is not in this saved company list. Choose a company from a result card or the @ menu."
                 : "Company context becomes available after a search. Use @ to reference a saved company.",
             });
           else {
@@ -687,12 +688,12 @@ export function createChatAdapter(
             for (const provider of providers) {
               if (!request) {
                 updateChatState(sessionId, { model: provider });
-                content.push({ type: "text", text: `Ask ${provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} a question in the message box. Attached files are included unless you turn them off.` });
+                content.push({ type: "text", text: `Use ${provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} for a question in the message box. Attached files are included unless you turn them off.` });
               } else {
                 const response = await askProvider(sessionId, provider, request, submittedFiles, `${user.id}-${provider}`);
                 content.push({ type: "text", text: response.text ?? response.message ?? "The service has no answer yet." });
                 if (response.executed && response.text) add(saveArtifact(sessionId, { ...artifactBase("Use this answer"), type: "research-answer", provider: provider === "llm_suite" ? "LLM Suite" : "M365 Copilot", question: request, answer: response.text }, turnId));
-                if (!response.executed) add(saveArtifact(sessionId, { ...artifactBase(provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"), type: "handoff", service: provider === "llm_suite" ? "LLM Suite" : "M365 Copilot", state: "unavailable", detail: "Executed: no · service not connected" }, turnId));
+                if (!response.executed) add(saveArtifact(sessionId, { ...artifactBase(provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"), type: "handoff", service: provider === "llm_suite" ? "LLM Suite" : "M365 Copilot", state: "unavailable", detail: "Not sent: provider not connected." }, turnId));
               }
             }
           } else {
@@ -833,7 +834,7 @@ export function createChatAdapter(
         ) {
           content.push({
             type: "text",
-            text: `Saved ${submittedFiles.length} file${submittedFiles.length === 1 ? "" : "s"} as chat artifacts. ${tabular.length ? "Run discovery before importing enrichment data." : "PDF and DOCX text extraction is not connected in this local example. Paste the business criteria or attach a UTF-8 TXT file to prepare a draft."}`,
+            text: `Saved ${plural(submittedFiles.length, "file", "files")}. ${tabular.length ? "Run discovery before adding enrichment data." : "Open an Intake Form PDF to pre-fill fields by label, then check each field. Full parsing is deferred. Use a UTF-8 TXT file or describe the business to prepare a draft."}`,
           });
         } else if (text.startsWith("/")) {
           content.push({
@@ -849,7 +850,7 @@ export function createChatAdapter(
         ) {
           content.push({
             type: "text",
-            text: `Saved ${submittedFiles.length} supporting file${submittedFiles.length === 1 ? "" : "s"}. The current criteria and company list are unchanged. You can preview PDF files from their cards. To change the screening, use Edit criteria or describe the new business to find.`,
+            text: `Saved ${plural(submittedFiles.length, "supporting file", "supporting files")}. Criteria and companies are unchanged. Preview PDFs from their cards. Edit criteria to change the search.`,
           });
         } else {
           const input =
@@ -879,8 +880,8 @@ export function createChatAdapter(
                 samePrompt && approved(state)
                   ? "The criteria are unchanged. Your previous approval still applies."
                   : draft.definition
-                    ? "Here is a draft for review. Edit the core business definition if needed, then approve the search. Size, financials, geography, ownership, and industry codes are reference details; they do not filter discovery."
-                    : "This text needs a clearer core business definition. Use Edit criteria to describe the products, services, and customer workflows to search for.",
+                  ? "Review the draft, edit the core business if needed, and approve the search. Size, financials, geography, ownership, and industry codes are review details, not search filters."
+                  : "Describe the products, services, and customer workflows you want to find.",
             });
           }
         }

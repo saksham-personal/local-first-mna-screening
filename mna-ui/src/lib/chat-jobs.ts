@@ -95,7 +95,7 @@ export function jobContent(job: JobSnapshot): Part[] {
   return [
     {
       type: "text",
-      text: "Searching the local MID example. You can keep chatting or open another screening while this runs.",
+      text: "Searching MID. You can keep working while it runs.",
     },
     ...getJobParts(job),
   ];
@@ -205,8 +205,8 @@ function finishJob(
         counts,
         backendRunId: job.result.backendRunId,
         note: current
-          ? "Saved results from the fictional MID example. ISCC is not connected. Source scores stay separate."
-          : "Results from an earlier criteria revision. Review and approve the current criteria before continuing.",
+          ? "Saved fictional MID results. ISCC is not connected. MID and ISCC scores stay separate."
+          : "These results use earlier criteria. Review and approve the current criteria before continuing.",
       },
       context?.turnId,
     );
@@ -218,7 +218,7 @@ function finishJob(
         type: "checkpoint",
         key: "screening-ui",
         backendRunId: job.result.backendRunId,
-        summary: `${plural(companies.length, "company ID")}, source counts, and the approved business definition are saved locally.`,
+        summary: "Company IDs, source counts, and approved criteria are saved locally.",
       },
       context?.turnId,
     );
@@ -251,8 +251,8 @@ function finishJob(
   } else
     text =
       job.state === "cancelled"
-        ? "Search stopped. Completed tool calls and saved writes remain in the session log."
-        : `Search could not finish: ${job.error ?? "The local service is unavailable."} You can retry after reviewing the error in the session log.`;
+        ? "Search stopped. Completed work is in the session log."
+        : `Search failed: ${job.error ?? "The local service is unavailable."} Review the session log, then retry.`;
   parts.push({ type: "text", text });
   const finalMessageId = context?.messageId ?? `job-${job.id}`;
   updateChatState(job.sessionId, (current) => ({
@@ -364,7 +364,7 @@ export async function startDiscovery(
         jobId: job.id,
         state: job.state,
         detail:
-          "A background job runs working tools. External providers are off.",
+          "Local tools are searching. External providers are off.",
       },
       turnId,
     );
@@ -393,7 +393,7 @@ export async function stopJob(id: string): Promise<void> {
   }
   if (getJob(id)?.state === "running")
     throw new Error(
-      "The previous search is still stopping. Wait for its stopped state before starting another search.",
+      "The previous search is still stopping. Wait until it stops before starting another search.",
     );
 }
 export async function refreshJobs(): Promise<void> {
@@ -441,7 +441,7 @@ export async function refreshJobs(): Promise<void> {
           session.createdAt,
         events: [],
         error:
-          "The local server restarted. Running jobs cannot resume; saved checkpoints remain available. Tool finish times were not recorded.",
+          "The local server restarted. Running jobs cannot resume, but saved checkpoints remain available. Tool finish times were not recorded.",
       });
     }
   }
@@ -459,7 +459,7 @@ export function startJobPolling(): () => void {
     try {
       await refreshJobs();
     } catch {
-      lastPollError = "The local tool server is unavailable. Reconnecting…";
+      lastPollError = "The local service is unavailable. Reconnecting…";
       subscribers.forEach((fn) => fn());
     }
     if (pollClients.size > 0 && generation === pollGeneration)

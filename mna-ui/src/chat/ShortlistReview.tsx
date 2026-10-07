@@ -3,7 +3,9 @@ import { AlertCircle, Check, RotateCcw, SlidersHorizontal } from "lucide-react";
 import type { ChatState } from "../lib/chat-contract";
 import DataTable from "./DataTable";
 import SelectField from "../ui/SelectField";
+import HelpTip from "../ui/HelpTip";
 import { meetsScoreRule } from "../lib/shortlist-review";
+import { plural } from "../lib/format";
 import "./shortlist-review.css";
 
 type Props = {
@@ -100,13 +102,13 @@ export default function ShortlistReview({ rows, columns, context, planId, onOpen
       if (!row) return true;
       return !!scoreColumn && meetsScoreRule(row[scoreColumn], threshold, keepCheck, !excludeUnscored);
     });
-    void apply(keep, `${keep.length.toLocaleString()} companies remain considered.`);
+    void apply(keep, `${plural(keep.length, "company remains in the shortlist", "companies remain in the shortlist")}.`);
   };
   const keepSelected = () => {
     const keep = [...new Set([...currentIds.filter((id) => !resultSet.has(id)), ...selectedRows])];
-    void apply(keep, `${keep.length.toLocaleString()} companies remain considered.`);
+    void apply(keep, `${plural(keep.length, "company remains in the shortlist", "companies remain in the shortlist")}.`);
   };
-  const restoreAll = () => void apply(allIds, `${allIds.length.toLocaleString()} companies restored to the shortlist.`);
+  const restoreAll = () => void apply(allIds, `${plural(allIds.length, "company", "companies")} restored to the shortlist.`);
   const toggleOutputColumn = (column: string) => setSelectedOutputColumns((current) => {
     if (current.includes(column)) {
       if (retrievalScore(column) && scoreColumn === column) setScoreColumn("");
@@ -116,17 +118,17 @@ export default function ShortlistReview({ rows, columns, context, planId, onOpen
   });
 
   return <section className="sr-review" aria-label="Review screening results">
-    <div className="sr-review-head"><div><span className="sr-review-icon"><SlidersHorizontal size={15} /></span><span><strong>Review results</strong><small>Preview a score rule, then choose which companies stay in scope.</small></span></div><span className="sr-counts"><strong>{currentIds.length.toLocaleString()}</strong> considered · <strong>{allIds.length.toLocaleString()}</strong> total</span></div>
+    <div className="sr-review-head"><div><span className="sr-review-icon"><SlidersHorizontal size={15} /></span><span><strong>Review results</strong><small>Preview a score rule and choose which companies stay.</small></span></div><span className="sr-counts"><strong>{currentIds.length.toLocaleString()}</strong> considered · <strong>{allIds.length.toLocaleString()}</strong> total <HelpTip label="About considered companies">Considered companies stay in the active working set. Hidden companies remain saved and can be restored.</HelpTip></span></div>
     <p className="sr-hidden-note">Hidden companies are saved and can be restored.</p>
     <div className="sr-controls">
-      <label><span>Score column</span><SelectField label="Score column" value={scoreColumn || "none"} onChange={value => { setScoreColumn(value === "none" ? "" : value); setPreviewMatches(null); }} options={[{ value: "none", label: "Choose a score" }, ...numericScoreColumns.map(column => ({ value: column, label: column }))]} /></label>
+      <label><span>Score column <HelpTip label="About score columns">MID and ISCC scores measure retrieval, not screening fit. Screening scores range from 0 to 10; CHECK means evidence is incomplete or conflicting.</HelpTip></span><SelectField label="Score column" value={scoreColumn || "none"} onChange={value => { setScoreColumn(value === "none" ? "" : value); setPreviewMatches(null); }} options={[{ value: "none", label: "Choose a score" }, ...numericScoreColumns.map(column => ({ value: column, label: column }))]} /></label>
       <label><span>Minimum score</span><input type="number" min={0} max={10} step="any" value={threshold} onChange={(event) => { const value = Number(event.target.value); setThreshold(Math.max(0, Math.min(10, Number.isFinite(value) ? value : 0))); setPreviewMatches(null); }} /></label>
       <label className="sr-check-option"><input type="checkbox" checked={excludeUnscored} onChange={(event) => setExcludeUnscored(event.target.checked)} /><span>Exclude companies without a score</span></label>
-      <label className="sr-check-option"><input type="checkbox" checked={keepCheck} onChange={event => { setKeepCheck(event.target.checked); setPreviewMatches(null); }} /><span>Keep CHECK results</span></label>
+      <div className="sr-check-option"><label><input type="checkbox" checked={keepCheck} onChange={event => { setKeepCheck(event.target.checked); setPreviewMatches(null); }} /><span>Keep CHECK results</span></label><HelpTip label="About CHECK results">CHECK means evidence is incomplete or conflicting. Keep it selected to retain those companies for review.</HelpTip></div>
       <button className="sr-secondary" type="button" onClick={preview} disabled={!scoreColumn}>Preview matches{previewMatches !== null ? ` · ${previewMatches.toLocaleString()}` : ""}</button>
     </div>
-    {!scoreColumn && <p className="sr-hint" role="status">Choose a requested numeric result column to preview matches. MID and ISCC retrieval scores are available only after you select them below.</p>}
-    {previewMatches !== null && <p className="sr-preview-count" role="status"><Check size={13} /> {previewMatches.toLocaleString()} of {currentIds.length.toLocaleString()} currently considered companies meet this rule.</p>}
+    {!scoreColumn && <p className="sr-hint" role="status">Choose a result column to preview matches.</p>}
+    {previewMatches !== null && <p className="sr-preview-count" role="status"><Check size={13} /> {plural(previewMatches, "company", "companies")} {previewMatches === 1 ? "meets" : "meet"} this rule out of {plural(currentIds.length, "company", "companies")}.</p>}
     <DataTable rows={scoredRows} columns={[...columns, "Considered", ...(scoreColumn ? ["Rule match"] : [])]} label="Screening result rows" onOpenCompany={onOpenCompany} selectedCompanyIds={selectedRows} onSelectionChange={setSelectedRows} exportCompanyIds={currentIds} />
     {planId && <div className="sr-output-columns"><strong>Use results in next screening</strong><small>Choose which requested result fields to carry forward.</small><div>{requestedColumns.map((column) => <label key={column}><input type="checkbox" checked={selectedOutputColumns.includes(column)} onChange={() => toggleOutputColumn(column)} /><span>{column}</span></label>)}</div></div>}
     {error && <p className="sr-error" role="alert"><AlertCircle size={14} />{error}</p>}

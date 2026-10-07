@@ -97,32 +97,30 @@ export function draftCriteria(text: string): {
 export const commandPrompts = [
   {
     command: "/llm",
-    title: "Ask LLM Suite",
-    description: "Ask directly in chat, with optional files.",
+    title: "LLM Suite question",
+    description: "Ask in chat with optional files.",
   },
   {
     command: "/copilot",
-    title: "Ask M365 Copilot",
-    description: "Ask directly in chat, with optional files.",
+    title: "M365 Copilot question",
+    description: "Ask in chat with optional files.",
   },
   {
     command: "/screen",
     title: "Prepare screening",
-    description:
-      "Review inputs, prompt, outputs, and batch size before approval.",
+    description: "Review columns, prompt, and batch size before approval.",
   },
   {
     command: "/example",
     title: "Start the example",
-    description:
-      "Approve criteria, then run working tools on fictional companies.",
+    description: "Review and approve criteria, then search fictional companies.",
   },
   {
     command: "/criteria",
     title: "Review criteria",
-    description: "Show the current business criteria and approval.",
+    description: "Review current criteria and approval status.",
   },
-  { command: "/data", title: "Show company data", description: "Read the latest MID, ISCC, PitchBook and ROGO sources in a table." },
+  { command: "/data", title: "Show company data", description: "Review MID, ISCC, PitchBook, and ROGO data." },
   { command: "/bing", title: "Bing research", description: "Research all considered companies using editable queries." },
   { command: "/review", title: "Review shortlist", description: "Keep score matches, hide companies, or restore them." },
   {
@@ -157,4 +155,4 @@ export const commandPrompts = [
   },
 ];
 export const screeningDiagram =
-  "flowchart TD\n  A[Criteria or DDI] --> B[Review business criteria]\n  B --> C{Analyst approves?}\n  C -->|Revise| B\n  C -->|Yes| E[Optional good-fit and bad-fit examples]\n  E --> V[Approve final criteria]\n  V --> D[Search MID and ISCC]\n  D --> F[Review company list]\n  F -->|Broaden search| D\n  F --> G[Choose enrichment or screening]\n  G --> H[PitchBook or ROGO uploads]\n  G --> I[LLM Suite or M365 screening]\n  G --> J[Bing hydration]\n  H --> K[Updated company context]\n  I --> K\n  J --> K\n  K --> R[Keep matches and CHECK; hide others]\n  R --> G\n  R --> X[Export considered companies]\n  K -->|Revise criteria| B";
+  "flowchart TD\n  A[Criteria or Intake Form] --> B[Review business criteria]\n  B --> C{Analyst approves?}\n  C -->|Revise| B\n  C -->|Yes| E[Optional good-fit and bad-fit examples]\n  E --> V[Approve final criteria]\n  V --> D[Search MID and ISCC]\n  D --> F[Review company list]\n  F -->|Broaden search| D\n  F --> G[Choose enrichment or screening]\n  G --> H[PitchBook or ROGO uploads]\n  G --> I[LLM Suite or M365 screening]\n  G --> J[Bing research]\n  H --> K[Updated company context]\n  I --> K\n  J --> K\n  K --> R[Keep matches and CHECK; hide others]\n  R --> G\n  R --> X[Export considered companies]\n  K -->|Revise criteria| B";

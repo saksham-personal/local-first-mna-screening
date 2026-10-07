@@ -1,6 +1,10 @@
 /** Presentation only: historical assistant receipts retain their original exported text. */
 export function productCopy(text: string) {
   return text
+    .replace(/\bDDI\b/gi, "Intake Form")
+    .replace(/\bAsk M365 Copilot\b/gi, "M365 Copilot screening")
+    .replace(/\bM365 Copilot screening a question\b/gi, "a question for M365 Copilot")
+    .replace(/\bLLMSuite\b/gi, "LLM Suite")
     .replace(/\bLLM\b(?!\s+Suite\b)/gi, "LLM Suite")
     .replace(/real Rust tools/gi, "working tools")
     .replace(/Real Rust results/gi, "Saved results")

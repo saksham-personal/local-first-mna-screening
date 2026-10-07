@@ -14,9 +14,9 @@ export default function ImportStaging({ files, summary, onUpload, onRetry }: { f
     {summary && <p className="import-empty">{summary.replace(/ Use \/data[\s\S]*$/, "")}</p>}
     {pending.map(file => <div className={`import-pending import-${file.stagingStatus}`} key={file.id}>
       {file.stagingStatus === "checking" || file.stagingStatus === "importing" ? <LoaderCircle className="ca-spin" size={16} /> : file.stagingStatus === "error" || file.stagingStatus === "unrecognized" ? <CircleAlert size={16} /> : <FileSpreadsheet size={16} />}
-      <div><strong title={file.name}>{file.name}</strong><small>{file.stagingStatus === "waiting" ? "Detected. Add companies to this screening to hydrate them." : file.stagingMessage || "Staged for review"}</small></div>
+      <div><strong title={file.name}>{file.name}</strong><small>{file.stagingStatus === "waiting" ? "Detected. Add company data to this screening." : file.stagingMessage || "Staged for review"}</small></div>
     </div>)}
     {pending.some(file => file.stagingStatus === "error") && <button className="import-retry" type="button" onClick={onRetry}>Check files again</button>}
-    {!tabular.length && <p className="import-empty">Add a PitchBook mapping list, a data workbook, or ROGO data. Use the matching upload zone. Importing does not hide companies.</p>}
+    {!tabular.length && <p className="import-empty">Add PitchBook mapping or data files, or ROGO data, in the matching upload zone. Imports do not hide companies.</p>}
   </section>;
 }

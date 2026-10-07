@@ -21,6 +21,7 @@ import type {
 } from "../lib/chat-contract";
 import type { Company, ExportKind } from "../lib/contracts";
 import { productCopy } from "../lib/product-copy";
+import HelpTip from "../ui/HelpTip";
 import { formatTime, plural, pluralWord } from "../lib/format";
 import Tooltip from "../Tooltip";
 import Skeleton from "../ui/Skeleton";
@@ -41,6 +42,25 @@ type Props = {
   artifact: ChatArtifact;
   onAction: (action: ArtifactAction) => void | Promise<void>;
   context?: ChatState;
+};
+
+const artifactKinds: Record<ChatArtifact["type"], string> = {
+  "screening-request": "Screening request",
+  "screening-setup": "Saved setup",
+  file: "File",
+  "data-table": "Company data",
+  "fit-examples": "Fit examples",
+  "research-answer": "Research answer",
+  "enrichment-upload": "Company data",
+  criteria: "Criteria",
+  companies: "Companies",
+  options: "Next steps",
+  plan: "Plan",
+  research: "Research",
+  memory: "Company context",
+  job: "Search",
+  checkpoint: "Saved progress",
+  handoff: "Provider",
 };
 
 const exportNames: Record<ExportKind, string> = {
@@ -249,7 +269,7 @@ function PlanDiagram({ source }: { source: string }) {
 
 function ResearchAnswer({ artifact, onAction }: { artifact: Extract<ChatArtifact, { type: "research-answer" }>; onAction: Props["onAction"] }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <><p className="ca-note">{artifact.applied ? "Added to a new criteria draft for your approval." : "This answer is saved in chat. Add it to the criteria only if it changes what you want to find."}</p>{!artifact.applied && <button type="button" className="ca-secondary-action" disabled={busy} onClick={() => { setBusy(true); setError(""); void Promise.resolve(onAction({ type: "use-answer-in-criteria", artifactId: artifact.id })).catch(caught => setError(String(caught.message ?? caught))).finally(() => setBusy(false)); }}>{busy ? "Preparing criteria…" : "Use answer in criteria"}</button>}{error && <p role="alert" className="ca-error-detail">{error}</p>}</>;
+  return <><p className="ca-note">{artifact.applied ? "Added to a new criteria draft for your approval." : "Add this saved answer to criteria only if it changes what you want to find."}</p>{!artifact.applied && <button type="button" className="ca-secondary-action" disabled={busy} onClick={() => { setBusy(true); setError(""); void Promise.resolve(onAction({ type: "use-answer-in-criteria", artifactId: artifact.id })).catch(caught => setError(String(caught.message ?? caught))).finally(() => setBusy(false)); }}>{busy ? "Preparing criteria…" : "Use answer in criteria"}</button>}{error && <p role="alert" className="ca-error-detail">{error}</p>}</>;
 }
 function ArtifactBody({ artifact, onAction, context }: Props) {
   switch (artifact.type) {
@@ -263,11 +283,10 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
               : "General question"}
           </p>
           {artifact.request && (
-            <p className="ca-criteria-definition">{artifact.request}</p>
+            <p className="ca-criteria-definition">{productCopy(artifact.request)}</p>
           )}
           <p className="ca-note">
-            Choose company inputs, edit the prompt, and review the results you
-            want. Provider execution is not connected.
+            Choose inputs, edit the prompt, and review the output columns. Provider execution is not connected.
           </p>
           <button
             type="button"
@@ -292,7 +311,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
         <>
           <div className="ca-criteria-decision">
             <span className="ca-state-dot ca-state-approved" />
-            Approved input snapshot · executed: false
+            Approved setup · not sent <HelpTip label="About this setup">Approval saves the setup but does not start provider work.</HelpTip>
           </div>
           <p className="ca-note">
             {saved.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} ·{" "}
@@ -312,8 +331,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
             <pre className="ca-setup-prompt">{saved.config.prompt}</pre>
           </details>
           <p className="ca-note">
-            Input data and the index-to-company mapping are saved with this
-            setup. Changes require a new preview and approval. Provider execution is tracked separately in Background screening.
+            Changes need a new preview and approval. See Background screening for provider status.
           </p>
           <StartInBackground artifactId={artifact.id} prepared={saved} onAction={onAction} />
           <button
@@ -386,7 +404,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
           >
             <ArrowDownToLine size={16} />
           </a>
-        </div>{(file.purpose === "chat" || !file.purpose) && <label className="ca-file-provider"><input type="checkbox" role="switch" checked={file.passToProvider !== false} onChange={event => onAction({ type: "toggle-file", artifactId: artifact.id, fileId: file.id, passToProvider: event.target.checked })} /><span>Include when asking LLM Suite or M365 Copilot</span></label>}</>
+        </div>{(file.purpose === "chat" || !file.purpose) && <label className="ca-file-provider"><input type="checkbox" role="switch" checked={file.passToProvider !== false} onChange={event => onAction({ type: "toggle-file", artifactId: artifact.id, fileId: file.id, passToProvider: event.target.checked })} /><span>Include in LLM Suite or M365 Copilot questions</span></label>}</>
       );
     }
     case "criteria":
@@ -467,14 +485,14 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
               className="ca-memory-entry"
               key={`${productCopy(entry.source)}-${index}`}
             >
-              <strong>{entry.title}</strong>
+              <strong>{productCopy(entry.title)}</strong>
               {entry.text.trim().startsWith("{") ? (
                 <details className="ca-memory-details">
                   <summary>View saved context</summary>
-                  <pre>{entry.text}</pre>
+                  <pre>{productCopy(entry.text)}</pre>
                 </details>
               ) : (
-                <p>{entry.text}</p>
+                <p>{productCopy(entry.text)}</p>
               )}
               <small>{productCopy(entry.source)}</small>
               {entry.companyId && (
@@ -612,18 +630,12 @@ export default function ArtifactCard({ artifact, onAction, context }: Props) {
   return (
     <article
       className={`ca-artifact ca-artifact-${artifact.type}`}
-      aria-label={`${artifact.title} ${artifact.type} artifact`}
+      aria-label={productCopy(artifact.title)}
     >
       <header className="ca-artifact-head">
         <div>
-          <span className="ca-artifact-kind">
-            {artifact.type === "screening-setup"
-              ? "Saved setup"
-              : artifact.type === "screening-request"
-                ? "Request"
-                : artifact.type}
-          </span>
-          <h3>{artifact.title}</h3>
+          <span className="ca-artifact-kind">{artifactKinds[artifact.type]}</span>
+          <h3>{productCopy(artifact.title)}</h3>
         </div>
         {timeLabel && (
           <time className="ca-artifact-time" dateTime={artifact.createdAt}>
@@ -651,7 +663,7 @@ function CriteriaContent({ artifact, context, onAction }: Props & { artifact: Ex
     <InlineFitExamples good={editable ? good : artifact.goodFitExamples ?? ""} bad={editable ? bad : artifact.badFitExamples ?? ""} readOnly={!editable} onChange={(nextGood, nextBad) => { setGood(nextGood); setBad(nextBad); }} />
     {artifact.ignored.length > 0 && <div className="ca-notice"><strong>Recorded, not used for search</strong><p>{artifact.ignored.join(" · ")}</p></div>}
     <div className="ca-action-row">
-      {editable && <button className="ca-primary-action" type="button" disabled={!saved && !context?.criteriaSaveError} onClick={() => onAction({ type: "approve-criteria", artifactId: artifact.id, good, bad })}><Check size={14} />Approve &amp; search</button>}
+      {editable && <><HelpTip label="Why approval applies to this version">Approval applies to this saved criteria revision. Edits create a new revision that needs approval.</HelpTip><button className="ca-primary-action" type="button" disabled={!saved && !context?.criteriaSaveError} onClick={() => onAction({ type: "approve-criteria", artifactId: artifact.id, good, bad })}><Check size={14} />Approve &amp; search</button></>}
       {current && <button className="ca-text-action" type="button" onClick={() => onAction({ type: "edit-criteria", artifactId: artifact.id })}>Edit criteria</button>}
       {artifact.intakeForm && <button className="ca-text-action" type="button" onClick={() => onAction({ type: "view-intake", artifactId: artifact.id })}>View Intake Form</button>}
     </div>

@@ -1,6 +1,6 @@
 # Analyst operating instructions
 
-These steps use short, direct sentences and one action per instruction. They follow the intent of ASD-STE100 controlled language. They have not been checked against its approved-word dictionary and do not claim formal ASD-STE100 compliance. The local example uses fictional MID data. External ISCC, LLMSuite, M365, and Bing services are not connected by default. See [the workflow](WORKFLOW.md) and [tool reference](../TOOL_REFERENCE.md).
+These steps use short, direct sentences and one action per instruction. They follow the intent of ASD-STE100 controlled language. They have not been checked against its approved-word dictionary and do not claim formal ASD-STE100 compliance. The local example uses fictional MID data. External ISCC, LLM Suite, M365, and Bing services are not connected by default. See [the workflow](WORKFLOW.md) and [tool reference](../TOOL_REFERENCE.md).
 
 ## Terms
 
@@ -16,7 +16,7 @@ These steps use short, direct sentences and one action per instruction. They fol
 
 ## A. Prepare and approve criteria
 
-1. Enter the company's core products and services. You can attach a DDI. The local example can use UTF-8 TXT for a draft; PDF and DOCX text extraction is not connected.
+1. Enter the company's core products and services or attach an Intake Form. The PDF opens and pre-fills fields by label; check each field. Full parsing is deferred. UTF-8 TXT can supply a draft.
 2. Read the proposed business criteria. Edit unclear terms and exclusions.
 3. Keep revenue, size, geography, ownership, and industry codes for later review. Do not use them as first-search filters.
 4. Accept the business review. Enter optional good-fit examples in one box and bad-fit examples in the other. You can skip both boxes.
@@ -37,17 +37,17 @@ These steps use short, direct sentences and one action per instruction. They fol
 ## C. Choose the next action
 
 1. Open **Company enrichment** for PitchBook or ROGO files.
-2. Open **Research and screening** for LLMSuite, M365, or Bing. Both groups remain available.
+2. Open **Research and screening** for LLM Suite, M365, or Bing. Both groups remain available.
 3. Read recommendations as suggestions. Use the number `n` of considered companies:
 
    - PitchBook and Bing: `0 < n < 1000`.
    - ROGO: `500 < n < 2000`.
-   - LLMSuite: `n > 2000`.
+   - LLM Suite: `n > 2000`.
    - M365: `0 < n < 250` when PitchBook context exists.
 
 4. Expect **Research and screening** to open first when `n > 5000`, when any PitchBook/ROGO/Bing context exists, or when `0 < n < 500`. At other counts, expect **Company enrichment** to open first. You can open the other group at any time.
 
-**Example:** A broad set can move from 2,500 considered companies to 400, then 150, then 55 after review. At 2,500, LLMSuite is suggested. At 400, research opens first. At 150 with PitchBook context, M365 is suggested. Export the 55 still-considered companies when the review is complete. These numbers are an example, not an automatic removal rule.
+**Example:** A broad set can move from 2,500 considered companies to 400, then 150, then 55 after review. At 2,500, LLM Suite is suggested. At 400, research opens first. At 150 with PitchBook context, M365 is suggested. Export the 55 still-considered companies when the review is complete. These numbers are an example, not an automatic removal rule.
 
 ## D. Add source data
 
@@ -60,10 +60,10 @@ These steps use short, direct sentences and one action per instruction. They fol
 
 ## E. Ask, screen, or research
 
-1. To ask LLMSuite or M365 a direct question, write it in chat. You do not need screening setup. Chat-purpose attachments are included by default. Turn off a file's provider toggle to omit it.
+1. To ask LLM Suite or M365 a direct question, write it in chat. You do not need screening setup. Chat-purpose attachments are included by default. Turn off a file's provider toggle to omit it.
 2. To screen companies, select input and output column chips. Review the prompt. Use AI prompt drafting only when a provider is connected. Leave the model field empty to use the configured deployment or the saved `automatic` placeholder.
 3. Preview the exact inputs, prompt, and rows. Approve the digest. The saved plan starts with `executed:false`. A disconnected provider cannot run it.
-4. When connected, the controller sends approved jobs. Require `index` plus the requested output columns. Use 0–10 or `CHECK` in a declared fit-score column. Rust rejects an incomplete or malformed response and allows at most two parsing repairs. LLMSuite shares seven actual sends per rolling minute across all purposes.
+4. When connected, the controller sends approved jobs. Require `index` plus the requested output columns. Use 0–10 or `CHECK` in a declared fit-score column. Rust rejects an incomplete or malformed response and allows at most two parsing repairs. LLM Suite shares seven actual sends per rolling minute across all purposes.
 5. For Bing, enter one to five query chips or request AI suggestions when connected. Preview the count and samples. Approve the queries for all considered companies. The client continues through pages of at most 100 sends until complete.
 6. Treat web findings as unverified leads. A missing answer is unknown. Do not create an analyst label from a provider answer.
 
