@@ -975,13 +975,22 @@ fn iscc_score_bands(rows: &[Value]) -> Vec<Value> {
 }
 
 fn iscc_score(row: &Value) -> Option<f64> {
-    get_field(row, &["Relevancy Score", "Relevance Score", "Relevancy", "Relevance", "Score"])
-        .and_then(|value| {
-            value
-                .as_f64()
-                .or_else(|| value.as_str()?.trim().parse().ok())
-        })
-        .filter(|score| score.is_finite() && (0.0..=1.0).contains(score))
+    get_field(
+        row,
+        &[
+            "Relevancy Score",
+            "Relevance Score",
+            "Relevancy",
+            "Relevance",
+            "Score",
+        ],
+    )
+    .and_then(|value| {
+        value
+            .as_f64()
+            .or_else(|| value.as_str()?.trim().parse().ok())
+    })
+    .filter(|score| score.is_finite() && (0.0..=1.0).contains(score))
 }
 
 fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
