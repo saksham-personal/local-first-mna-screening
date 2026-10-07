@@ -852,18 +852,17 @@ pub(crate) fn grid_page(
             let company_keywords =
                 serde_json::from_str::<Value>(&row.keywords_json).unwrap_or_else(|_| json!([]));
             let rogo = serde_json::from_str::<Value>(&row.rogo_json).unwrap_or_else(|_| json!({}));
-            let mid_description_fallback = mid_source_row
-                .get("Description")
-                .is_none_or(Value::is_null)
-                .then(|| row.description.clone())
-                .flatten();
+            // The raw canonical values, exactly as `get_company` returns them (the grid's own
+            // name/website prefer PitchBook and its description is a labelled projection).
             Some(json!({
+                "name": row.name.clone(),
+                "website": row.website.clone(),
+                "description": row.description.clone(),
                 "identifiers": identifiers,
                 "keywords": company_keywords,
                 "rogo": rogo,
                 "has_enrichment": row.has_enrichment,
                 "mid_source_row": mid_source_row,
-                "mid_description_fallback": mid_description_fallback,
             }))
         } else {
             None
@@ -944,7 +943,7 @@ pub(crate) fn grid_page(
         }
         rows.push(output);
     }
-    Ok(json!({
+    let page = json!({
         "run_id": run_id,
         "selection_revision": fingerprint["selection_revision"],
         "criteria_revision": fingerprint["criteria_revision"],
@@ -966,7 +965,14 @@ pub(crate) fn grid_page(
         "has_semantic": has_semantic,
         "has_iscc": has_iscc,
         "rows": rows,
-    }))
+    });
+    // The bridge pages with company payloads; keep each response bounded so it can retry smaller.
+    if include_company_payload && serde_json::to_vec(&page)?.len() > 2 * 1024 * 1024 {
+        return Err(Error::Validation(
+            "screening grid page exceeds 2 MB; retry with a smaller limit".into(),
+        ));
+    }
+    Ok(page)
 }
 
 /// `get_company_detail`

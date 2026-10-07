@@ -476,6 +476,14 @@ fn grid_company_payload_matches_company_and_mid_source_readers() {
         company["identifiers"]
     );
     assert_eq!(row["company_payload"]["keywords"], company["keywords"]);
+    // Raw canonical values, as get_company returns them (not the PB-preferred grid fields
+    // or the labelled description projection).
+    assert_eq!(row["company_payload"]["name"], company["name"]);
+    assert_eq!(row["company_payload"]["website"], company["website"]);
+    assert_eq!(
+        row["company_payload"]["description"],
+        company["description"]
+    );
     assert_eq!(
         row["company_payload"]["mid_source_row"],
         source_rows["rows"][0]["row"]

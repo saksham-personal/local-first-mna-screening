@@ -165,14 +165,13 @@ export function companyEntryFromGridRow(candidate) {
     ? safeClone(payload.mid_source_row)
     : undefined;
   const pb = candidate.pb && typeof candidate.pb === "object" ? candidate.pb : {};
-  const description = midSourceRow?.Description == null && Object.hasOwn(payload, "mid_description_fallback")
-    ? payload.mid_description_fallback
-    : candidate.description;
+  // `company_payload` carries the raw canonical name/website/description (what get_company
+  // returned before); the grid's own fields prefer PitchBook and label descriptions.
   const details = {
     company_id: companyId,
-    name: midSourceRow?.["Company Name"] ?? candidate.name,
-    website: midSourceRow?.Website ?? candidate.website,
-    description,
+    name: typeof payload.name === "string" ? payload.name : candidate.name,
+    website: payload.website ?? null,
+    description: payload.description ?? null,
     city: candidate.hq_city,
     metadata: { hq_state: candidate.hq_state },
     identifiers: Array.isArray(payload.identifiers) ? payload.identifiers : [],
@@ -379,7 +378,7 @@ export function createJobRegistry(options) {
           });
           break;
         } catch (error) {
-          if (pageSize <= 1 || !/(too large|exceeds|byte limit)/i.test(errorMessage(error)))
+          if (pageSize <= 1 || !/(?:too large|exceeds|2 MB|2MB|byte limit)/i.test(errorMessage(error)))
             throw error;
           pageSize = Math.max(1, Math.floor(pageSize / 2));
         }

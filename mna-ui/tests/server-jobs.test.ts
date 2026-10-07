@@ -51,7 +51,7 @@ function screeningGridRow(candidate: { company_id: string; name: string; conside
       rogo: {},
       has_enrichment: false,
       mid_source_row: { "Company Name": candidate.name, Description: "Raw MID description" },
-      mid_description_fallback: null,
+      name: candidate.name, website: candidate.website ?? null, description: "Claims workflow software",
     },
   };
 }
@@ -160,6 +160,8 @@ test("grid paging preserves every MID Company field from the former detail and s
   };
   const grid = {
     ...screeningGridRow({ company_id: "MID-77", name: "Claims platform", website: "pb.example", considered: true }),
+    // The grid's own description is a labelled projection; the bridge must use the raw one.
+    description: ["PitchBook Latest Description: PB description", "MID Description: Claims workflow software"].join("\n"),
     mid_score: 0.9,
     company_payload: {
       identifiers: detail.identifiers,
@@ -167,7 +169,7 @@ test("grid paging preserves every MID Company field from the former detail and s
       rogo: detail.ROGO,
       has_enrichment: true,
       mid_source_row: midSource,
-      mid_description_fallback: null,
+      name: detail.name, website: detail.website, description: detail.description,
     },
     pb: {
       name: detail["PB_Name"],
@@ -261,7 +263,7 @@ function response(
             rogo: {},
             has_enrichment: false,
             mid_source_row: { "Company Name": "Alpha", Description: "Raw MID description" },
-            mid_description_fallback: null,
+            name: "Alpha", website: null, description: "Claims workflow software",
           },
         },
       ], args);
