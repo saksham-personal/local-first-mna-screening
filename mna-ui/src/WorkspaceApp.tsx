@@ -40,8 +40,8 @@ import type { Company, ExportKind, Source } from "./lib/contracts";
 import { approved } from "./lib/chat-store";
 import { consideredCompanies } from "./lib/chat-policy";
 import "./workspace/workspace.css";
-import ImportStaging from "./files/ImportStaging";
-import { processStagedUploads, retryStagedUploads } from "./lib/import-pipeline";
+import FilesTab from "./workspace/FilesTab";
+import { processStagedUploads } from "./lib/import-pipeline";
 
 type WorkspaceTab = "overview" | "companies" | "files";
 type SourceFilter = Source | "all";
@@ -54,6 +54,7 @@ type Props = {
   onAction: (action: ArtifactAction) => void;
   send: (text: string, action?: ArtifactAction) => void;
   openLog: (eventId?: string) => void;
+  onIntakeFiles?: (files: File[]) => void | Promise<void>;
 };
 
 type LegacyAnnotations = {
@@ -727,106 +728,6 @@ function Companies({
   );
 }
 
-function Files({
-  state,
-  onAction,
-  send,
-}: Pick<Props, "state" | "onAction" | "send">) {
-  const files = state.artifacts.filter((artifact) => artifact.type === "file" && !artifact.file.importable);
-  const latestHandoff = latestArtifact(state.artifacts, "handoff");
-  return (
-    <div className="ws-files-grid">
-      <section className="ws-card ws-upload-panel">
-        <span className="ws-upload-icon">
-          <UploadCloud size={24} />
-        </span>
-        <div>
-          <h2>Upload screening or enrichment files</h2>
-          <p>
-            Add criteria documents or spreadsheets. PitchBook and ROGO files are detected and added to company context automatically.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="ws-primary"
-          onClick={() =>
-            onAction({
-              type: "upload",
-              artifactId: latestHandoff?.id ?? "workspace-upload",
-            })
-          }
-        >
-          <UploadCloud size={15} /> Choose files
-        </button>
-      </section>
-      <ImportStaging files={state.files} onUpload={() => onAction({ type: "upload", artifactId: "workspace-upload" })} onRetry={() => { void retryStagedUploads(state.sessionId); }} />
-      <section className="ws-card ws-file-list-card">
-        <div className="ws-section-head">
-          <div>
-            <h2>Files and imports</h2>
-          </div>
-          <span className="ws-count-badge">{files.length}</span>
-        </div>
-        {files.length ? (
-          <div className="ws-artifact-stack">
-            {files
-              .slice()
-              .reverse()
-              .map((artifact) => (
-                <ArtifactCard
-                  key={artifact.id}
-                  artifact={artifact}
-                  onAction={onAction}
-                />
-              ))}
-          </div>
-        ) : (
-          <EmptyState
-            icon={<FolderOpen size={24} />}
-            title="No files attached"
-            detail="Uploads remain available as artifacts throughout this screening."
-          />
-        )}
-      </section>
-      <section className="ws-card ws-file-guide">
-        <div className="ws-section-head">
-          <div>
-            <h2>What the agent can use</h2>
-          </div>
-        </div>
-        <ul>
-          <li>
-            <FileText size={17} />
-            <div>
-              <strong>Screening criteria</strong>
-              <span>
-                TXT or pasted criteria; PDF/DOCX originals are saved without
-                extraction
-              </span>
-            </div>
-          </li>
-          <li>
-            <FileSpreadsheet size={17} />
-            <div>
-              <strong>PitchBook</strong>
-              <span>Mapping CSV plus the PitchBook XLSX export</span>
-            </div>
-          </li>
-          <li>
-            <FileSpreadsheet size={17} />
-            <div>
-              <strong>ROGO</strong>
-              <span>CSV or XLSX with a Website column</span>
-            </div>
-          </li>
-        </ul>
-        <button type="button" className="ws-link" onClick={() => send("/plan")}>
-          Review next steps <ArrowRight size={13} />
-        </button>
-      </section>
-    </div>
-  );
-}
 
 export default function WorkspaceApp(props: Props) {
   const { state } = props;
@@ -919,7 +820,7 @@ export default function WorkspaceApp(props: Props) {
           />
         )}
         {tab === "files" && (
-          <Files state={state} onAction={props.onAction} send={props.send} />
+          <FilesTab state={state} onAction={props.onAction} onIntakeFiles={props.onIntakeFiles} />
         )}
       </div>
     </div>

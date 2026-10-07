@@ -11,6 +11,7 @@ import { createBingResearch } from './bing-research.mjs';
 import { createProviderConversation } from './provider-conversation.mjs';
 import { handlePromptRoute } from './prompt-routes.mjs';
 import { ports, allowedOrigins, allowedHosts } from './ports.mjs';
+import { uploadPurposes, validateUploadPurpose, uploadDedupeKey, withUploadLock } from './upload-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
@@ -135,7 +136,7 @@ export async function startBridge() {
     const saved = savedFiles.find(file => file?.id === id);
     const name = typeof saved?.name === 'string' ? basename(saved.name) : id;
     staged.add(id);
-    stagedFiles.set(id, { id, name, bytes: info.size, path, ...(typeof saved?.sessionId === 'string' ? { sessionId: saved.sessionId } : {}), ...(['chat', 'pitchbook', 'rogo', 'company-data'].includes(saved?.purpose) ? { purpose: saved.purpose } : {}), ...descriptor });
+    stagedFiles.set(id, { id, name, bytes: info.size, path, ...(typeof saved?.sessionId === 'string' ? { sessionId: saved.sessionId } : {}), ...(uploadPurposes.includes(saved?.purpose) ? { purpose: saved.purpose } : {}), ...descriptor });
   }
   let manifestQueue = Promise.resolve();
   const saveFiles = () => {
@@ -245,24 +246,37 @@ export async function startBridge() {
       if (url.pathname === '/api/files') {
         if (!Array.isArray(input.files) || !input.files.length || input.files.length > 32) throw new Error('Select between 1 and 32 files.');
         if (input.sessionId != null && (typeof input.sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(input.sessionId))) throw new Error('Use a valid chat session ID.');
-        if (input.purpose != null && !['chat', 'pitchbook', 'rogo', 'company-data'].includes(input.purpose)) throw new Error('Choose a valid file destination.');
-        const files = [];
-        for (const file of input.files) {
-          const name = typeof file?.name === 'string' ? basename(file.name.trim()) : '';
-          const extension = extname(name).toLowerCase();
-          const descriptor = fileKinds.get(extension);
-          if (!name || name.length > 255 || !descriptor) throw new Error('Use PDF, DOCX, TXT, CSV, or XLSX files with valid names.');
-          const bytes = decodeBase64(file.base64);
-          validateFileBytes(extension, bytes);
-          const id = `${randomUUID()}${extension}`;
-          const path = resolve(importRoot, id);
-          await writeFile(path, bytes, { flag: 'wx' });
-          staged.add(id);
-          const record = { id, name, bytes: bytes.length, path, ...(input.sessionId ? { sessionId: input.sessionId } : {}), ...(input.purpose ? { purpose: input.purpose } : {}), ...descriptor };
-          stagedFiles.set(id, record);
-          files.push({ id, name, bytes: bytes.length, kind: descriptor.kind, parseKind: descriptor.parseKind, importable: descriptor.importable, ...(extension === '.txt' ? { excerpt: textExcerpt(bytes) } : {}) });
-        }
-        await saveFiles();
+        if (input.purpose != null && !uploadPurposes.includes(input.purpose)) throw new Error('Choose a valid file destination.');
+        const purpose = input.purpose ?? 'chat';
+        const files = await withUploadLock(stagedFiles, async () => {
+          const uploaded = [];
+          for (const file of input.files) {
+            const name = typeof file?.name === 'string' ? basename(file.name.trim()) : '';
+            const extension = extname(name).toLowerCase();
+            const descriptor = fileKinds.get(extension);
+            if (!name || name.length > 255 || !descriptor) throw new Error(`${name || 'File'}: Use PDF, DOCX, TXT, CSV, or XLSX files with valid names.`);
+            validateUploadPurpose(name, purpose);
+            const bytes = decodeBase64(file.base64);
+            validateFileBytes(extension, bytes);
+            const key = uploadDedupeKey(input.sessionId, purpose, bytes);
+            let existing;
+            for (const record of stagedFiles.values()) {
+              if (record.sessionId !== input.sessionId || (record.purpose ?? 'chat') !== purpose || record.bytes !== bytes.length) continue;
+              if (uploadDedupeKey(record.sessionId, record.purpose ?? 'chat', await readFile(record.path)) === key) { existing = record; break; }
+            }
+            if (existing) {
+              uploaded.push({ id: existing.id, name: existing.name, bytes: existing.bytes, kind: existing.kind, parseKind: existing.parseKind, importable: existing.importable, deduplicated: true, ...(existing.kind === 'txt' ? { excerpt: textExcerpt(bytes) } : {}) });
+              continue;
+            }
+            const id = `${randomUUID()}${extension}`, path = resolve(importRoot, id);
+            await writeFile(path, bytes, { flag: 'wx' });
+            staged.add(id);
+            stagedFiles.set(id, { id, name, bytes: bytes.length, path, ...(input.sessionId ? { sessionId: input.sessionId } : {}), purpose, ...descriptor });
+            uploaded.push({ id, name, bytes: bytes.length, kind: descriptor.kind, parseKind: descriptor.parseKind, importable: descriptor.importable, ...(extension === '.txt' ? { excerpt: textExcerpt(bytes) } : {}) });
+          }
+          await saveFiles();
+          return uploaded;
+        });
         return respond(res, 200, { files });
       }
       if (url.pathname !== '/api/tools') return respond(res, 404, { error: 'Endpoint not found.' });
