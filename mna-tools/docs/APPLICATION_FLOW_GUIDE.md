@@ -23,7 +23,7 @@ Your intended lead orchestrator is **LLM Suite**. Its subagents also use LLM Sui
 | Chat/workspace, criteria review, optional examples, shortlist review, source uploads, setup dialogs, background controls, exports | Implemented locally |
 | Rust/SQLite identity, revisions, source projections, prepared plans, parser, execution records, rate gate | Implemented and tested with local fixtures |
 | MID lexical retrieval | Working local path; example uses fictional records |
-| Build Index, keyword Match %, semantic score, score grid and rounds | Implemented locally; 150,000-row throughput and real embedding-model recall unverified |
+| Build Index, keyword Match %, semantic score, score grid and rounds | Implemented locally. Measured on a synthetic 150,000-row workbook (debug build): build ≈8.5 min with low service memory; keyword discovery to ~5,600 companies ≈2 min. Real MID data and embedding-model recall unverified |
 | Development simulation | `SCREENING_SIMULATE=1` supplies labelled deterministic ISCC, LLM Suite/M365 and Bing output; it is not a live provider test |
 | Arctic M v2 INT8 ONNX 768D embedding | Replaceable adapter and worker implemented; real weights/runtime assets and population recall unverified |
 | Reranking | Replaceable contract implemented; production model not selected |
