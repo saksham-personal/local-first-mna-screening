@@ -1,0 +1,22 @@
+.ws-score-pill { display: inline-flex; justify-content: center; align-items: center; min-width: 34px; padding: 3px 9px; border-radius: 6px; font-size: 12px; font-weight: 650; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.ws-score-danger { background: var(--danger-soft); color: var(--danger); }
+.ws-score-warning { background: var(--warning-soft); color: var(--warning); }
+.ws-score-success { background: var(--success-soft); color: var(--success); }
+.ws-score-neutral { background: var(--surface-muted); color: var(--text-muted); border: 1px solid var(--border); }
+.ws-score-missing { color: var(--text-muted); }
+.ws-semantic { display: inline-flex; align-items: center; gap: 9px; width: 100%; max-width: 160px; font-variant-numeric: tabular-nums; }
+.ws-semantic-track { flex: 1; min-width: 35px; height: 5px; overflow: hidden; background: var(--surface-muted); border-radius: 3px; }
+.ws-semantic-track > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width 150ms; }
+.ws-keyword-trigger { border: 0; background: transparent; color: var(--text); cursor: help; padding: 5px 0; text-decoration: underline dotted var(--text-muted); text-underline-offset: 4px; font-variant-numeric: tabular-nums; }
+.ws-keyword-tooltip { z-index: 1000; width: max-content; max-width: min(360px, calc(100vw - 24px)); max-height: min(420px, calc(100vh - 24px)); overflow-y: auto; padding: 14px; border-radius: 9px; box-shadow: var(--shadow); font-size: 12px; line-height: 1.55; background: var(--text); color: var(--surface); }
+:root[data-theme="dark"] .ws-keyword-tooltip { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border-strong); }
+.ws-keyword-evidence { display: grid; gap: 10px; min-width: 0; }
+.ws-keyword-tooltip > strong { display: block; margin-bottom: 10px; }
+.ws-keyword-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.ws-keyword-chips > span { padding: 2px 7px; border-radius: 4px; background: var(--surface-muted); color: var(--text-muted); font-size: 11px; }
+.ws-keyword-tooltip .ws-keyword-chips > span { background: color-mix(in srgb, currentColor 12%, transparent); color: inherit; }
+.ws-keyword-query p { margin: 0 0 4px; white-space: normal; }
+.ws-keyword-query code { display: block; white-space: normal; overflow-wrap: anywhere; color: var(--text-muted); font-size: 11px; }
+.ws-keyword-tooltip code { color: color-mix(in srgb, currentColor 75%, transparent); }
+.ws-simulated-badge { display: inline-block; padding: 1px 5px; border: 1px solid var(--warning); border-radius: 4px; color: var(--warning); background: var(--warning-soft); font-size: 10px; font-weight: 550; vertical-align: middle; }
+@media (prefers-reduced-motion: reduce) { .ws-semantic-track > span { transition: none; } }
