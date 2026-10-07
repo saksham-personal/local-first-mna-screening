@@ -21,6 +21,8 @@ const rustAddress = `http://127.0.0.1:${ports.rust}`;
 const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
 const allowed = new Set(['get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
 for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_company_detail', 'get_enrichment_report', 'get_mid_index_status', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
+const simulate = process.env.SCREENING_SIMULATE === '1';
+if (simulate) allowed.add('search_iscc');
 const origins = allowedOrigins;
 const hosts = allowedHosts;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -156,6 +158,7 @@ export async function startBridge() {
   const controllerKey = randomBytes(32).toString('hex');
   const externalEnabled = process.env.SCREENING_ENABLE_EXTERNAL === 'true';
   const env = { ...process.env, MNA_ENABLE_EXTERNAL: String(externalEnabled), MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_CONTROLLER_KEY: controllerKey, MNA_BIND: `127.0.0.1:${ports.rust}`, MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
+  if (simulate) { env.MNA_SIMULATE = '1'; console.log('Simulated providers are ON (dev only). Data is labelled SIMULATED.'); } else { delete env.MNA_SIMULATE; }
   for (const key of Object.keys(env)) if (/(?:OPENAI|ANTHROPIC|AZURE_OPENAI|GOOGLE|GEMINI|COHERE|BING|M365|ISCC|MEILI|LLMSUITE|PROVIDER_(?:URL|ENDPOINT|API_KEY))/i.test(key) && !(externalEnabled && /^MNA_(?:LLMSUITE|M365|BING|ISCC)_/.test(key))) delete env[key];
   const rust = spawn(binary, [], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let launchError = '';

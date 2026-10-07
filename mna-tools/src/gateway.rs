@@ -471,7 +471,14 @@ pub fn provider_request(payload: &Value, repair_prompt: Option<&str>) -> Result<
 pub async fn dispatch(store: Store, args: DispatchRequest) -> Result<Value> {
     let service = ExecutionService::new(store.clone());
     let original = invoke(&service, "get_execution_job", json!({"job_id":args.job_id})).await?;
-    let (endpoint, token) = configured(original["payload"]["provider"].as_str().unwrap_or(""))?;
+    let simulated = crate::simulate::enabled();
+    let adapter = if simulated {
+        None
+    } else {
+        Some(configured(
+            original["payload"]["provider"].as_str().unwrap_or(""),
+        )?)
+    };
     provider_request(&original["payload"], original["repair_prompt"].as_str())?;
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -496,32 +503,40 @@ pub async fn dispatch(store: Store, args: DispatchRequest) -> Result<Value> {
         if marked["state"] == "WAITING_RATE" {
             return Ok(marked);
         }
-        let response=match client.post(endpoint.clone()).bearer_auth(&token).header("Idempotency-Key",&key).json(&body).send().await {
+        let bytes = if simulated {
+            serde_json::to_vec(
+                &json!({"response_text":crate::simulate::screening_response(&lease["payload"])?,"simulated":true}),
+            )?
+        } else {
+            let (endpoint, token) = adapter.as_ref().expect("configured real adapter");
+            let response=match client.post(endpoint.clone()).bearer_auth(token).header("Idempotency-Key",&key).json(&body).send().await {
             Ok(response)=>response,
             Err(_)=>return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":"ambiguous","reason":"Provider transport failed after dispatch; verify receipt before retrying"})).await,
         };
-        if response.status() == StatusCode::TOO_MANY_REQUESTS {
-            let retry = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|s| s.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(60);
-            return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":"rate_limited","reason":"Provider rate limit; request counts against the shared budget","retry_after_seconds":retry})).await;
-        }
-        if !response.status().is_success() {
-            let kind = if response.status().is_client_error() {
-                "rejected"
-            } else {
-                "ambiguous"
-            };
-            return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":kind,"reason":format!("Provider returned HTTP {}; no output accepted",response.status().as_u16())})).await;
-        }
-        let mut bytes = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            match chunk {Ok(chunk) if bytes.len()+chunk.len()<=2_000_000=>bytes.extend_from_slice(&chunk),_=>return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":"ambiguous","reason":"Provider response interrupted or exceeded 2 MB; retrieve it for reconciliation"})).await}
-        }
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                let retry = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|s| s.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(60);
+                return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":"rate_limited","reason":"Provider rate limit; request counts against the shared budget","retry_after_seconds":retry})).await;
+            }
+            if !response.status().is_success() {
+                let kind = if response.status().is_client_error() {
+                    "rejected"
+                } else {
+                    "ambiguous"
+                };
+                return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":kind,"reason":format!("Provider returned HTTP {}; no output accepted",response.status().as_u16())})).await;
+            }
+            let mut bytes = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                match chunk {Ok(chunk) if bytes.len()+chunk.len()<=2_000_000=>bytes.extend_from_slice(&chunk),_=>return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":"ambiguous","reason":"Provider response interrupted or exceeded 2 MB; retrieve it for reconciliation"})).await}
+            }
+            bytes
+        };
         // Corporate adapter returns JSON {response_text:string}; model content
         // itself remains plain text/Markdown, not a JSON tool request.
         store.with_connection(|conn|{
@@ -535,12 +550,15 @@ pub async fn dispatch(store: Store, args: DispatchRequest) -> Result<Value> {
             Some(text)=>text,
             None=>return invoke(&service,"record_execution_failure",json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"kind":"ambiguous","reason":"Provider response does not match adapter contract; reconcile received output"})).await,
         };
-        let result = invoke(
+        let mut result = invoke(
             &service,
             "record_execution_response",
             json!({"job_id":args.job_id,"lease_token":lease["lease_token"],"response_text":text}),
         )
         .await?;
+        if simulated {
+            result["simulated"] = json!(true);
+        }
         if result["state"] != "PARSE_REVIEW" {
             return Ok(result);
         }

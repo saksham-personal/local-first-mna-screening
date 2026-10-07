@@ -431,7 +431,16 @@ impl SearchEngine {
     }
 
     async fn execute_provider_search(&self, tool: &str, arguments: &Value) -> Result<Value> {
-        let mut result = self.providers.execute(tool, arguments).await?;
+        let mut result = if tool == "search_iscc" && crate::simulate::enabled() {
+            let rows = crate::simulate::iscc_rows(
+                &self.store,
+                arguments["run_id"].as_str().unwrap_or(""),
+                arguments["query"].as_str().unwrap_or(""),
+            )?;
+            self.providers.simulated_iscc(arguments, rows).await?
+        } else {
+            self.providers.execute(tool, arguments).await?
+        };
         let run_id = arguments.get("run_id").and_then(Value::as_str);
         let query = arguments
             .get("query")
@@ -447,6 +456,7 @@ impl SearchEngine {
                 "result_count": result["result_count"],
                 "score_bands": result["score_bands"],
                 "retrieved_at": result["retrieved_at"],
+                "simulated": result["simulated"].as_bool().unwrap_or(false),
             })
         } else {
             result.clone()
@@ -465,9 +475,12 @@ impl SearchEngine {
                 .as_object_mut()
                 .expect("provider result object")
                 .remove("raw_rows");
-            let hydrated =
-                self.data
-                    .ingest_iscc_rows(run_id, record["query_id"].as_str(), &raw_rows)?;
+            let hydrated = self.data.ingest_iscc_rows_with_simulation(
+                run_id,
+                record["query_id"].as_str(),
+                &raw_rows,
+                result["simulated"] == true,
+            )?;
             result["retrieved_count"] = result["result_count"].clone();
             result["results"] = hydrated["companies"].clone();
             result["result_count"] = json!(result["results"].as_array().map_or(0, Vec::len));

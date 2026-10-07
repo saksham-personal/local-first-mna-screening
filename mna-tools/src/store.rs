@@ -1324,6 +1324,14 @@ impl Store {
         Ok(Value::Array(out))
     }
     fn save_evidence(&self, args: SaveEvidenceArgs) -> Result<Value> {
+        self.save_evidence_inner(args, false)
+    }
+
+    pub(crate) fn save_simulated_evidence(&self, args: &Value) -> Result<Value> {
+        self.save_evidence_inner(parse("save_evidence", args)?, true)
+    }
+
+    fn save_evidence_inner(&self, args: SaveEvidenceArgs, simulated: bool) -> Result<Value> {
         self.require_run(&args.run_id)?;
         self.require_company(&args.company_id)?;
         bounded("claim", &args.claim, 500)?;
@@ -1355,7 +1363,7 @@ impl Store {
         let timestamp = now();
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        let inserted=tx.execute("INSERT OR IGNORE INTO evidence(evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",params![evidence_id,args.run_id,args.company_id,args.claim,encoded_value,args.source_type,args.source_reference,args.source_url,args.confidence,args.extraction_method,timestamp,content_hash])?;
+        let inserted=tx.execute("INSERT OR IGNORE INTO evidence(evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash,simulated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",params![evidence_id,args.run_id,args.company_id,args.claim,encoded_value,args.source_type,args.source_reference,args.source_url,args.confidence,args.extraction_method,timestamp,content_hash,simulated])?;
         let actual_id = if inserted == 1 {
             evidence_id
         } else {
