@@ -74,7 +74,7 @@ test("every prompt file parses, matches its file name and is described completel
     assert.ok(loaded.body.trim().length > 40, prompt.id);
     assert.ok(!/\r/.test(loaded.body), "bodies use LF line endings");
   }
-  for (const id of RUST_IDS) assert.match(loadPrompt(id).suppliedTo, /Rust loader added in a later step/, id);
+  for (const id of RUST_IDS) assert.doesNotMatch(loadPrompt(id).suppliedTo, /Rust loader added in a later step/, id);
   assert.ok(!listPrompts().some((prompt) => /readme/i.test(prompt.id)));
 });
 

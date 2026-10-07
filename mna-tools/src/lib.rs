@@ -8,6 +8,7 @@ pub mod gateway;
 pub mod grid;
 pub mod identity;
 pub mod projection;
+pub mod prompts;
 pub mod protocol;
 pub mod providers;
 pub mod result_parser;

@@ -4,7 +4,7 @@
 **What it does:** The strict output contract appended to every approved screening prompt before it is sent to LLM Suite or M365 Copilot. It fixes the table shape (index first, then only the selected output columns) and, when score columns are selected, the unified score rule shared with screening-scored and screening-prompt-writer.
 **Inputs:** `{{output_columns}}` (required) – the selected output columns after index, comma-separated; `{{score_columns}}` (optional) – the selected score columns, comma-separated; when present the unified score rule is appended.
 **Output:** The contract text. It is appended to the screening prompt after one blank line.
-**Supplied to:** Rust prepared plan (execution compiled prompt, gateway.rs compiled_prompt), sent to LLM Suite or M365 Copilot with every batch. (Rust loader added in a later step. Until then Rust still appends its built-in text, which states the score anchors as 0, 5 and 10 instead of the unified bands.)
+**Supplied to:** Rust prepared plan (execution compiled prompt, gateway.rs compiled_prompt), sent to LLM Suite or M365 Copilot with every batch.
 **Version:** 1
 
 ===@@=== STARTING ===@@===

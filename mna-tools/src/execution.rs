@@ -491,8 +491,10 @@ impl ExecutionService {
                 }
                 Err(e)=>{
                     let error=e.to_string();let repair=j.repair_attempt+1;
-                    let instruction=if direct_answer {"Return a nonempty answer to the original frozen question using only its approved context. Attribute claims and state unknown information explicitly."}else{"Return exactly one Markdown row for each requested index, in any order, with only the requested columns and no extra rows."};
-                    let repair_prompt=format!("The previous response failed strict parsing: {error}. {instruction} Original response:\n{}",a.response_text.chars().take(20_000).collect::<String>());
+                    let table_answer=if direct_answer {""} else {"yes"};
+                    let direct_answer_hint=if direct_answer {"yes"} else {""};
+                    let original_response=a.response_text.chars().take(20_000).collect::<String>();
+                    let repair_prompt=crate::prompts::render("batch-repair",&[("error",error.as_str()),("table_answer",table_answer),("direct_answer",direct_answer_hint),("original_response",original_response.as_str())])?;
                     tx.execute("INSERT INTO execution_responses(response_id,job_id,attempt,response_hash,raw_response,parse_status,parse_error,created_at) VALUES(?,?,?,?,?,'QUARANTINED',?,?)",params![id("ER"),a.job_id,j.attempt,response_hash,a.response_text,error,now])?;
                     let state=if repair<=2 && !historical {"PARSE_REVIEW"} else {"FAILED"};
                     tx.execute("UPDATE execution_jobs SET state=?,response_hash=?,raw_response=?,repair_attempt=?,repair_prompt=?,error_text=?,updated_at=? WHERE job_id=?",params![state,response_hash,a.response_text,repair,repair_prompt,error,now,a.job_id])?;
@@ -639,6 +641,11 @@ fn unique_columns(columns: &[String], label: &str) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
     for column in columns {
         bounded(label, column, 160)?;
+        if column.trim().is_empty() {
+            return Err(Error::Validation(format!(
+                "{label} must not contain blank names"
+            )));
+        }
         if column != column.trim() || column.chars().any(char::is_control) {
             return Err(Error::Validation(format!(
                 "{label} must be trimmed and contain no control characters"

@@ -13,6 +13,21 @@ type MockState = (Arc<AtomicUsize>, Arc<std::sync::Mutex<(Store, String)>>);
 
 #[tokio::test]
 async fn approved_gateway_repairs_parsing_and_keeps_stale_inflight_response() {
+    let prompt_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        prompt_dir.path().join("output-contract.md"),
+        "malformed prompt override",
+    )
+    .unwrap();
+    std::env::set_var("MNA_PROMPTS_DIR", prompt_dir.path());
+    let fallback = gateway::compiled_prompt(
+        "Score claims software",
+        &["Fit Score".into()],
+        &["Fit Score".into()],
+    );
+    assert!(fallback.contains("OUTPUT CONTRACT"));
+    assert!(fallback.contains("0–2: little evidence of fit"));
+
     let store = Store::open(":memory:").unwrap();
     store.execute("ingest_companies",&json!({"companies":[{"company_id":"C1","name":"Alpha","description":"Claims software"},{"company_id":"C2","name":"Beta","description":"Insurance administration"}]})).unwrap();
     store.execute("create_run",&json!({"run_id":"R","objective":"Screen","original_criteria":{},"initial_profile":{"core_business_query":"Claims software"}})).unwrap();
@@ -29,6 +44,7 @@ async fn approved_gateway_repairs_parsing_and_keeps_stale_inflight_response() {
         )
         .unwrap();
     let service = ExecutionService::new(store.clone());
+    assert!(service.execute("propose_prepared_plan", &json!({"run_id":"R","mode":"screening","provider":"llm_suite","deployment":"fixture","prompt":"Score claims software","input_columns":["index","Description"],"output_columns":[""],"score_columns":[],"batch_size":1})).is_err());
     let calls = Arc::new(AtomicUsize::new(0));
     let shared = Arc::new(std::sync::Mutex::new((store.clone(), String::new())));
     let state = (calls.clone(), shared.clone());

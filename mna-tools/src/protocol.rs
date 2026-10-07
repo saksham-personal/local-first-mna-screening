@@ -138,7 +138,7 @@ pub fn parse_tool_response(text: &str, allowed: &[&str]) -> Result<ParsedToolCom
 }
 
 /// A bounded retry instruction; the controller decides whether another attempt is allowed.
-pub fn repair_prompt(_raw: &str, error: &Error, allowed: &[&str]) -> String {
+pub fn repair_prompt(_raw: &str, error: &Error, allowed: &[&str]) -> crate::error::Result<String> {
     let names = allowed
         .iter()
         .take(32)
@@ -152,7 +152,13 @@ pub fn repair_prompt(_raw: &str, error: &Error, allowed: &[&str]) -> String {
         .take(240)
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    format!("Your tool command was rejected: {reason}. Emit exactly one BEGIN TOOL v1 <name> ... END TOOL block with no prose. Allowed names: {names}. Each field must be path:type = value. Use text with quoted escapes or <<TAG multiline text; number, boolean, null, empty-list, and empty-map are the other types. Correct the command and retry.")
+    crate::prompts::render(
+        "tool-command-repair",
+        &[
+            ("reason", reason.as_str()),
+            ("allowed_names", names.as_str()),
+        ],
+    )
 }
 
 fn split_assignment(line: &str) -> Option<(&str, &str)> {

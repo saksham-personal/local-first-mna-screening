@@ -4,7 +4,7 @@
 **What it does:** The standing instructions for the screening controller. They tell the model to pick one allowed tool for the current step and answer with a single versioned text command, give the exact command grammar, and repeat the discovery rules (search core-business descriptions only; geography, revenue, ownership, size and industry codes stay deferred). The list of allowed tools, with their fields, is generated from the tool schemas by the caller.
 **Inputs:** `{{tool_definitions}}` (required) – the generated list of allowed tools, each with its description and its fields marked required or optional.
 **Output:** Exactly one BEGIN TOOL v1 block per step, with no prose and no JSON.
-**Supplied to:** Rust service, agent_commands.rs prompt(), sent to the LLM Suite controller. (Rust loader added in a later step.)
+**Supplied to:** Rust service, agent_commands.rs prompt(), sent to the LLM Suite controller.
 **Version:** 1
 
 ===@@=== STARTING ===@@===
