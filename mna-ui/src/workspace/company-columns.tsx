@@ -1,6 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import type { DataGridColumn } from "../grid/DataGrid";
-import { hiddenReasonLabel, type GridCompany } from "../lib/grid-client";
+import { hiddenReasonLabel, type GridCompany, type RoundColumns } from "../lib/grid-client";
+import { KeywordTooltip, ScorePill, SemanticBar } from "./score-cells";
 
 function websiteUrl(value: string | null): string | undefined {
   if (!value?.trim()) return undefined;
@@ -32,7 +33,7 @@ export const companyColumns: DataGridColumn<GridCompany>[] = [
       const href = websiteUrl(row.website);
       return (
         <span className="ws-grid-company-cell">
-          <strong>{row.name}</strong>
+          <span className="ws-grid-company-heading"><strong>{row.name}</strong>{row.simulated && <span className="ws-simulated-badge">Simulated</span>}</span>
           {href ? (
             <a href={href} target="_blank" rel="noreferrer" title={row.website ?? undefined}>
               {row.website} <ExternalLink size={11} aria-hidden="true" />
@@ -188,3 +189,40 @@ export const companyColumns: DataGridColumn<GridCompany>[] = [
     ),
   },
 ];
+
+export function roundScoreId(key: string, column: string): string {
+  return `round:${key}:score:${column}`;
+}
+
+export function buildCompanyColumns(rounds: RoundColumns[]): DataGridColumn<GridCompany>[] {
+  const discovery: DataGridColumn<GridCompany>[] = [
+    { id: "mid_keyword_match", header: "MID keyword match %", group: "MID", kind: "number", minWidth: 180,
+      value: (row) => row.mid_keyword?.best_match_pct ?? null,
+      render: (row) => <KeywordTooltip data={row.mid_keyword}>{row.mid_keyword?.best_match_pct == null ? "—" : `${row.mid_keyword.best_match_pct.toFixed(0)}%`}</KeywordTooltip> },
+    { id: "mid_matched_keywords", header: "Matched keywords", group: "MID", kind: "text", hidden: true,
+      value: (row) => row.mid_keyword?.matched.map((item) => item.text).join(", ") ?? null },
+    { id: "mid_query_rationale", header: "MID query rationale", group: "MID", kind: "text", hidden: true,
+      value: (row) => row.mid_keyword?.queries.map((query) => `${query.rationale} (${query.display_query})`).join("; ") ?? null },
+    { id: "mid_semantic_score", header: "MID semantic score", group: "MID", kind: "score", minWidth: 190,
+      bucketScheme: { type: "bins", min: 0, max: 10, count: 10 }, value: (row) => row.mid_semantic_score,
+      render: (row) => <SemanticBar value={row.mid_semantic_score} /> },
+    { id: "iscc_relevancy", header: "ISCC relevancy", group: "ISCC", kind: "score", minWidth: 145,
+      bucketScheme: { type: "bins", min: 0, max: 1, count: 10 }, value: (row) => row.iscc_relevancy,
+      render: (row) => <span>{row.iscc_relevancy == null ? "—" : row.iscc_relevancy.toFixed(2)}</span> },
+  ];
+  const screening: DataGridColumn<GridCompany>[] = rounds.flatMap((round) => {
+    const label = `R${round.round_no} ${round.provider_label}`;
+    const scores: DataGridColumn<GridCompany>[] = round.score_columns.map((column) => ({
+      id: roundScoreId(round.key, column), header: `${label} ${round.score_columns.length === 1 ? "score" : column}`,
+      group: label, kind: "score", minWidth: 195, bucketScheme: { type: "integer", min: 0, max: 10 },
+      value: (row) => row.rounds[round.key]?.scores[column] ?? null,
+      render: (row) => <ScorePill value={row.rounds[round.key]?.scores[column]} />,
+    }));
+    const outputs: DataGridColumn<GridCompany>[] = round.output_columns.filter((column) => !round.score_columns.includes(column)).map((column) => ({
+      id: `round:${round.key}:output:${column}`, header: `${label} ${column}`, group: label, kind: "text", hidden: true,
+      value: (row) => row.rounds[round.key]?.values[column] ?? null,
+    }));
+    return [...scores, ...outputs];
+  });
+  return [...companyColumns.slice(0, 4), ...discovery, ...screening, ...companyColumns.slice(4)];
+}

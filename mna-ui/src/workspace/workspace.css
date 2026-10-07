@@ -487,8 +487,8 @@
 
 .ws-company-layout {
   display: flex;
-  min-height: 420px;
-  height: 100%;
+  min-height: 100%;
+  height: auto;
 }
 .ws-company-layout.ws-detail-open {
   grid-template-columns: minmax(0, 1fr) minmax(310px, 360px);
@@ -1195,3 +1195,21 @@
     border-right: 1px solid var(--border);
   }
 }
+
+.ws-source-tabs { display: flex; gap: 5px; margin: 0 0 12px; }
+.ws-company-main > .ws-table-summary,
+.ws-company-main > .ws-source-tabs,
+.ws-company-main > .ws-simulated-banner,
+.ws-company-main > .ws-distribution { flex-shrink: 0; }
+.ws-grid-company-heading { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.ws-grid-company-heading strong { min-width: 0; }
+.ws-grid-company-heading .ws-simulated-badge { flex-shrink: 0; }
+.ws-source-tabs button { display: flex; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; color: var(--text-muted); padding: 7px 12px; border-radius: 7px; font-size: 12px; cursor: pointer; }
+.ws-source-tabs button.is-active { color: var(--accent); background: var(--accent-soft); border-color: var(--border); font-weight: 650; }
+.ws-source-tabs button span { font-size: 11px; font-variant-numeric: tabular-nums; }
+.ws-simulated-banner { margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 7px; color: var(--warning); background: var(--warning-soft); font-size: 12px; line-height: 1.5; }
+.ws-rounds-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
+.ws-rounds-timeline li { border-left: 2px solid var(--border); padding-left: 14px; font-size: 12px; }
+.ws-rounds-timeline li > div { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ws-rounds-timeline p { margin: 6px 0; color: var(--text-muted); line-height: 1.6; }
+.ws-round-progress { color: var(--text-muted); font-size: 11px; }
