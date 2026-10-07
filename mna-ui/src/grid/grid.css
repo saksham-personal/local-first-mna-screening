@@ -1,4 +1,6 @@
 .dg-shell {
+  /* Narrow layouts follow the grid's own width (it often sits beside the chat dock). */
+  container: dg / inline-size;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -956,7 +958,7 @@
   font-size: 10px;
 }
 
-@media (max-width: 760px) {
+@container dg (max-width: 760px) {
   .dg-toolbar {
     flex-wrap: wrap;
     gap: 8px;
@@ -985,7 +987,9 @@
     max-width: none;
     box-shadow: var(--shadow);
   }
+}
 
+@media (max-width: 760px) {
   .dg-demo {
     padding: 12px;
   }
