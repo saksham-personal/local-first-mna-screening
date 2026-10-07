@@ -182,13 +182,18 @@ export async function startBridge() {
   const call = (tool, args, analystApproved, signal) => rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal);
   const jobs = createJobRegistry({ call, seedFile: seedId });
   const screening = createDurableScreeningPreparation({ call, deployment: provider => providerDeployment(provider) });
-  const providerReady = (provider) => {
+  const externalReady = (provider) => {
     const prefix = provider === 'llm_suite' ? 'LLMSUITE' : provider === 'copilot' ? 'M365' : 'BING';
     return externalEnabled && Boolean(env[`MNA_${prefix}_ENDPOINT`] && env[`MNA_${prefix}_TOKEN`]);
   };
+  // Dev-only simulation answers screening jobs and Bing searches (labelled SIMULATED in Rust);
+  // direct provider questions are not simulated, so they keep the real readiness check.
+  const simulatedProviders = process.env.SCREENING_SIMULATE === '1';
+  const providerReady = (provider) => (simulatedProviders && ['llm_suite', 'copilot', 'bing'].includes(provider)) || externalReady(provider);
   const providerDeployment = provider => {
     const prefix = provider === 'llm_suite' ? 'LLMSUITE' : provider === 'copilot' ? 'M365' : null;
-    return prefix ? (env[`MNA_${prefix}_DEPLOYMENT`] || '').trim() : '';
+    const configured = prefix ? (env[`MNA_${prefix}_DEPLOYMENT`] || '').trim() : '';
+    return configured || (simulatedProviders && prefix ? 'simulated' : '');
   };
   const controllerCall = async (tool, args) => {
     const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry', dispatch_provider_text: '/admin/provider-text' }[tool];
@@ -201,7 +206,7 @@ export async function startBridge() {
   const background = createBackgroundScreening({ call: controllerCall, dispatch: args => controllerCall('dispatch_execution_job', args), connected: providerReady, storeFile: resolve(data, 'background-runs.json') });
   await background.init();
   const research = createBingResearch({ call, connected: () => providerReady('bing') });
-  const conversation = createProviderConversation({ dispatch: args => controllerCall('dispatch_provider_text', args), connected: providerReady,
+  const conversation = createProviderConversation({ dispatch: args => controllerCall('dispatch_provider_text', args), connected: externalReady,
     deployment: providerDeployment, stagedFiles, call });
   const server = createServer(async (req, res) => {
     const origin = req.headers.origin;
@@ -211,7 +216,7 @@ export async function startBridge() {
     try {
       if (await handlePromptRoute(req, res, url, { respond, body })) return;
       if (await handleIntakeRoute(req, res, url, { respond, body, stagedFiles })) return;
-      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
+      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, simulated: simulatedProviders, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
       if (req.method === 'GET' && url.pathname === '/api/jobs') return respond(res, 200, { jobs: jobs.list() });
       const jobMatch = url.pathname.match(/^\/api\/jobs\/([A-Za-z0-9-]+)$/);

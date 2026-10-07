@@ -76,6 +76,8 @@ pub fn iscc_rows(store: &Store, run_id: &str, query: &str) -> Result<Vec<Value>>
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     })?;
+    // A row without ECID or CID could never merge back to the company.
+    companies.retain(|c| c.1.is_some() || c.2.is_some());
     companies.sort_by_key(|c| (seed(&[query, &c.0]), c.0.clone()));
     companies.truncate(600);
     let synthetic = if companies.is_empty() {
@@ -169,7 +171,7 @@ pub fn screening_response(payload: &Value) -> Result<String> {
                 column,
             ]);
             cells.push(if scores.contains(column) {
-                if h % 10 == 0 {
+                if h.is_multiple_of(10) {
                     "CHECK".into()
                 } else {
                     (h / 10 % 11).to_string()

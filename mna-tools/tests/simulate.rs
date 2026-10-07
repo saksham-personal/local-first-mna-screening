@@ -155,7 +155,7 @@ fn assert_watermark(value: &Value, full: bool) {
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)] // Serializes all environment writes in this test binary.
 async fn labelled_simulation_uses_normal_ingestion_approval_dispatch_and_export_paths() {
-    let _lock = ENV.lock().unwrap();
+    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let _env = Environment::isolate();
     std::env::set_var("MNA_SIMULATE", "1");
     let (_dir, store, data) = fixture();
@@ -406,7 +406,7 @@ async fn labelled_simulation_uses_normal_ingestion_approval_dispatch_and_export_
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)]
 async fn simulation_is_opt_in_and_adapter_changes_stale_plans_in_both_directions() {
-    let _lock = ENV.lock().unwrap();
+    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let _env = Environment::isolate();
     let (_dir, store, _) = fixture();
     let runtime = Runtime::new(store.clone()).unwrap();
