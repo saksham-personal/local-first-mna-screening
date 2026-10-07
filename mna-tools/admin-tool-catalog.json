@@ -763,6 +763,14 @@
         "business_definition": {
           "type": "string"
         },
+        "core_business_exclusions": {
+          "default": [],
+          "description": "Core-business exclusions (at most 100, each at most 500 characters). Copied into the\napproved profile so search_mid's exclude_keywords filter keeps working after approval.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "criteria_text": {
           "type": "string"
         },
@@ -772,6 +780,15 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "intake_form": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "The Intake Form as submitted (a JSON object of at most 100 KB). Stored verbatim on the\nrevision; discovery uses only the core-business definition.",
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "run_id": {
           "type": "string"
@@ -818,6 +835,54 @@
       "type": "object"
     },
     "name": "approve_criteria_revision"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/enrichment-review",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "expected_selection_revision": {
+          "default": null,
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hide_company_ids": {
+          "default": [],
+          "description": "Companies to hide as pitchbook_unmatched. A manual hide stays \"manual\".",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "keep_company_ids": {
+          "default": [],
+          "description": "Companies to restore, but only if they are hidden for a pitchbook_* reason.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "report_id": {
+          "description": "A saved PitchBook match report of this run (see get_enrichment_report).",
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "report_id"
+      ],
+      "title": "ApplyEnrichmentReviewArgs",
+      "type": "object"
+    },
+    "name": "apply_enrichment_review"
   },
   {
     "controller_only": true,

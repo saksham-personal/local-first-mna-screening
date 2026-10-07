@@ -45,8 +45,8 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 - [Evidence](#evidence): `save_evidence`, `get_evidence`, `get_missing_evidence`
 - [Research](#research): `bing_search`, `m365_research`, `fetch_url`, `extract_url_context`
 - [Durable memory](#durable-memory): `search_research_memory`, `get_previous_research`, `get_recent_agent_events`, `get_search_history`, `get_open_questions`, `add_open_question`, `resolve_open_question`
-- [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `update_candidate_status`, `get_discovery_summary`
-- [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `export_candidate_set`
+- [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `get_screening_grid`, `get_company_detail`, `update_candidate_status`, `get_discovery_summary`
+- [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `get_enrichment_report`, `export_candidate_set`
 - [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_progress`, `get_execution_job`, `get_model_assessments`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
 - [Recovery](#recovery): `save_checkpoint`, `get_checkpoint`
 
@@ -1401,7 +1401,54 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 49. `update_candidate_status`
+### 49. `get_screening_grid`
+
+**Purpose:** Page every candidate of a run with the fields the company grid needs.
+
+**How it works:** One SQL pass per page: identity, preferred name/website/HQ, combined description, source (MID, ISCC or both), considered flag and consideration_reason, current PBId, best MID and ISCC retrieval scores, PB/ROGO/Bing coverage and compact PitchBook fields. include_hidden defaults to true so the grid can show hidden companies on request. Page with after_company_id; limit defaults to 1,000, maximum 2,000.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `after_company_id` | No | string or null | `null` |
+| `include_hidden` | No | boolean | `true` |
+| `limit` | No | integer or null | `null` |
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** rows plus total, considered_count, hidden_count, selection_revision, criteria_revision and next_cursor (null on the last page). Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42",
+  "include_hidden": true,
+  "limit": 1000
+}
+```
+
+### 50. `get_company_detail`
+
+**Purpose:** Read everything known about one candidate for the company drawer.
+
+**How it works:** Returns the canonical company, identifiers, considered flag and reason, per-source fields (MID, ISCC, PitchBook, ROGO), labelled descriptions for keyword highlighting, and a bounded activity list merging hide/restore history, research observations and model assessments.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `company_id` | Yes | string | — |
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** company, identifiers, considered, consideration_reason, sources, descriptions and activity. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42",
+  "company_id": "100-101"
+}
+```
+
+### 51. `update_candidate_status`
 
 **Purpose:** Record a considered funnel state and supporting reason.
 
@@ -1427,7 +1474,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 50. `get_discovery_summary`
+### 52. `get_discovery_summary`
 
 **Purpose:** Report the full unique funnel and the next-step default.
 
@@ -1449,7 +1496,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Enrichment and exports
 
-### 51. `inspect_enrichment_files`
+### 53. `inspect_enrichment_files`
 
 **Purpose:** Identify staged spreadsheet roles before hydration or run selection.
 
@@ -1457,7 +1504,9 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
+| `display_names` | No | object or null | `null` |
 | `files` | Yes | array of string | — |
+| `purpose_hint` | No | string or null | `null` |
 
 **Returned data and effects:** files with file/eligible/roles/sheets/reason; import_files; pending_files; counts by source kind. Each sheet includes kind (PB_MAPPING, PB_DATA, ROGO, COMPANY or null), one-based header row, data-row count and headers. No source values or approvals are changed.
 
@@ -1472,7 +1521,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 52. `import_enrichment_files`
+### 54. `import_enrichment_files`
 
 **Purpose:** Classify and join a mixed analyst upload into compact company context.
 
@@ -1480,8 +1529,10 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
+| `display_names` | No | object or null | `null` |
 | `exclude_unmapped` | No | boolean | `false` |
 | `files` | Yes | array of string | — |
+| `purpose_hint` | No | string or null | `null` |
 | `run_id` | Yes | string | — |
 
 **Returned data and effects:** Mapping/PB/ROGO row counts, mapping_unique_companies, pb_unique_companies, rogo_unique_companies, hydration/unmatched counts, quarantined count, Parquet paths and operation_receipt_id. pbid_populated counts newly added IDs, so an identical re-upload returns zero there. Hydrated row counts can exceed unique company coverage. Enrichment is global company data; run-specific claims and scores remain separately scoped.
@@ -1500,7 +1551,29 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 53. `export_candidate_set`
+### 55. `get_enrichment_report`
+
+**Purpose:** Read a saved PitchBook or ROGO import match report.
+
+**How it works:** Every import saves a non-cumulative report measured against the run's current candidates (considered and hidden). PitchBook reports list matched companies with their PBId and not-matched companies with a reason: not_in_mapping, profile_not_company, blank_pbid, no_data_row or conflict. ROGO reports list matched companies, unmatched rows and ambiguous websites. Omit report_id for the latest report. Imports never hide companies; the analyst applies a decision with the apply_enrichment_review administrator operation.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `purpose` | No | string or null | `null` |
+| `report_id` | No | string or null | `null` |
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** report_id, purpose, summary counts, matched, not_matched (PitchBook) or matched/unmatched_rows/ambiguous (ROGO), and created_at. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42"
+}
+```
+
+### 56. `export_candidate_set`
 
 **Purpose:** Create one of the analyst's three exact workbook formats.
 
@@ -1526,7 +1599,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Approved action graphs and screening
 
-### 54. `propose_action_plan`
+### 57. `propose_action_plan`
 
 **Purpose:** Turn an interpreted analyst request into a durable dependency graph.
 
@@ -1573,7 +1646,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 55. `get_action_plan`
+### 58. `get_action_plan`
 
 **Purpose:** Read a plan, its approval metadata and completed dependencies.
 
@@ -1595,7 +1668,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 56. `propose_prepared_plan`
+### 59. `propose_prepared_plan`
 
 **Purpose:** Freeze an immutable version-2 screening or question handoff.
 
@@ -1677,7 +1750,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 57. `get_prepared_plan`
+### 60. `get_prepared_plan`
 
 **Purpose:** Read a frozen handoff, its approval state and durable batch jobs.
 
@@ -1697,7 +1770,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 58. `get_execution_progress`
+### 61. `get_execution_progress`
 
 **Purpose:** Poll approval freshness and durable batch progress without large frozen inputs.
 
@@ -1717,7 +1790,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 59. `get_execution_job`
+### 62. `get_execution_job`
 
 **Purpose:** Inspect a durable provider batch and its parser or dispatch state.
 
@@ -1737,7 +1810,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 60. `get_model_assessments`
+### 63. `get_model_assessments`
 
 **Purpose:** Read accepted provider assessments separately from retrieval and evidence.
 
@@ -1760,7 +1833,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 61. `prepare_screening_batch`
+### 64. `prepare_screening_batch`
 
 **Purpose:** Legacy compatibility handoff for scored screening batches.
 
@@ -1799,7 +1872,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 62. `prepare_bing_queries`
+### 65. `prepare_bing_queries`
 
 **Purpose:** Expand approved fit questions using the best available company identity.
 
@@ -1828,7 +1901,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 63. `save_screening_results`
+### 66. `save_screening_results`
 
 **Purpose:** Legacy compatibility endpoint for batch scores.
 
@@ -1862,7 +1935,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 64. `get_screening_results`
+### 67. `get_screening_results`
 
 **Purpose:** Read a company's external screening history within the current run.
 
@@ -1886,7 +1959,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 65. `complete_action_step`
+### 68. `complete_action_step`
 
 **Purpose:** Release dependent graph work only after successful operations are proven.
 
@@ -1916,7 +1989,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Recovery
 
-### 66. `save_checkpoint`
+### 69. `save_checkpoint`
 
 **Purpose:** Persist the orchestrator's restart state with optimistic concurrency.
 
@@ -1949,7 +2022,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 67. `get_checkpoint`
+### 70. `get_checkpoint`
 
 **Purpose:** Resume from the latest or a named historical checkpoint.
 

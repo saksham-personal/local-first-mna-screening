@@ -69,7 +69,7 @@ try {
     Start-TestServer 'initial'
     $catalog = @((Invoke-RestMethod -Uri "$baseUrl/tools" -Headers $headers).tools)
     $adminCatalog = @((Invoke-RestMethod -Uri "$baseUrl/admin/tools" -Headers $analystHeaders).tools)
-    Assert-True ($catalog.Count -eq 65 -and $adminCatalog.Count -eq 19) '65 agent and 19 privileged schemas'
+    Assert-True ($catalog.Count -eq 70 -and $adminCatalog.Count -eq 24) '70 agent and 24 privileged schemas'
     [IO.File]::WriteAllText((Join-Path $ArtifactRoot 'admin-tool-catalog.json'), ($adminCatalog | ConvertTo-Json -Depth 60), $utf8)
     if ($CatalogOutput) { [IO.File]::WriteAllText([IO.Path]::GetFullPath($CatalogOutput), ($catalog | ConvertTo-Json -Depth 60), $utf8) }
     Write-Fixture 'mid.csv' @'

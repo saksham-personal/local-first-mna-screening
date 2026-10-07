@@ -16,9 +16,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = `http://127.0.0.1:${ports.rust}`;
-const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
+const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
 const allowed = new Set(['get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
-for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection']) allowed.add(tool);
+for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_company_detail', 'get_enrichment_report']) allowed.add(tool);
 const origins = allowedOrigins;
 const hosts = allowedHosts;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -97,13 +97,13 @@ async function sendStagedFile(res, record) {
 
 async function rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal) {
   if (typeof tool !== 'string' || (!Object.hasOwn(admin, tool) && !allowed.has(tool))) throw new Error('This tool is not enabled in the local example.');
-  if ((tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
+  if ((tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'apply_enrichment_review' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
   if (tool === 'import_company_files' || tool === 'import_enrichment_files' || tool === 'inspect_enrichment_files') {
     if (!Array.isArray(args.files) || !args.files.length || !args.files.every(file => typeof file === 'string' && staged.has(file))) throw new Error('Select files through the upload controls.');
   }
   const response = await fetch(`${rustAddress}${admin[tool] ?? '/tools/call'}`, {
     method: 'POST', signal,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, ...(Object.hasOwn(admin, tool) ? { 'X-MNA-Analyst-Key': analystKey } : {}), ...(['review_shortlist', 'save_criteria_revision', 'approve_criteria_revision'].includes(tool) ? { 'X-MNA-Controller-Key': controllerKey } : {}) },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, ...(Object.hasOwn(admin, tool) ? { 'X-MNA-Analyst-Key': analystKey } : {}), ...(['review_shortlist', 'apply_enrichment_review', 'save_criteria_revision', 'approve_criteria_revision'].includes(tool) ? { 'X-MNA-Controller-Key': controllerKey } : {}) },
     body: JSON.stringify(Object.hasOwn(admin, tool) ? args : { tool, arguments: args }),
   });
   const result = await response.json().catch(() => undefined);

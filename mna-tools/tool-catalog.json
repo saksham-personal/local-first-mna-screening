@@ -41,7 +41,7 @@
   },
   {
     "name": "get_criteria_history",
-    "description": "Read every criteria revision and its analyst approval; the previous revision is the last criteria",
+    "description": "Read every criteria revision with its Intake Form, exclusions, validity period (created_at to superseded_at) and analyst approval; last_criteria is the newest revision",
     "category": "review",
     "mutates_state": false,
     "input_schema": {
@@ -2270,18 +2270,37 @@
   },
   {
     "name": "inspect_enrichment_files",
-    "description": "Inspect uploaded sheet headers and identify PitchBook mapping, PitchBook data, and ROGO files without importing",
+    "description": "Inspect uploaded sheet headers and identify PitchBook mapping, PitchBook data, and ROGO files without importing; an optional purpose_hint rejects files dropped in the wrong zone",
     "category": "data",
     "mutates_state": false,
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "display_names": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": null,
+          "description": "Optional map of each staged file id to the analyst's original file name.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "files": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "purpose_hint": {
+          "default": null,
+          "description": "Upload zone the files were dropped in: \"pitchbook\" or \"rogo\".",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2293,15 +2312,27 @@
   },
   {
     "name": "import_enrichment_files",
-    "description": "Detect and join user-supplied PitchBook and ROGO files with import metrics",
+    "description": "Detect and join user-supplied PitchBook and ROGO files, never changing which companies are considered; saves and returns a match report",
     "category": "data",
     "mutates_state": true,
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "display_names": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": null,
+          "description": "Optional map of each staged file id to the analyst's original file name, used in\nerror messages and the saved report.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "exclude_unmapped": {
           "default": false,
+          "description": "Deprecated and ignored. An import never hides companies; review the saved match\nreport and call apply_enrichment_review to hide or keep unmatched companies.",
           "type": "boolean"
         },
         "files": {
@@ -2309,6 +2340,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "purpose_hint": {
+          "default": null,
+          "description": "Upload zone the files were dropped in: \"pitchbook\" or \"rogo\". Breaks ties between\nambiguous file shapes and rejects files in the wrong zone with a clear message.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "run_id": {
           "type": "string"
@@ -2319,6 +2358,110 @@
         "files"
       ],
       "title": "ImportEnrichmentFilesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_enrichment_report",
+    "description": "Read the saved PitchBook or ROGO match report of an import: matched companies, unmatched companies with a reason, unmatched and ambiguous ROGO rows",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "purpose": {
+          "default": null,
+          "description": "With no report_id, restrict \"latest\" to \"pitchbook\" or \"rogo\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report_id": {
+          "default": null,
+          "description": "A specific report. Defaults to the latest report of the run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "ReportArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_screening_grid",
+    "description": "Page every company of a run for the grid in one pass: source, scores, PitchBook/ROGO/Bing coverage, combined description and considered/hidden state",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after_company_id": {
+          "default": null,
+          "description": "Keyset cursor: the next_cursor of the previous page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "include_hidden": {
+          "default": true,
+          "description": "Include companies hidden by review (default true). Hidden rows carry considered=false.",
+          "type": "boolean"
+        },
+        "limit": {
+          "default": null,
+          "description": "Page size, default 1000, maximum 2000.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "GridArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_company_detail",
+    "description": "Read one company's identifiers, every source field grouped by MID, ISCC, PitchBook and ROGO, labelled descriptions and recent activity",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "description": "A company id, or a typed identifier such as ECID:123, CID:456 or PBID:PB1.",
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_id"
+      ],
+      "title": "DetailArgs",
       "type": "object"
     }
   },

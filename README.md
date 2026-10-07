@@ -11,7 +11,7 @@ records, and an offline orchestration scaffold.
   iterative screening, export, and session history.
 - **`mna-tools/`** — Rust service for company data, retrieval, evidence,
   imports, exports, criteria and shortlist versions, prepared plans, durable
-  jobs, and a provider-text gateway. Its catalog has 67 agent tools and 23
+  jobs, and a provider-text gateway. Its catalog has 70 agent tools and 24
   privileged operations.
 - **`mna-orchestrator/`** — Python and LangGraph scaffold for future workflow
   orchestration. Its external ports are disabled and it is not connected to

@@ -4,7 +4,7 @@ Updated 5 October 2026. This record describes the delivered backend and its loca
 
 ## Result and decisions
 
-The service exposes **67 agent tools and 23 privileged operations**. [TOOL_REFERENCE.md](TOOL_REFERENCE.md) covers their schemas, behavior and examples. [ARCHITECTURE_CRITIQUE.md](docs/ARCHITECTURE_CRITIQUE.md) records the status of each required correction; [BACKEND_ARCHITECTURE.md](docs/BACKEND_ARCHITECTURE.md) and [EXECUTION_CONTRACT.md](docs/EXECUTION_CONTRACT.md) define the design. [BACKGROUND_SCREENING.md](../mna-ui/BACKGROUND_SCREENING.md) describes background controls, source imports, and approved Bing grounding.
+The service exposes **70 agent tools and 24 privileged operations**. [TOOL_REFERENCE.md](TOOL_REFERENCE.md) covers their schemas, behavior and examples. [ARCHITECTURE_CRITIQUE.md](docs/ARCHITECTURE_CRITIQUE.md) records the status of each required correction; [BACKEND_ARCHITECTURE.md](docs/BACKEND_ARCHITECTURE.md) and [EXECUTION_CONTRACT.md](docs/EXECUTION_CONTRACT.md) define the design. [BACKGROUND_SCREENING.md](../mna-ui/BACKGROUND_SCREENING.md) describes background controls, source imports, and approved Bing grounding.
 
 - Discovery is core-business only. Non-core filters are ignored/reported. Only approved core-business exclusions can narrow discovery, and query negation cannot bypass them. Retrieval defaults/maxes to 1,000 per query. The replaceable reranker preserves all candidates and the tail after its first 500 per source/query.
 - A replaceable Arctic M v2 INT8 ONNX 768D adapter, CPU worker and model/version/text-hash SQLite vector index are implemented. Real model files and corpus recall are unverified. Legacy unversioned vectors stay explicitly separate.
@@ -46,7 +46,7 @@ delivered source and local fixtures.
 | Local embed worker unittest discovery | **5 passed**, mocked ONNX sessions; Python compilation passed |
 | Offline LangGraph unittest discovery | **14 passed**, deterministic ports/checkpointer |
 | Release executable and UI bridge smoke | Passed with eight fictional MID rows, database restart, saved criteria lineage, PB mapping hide/restore, all three XLSX exports, and prepared `executed:false` plans |
-| Catalogs and generated examples | 67 agent tools and 23 privileged schemas/examples validated in the release artifact |
+| Catalogs and generated examples | 70 agent tools and 24 privileged schemas/examples validated in the release artifact |
 | Browser integration | Two-stage criteria approval and good/bad examples; seven-company fictional discovery; PB hide/restore and ROGO preservation; six-company selection and MID/ISCC filters; direct questions; output chips; PDF preview controls; separate chat/source file drops; exact Bing approval and opt-in general-query criteria verified |
 | Responsive and theme checks | Expanded background progress and two pending attachments tested at 1440×980, 390×330, 844×390, and 1100×330 workspace/expanded side chat; the send control stayed above the panel. Loaded light/dark views inspected |
 

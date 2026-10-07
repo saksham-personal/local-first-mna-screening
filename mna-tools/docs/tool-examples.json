@@ -560,5 +560,17 @@
   },
   "get_execution_progress": {
     "plan_id": "PPLAN-returned-id"
+  },
+  "get_screening_grid": {
+    "run_id": "R42",
+    "include_hidden": true,
+    "limit": 1000
+  },
+  "get_company_detail": {
+    "run_id": "R42",
+    "company_id": "100-101"
+  },
+  "get_enrichment_report": {
+    "run_id": "R42"
   }
 }

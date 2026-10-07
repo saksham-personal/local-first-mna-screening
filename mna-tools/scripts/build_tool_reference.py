@@ -284,6 +284,19 @@ tool("get_execution_progress", "Poll approval freshness and durable batch progre
      "plan_id/run_id/digest/status/fresh, compact provider/mode/deployment spec, and jobs with job_id/plan_id/ordinal/state/input_hash/attempt/error/next_eligible_at/lease_expires_at/retryable/executed. No provider call occurs.",
      {"plan_id":"PPLAN-returned-id"})
 
+tool("get_screening_grid", "Page every candidate of a run with the fields the company grid needs.",
+     "One SQL pass per page: identity, preferred name/website/HQ, combined description, source (MID, ISCC or both), considered flag and consideration_reason, current PBId, best MID and ISCC retrieval scores, PB/ROGO/Bing coverage and compact PitchBook fields. include_hidden defaults to true so the grid can show hidden companies on request. Page with after_company_id; limit defaults to 1,000, maximum 2,000.",
+     "rows plus total, considered_count, hidden_count, selection_revision, criteria_revision and next_cursor (null on the last page). Read-only.",
+     {"run_id":R,"include_hidden":True,"limit":1000})
+tool("get_company_detail", "Read everything known about one candidate for the company drawer.",
+     "Returns the canonical company, identifiers, considered flag and reason, per-source fields (MID, ISCC, PitchBook, ROGO), labelled descriptions for keyword highlighting, and a bounded activity list merging hide/restore history, research observations and model assessments.",
+     "company, identifiers, considered, consideration_reason, sources, descriptions and activity. Read-only.",
+     {"run_id":R,"company_id":A})
+tool("get_enrichment_report", "Read a saved PitchBook or ROGO import match report.",
+     "Every import saves a non-cumulative report measured against the run's current candidates (considered and hidden). PitchBook reports list matched companies with their PBId and not-matched companies with a reason: not_in_mapping, profile_not_company, blank_pbid, no_data_row or conflict. ROGO reports list matched companies, unmatched rows and ambiguous websites. Omit report_id for the latest report. Imports never hide companies; the analyst applies a decision with the apply_enrichment_review administrator operation.",
+     "report_id, purpose, summary counts, matched, not_matched (PitchBook) or matched/unmatched_rows/ambiguous (ROGO), and created_at. Read-only.",
+     {"run_id":R})
+
 GROUPS = [
     ("Company discovery and retrieval",["search_mid","search_companies","find_company","find_similar_companies","find_similar_to_examples","search_iscc","get_iscc_score_samples","get_retrieval_config","embed_texts","rerank_candidates"]),
     ("Identity and source context",["get_company","get_company_identifiers","get_source_rows","get_candidate_source_data","get_run_source_projection","get_source_field_catalog"]),
@@ -293,8 +306,8 @@ GROUPS = [
     ("Evidence",["save_evidence","get_evidence","get_missing_evidence"]),
     ("Research",["bing_search","m365_research","fetch_url","extract_url_context"]),
     ("Durable memory",["search_research_memory","get_previous_research","get_recent_agent_events","get_search_history","get_open_questions","add_open_question","resolve_open_question"]),
-    ("Candidate funnel",["add_candidates","get_candidate_set","get_shortlist_context","update_candidate_status","get_discovery_summary"]),
-    ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","export_candidate_set"]),
+    ("Candidate funnel",["add_candidates","get_candidate_set","get_shortlist_context","get_screening_grid","get_company_detail","update_candidate_status","get_discovery_summary"]),
+    ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","get_enrichment_report","export_candidate_set"]),
     ("Approved action graphs and screening",["propose_action_plan","get_action_plan","propose_prepared_plan","get_prepared_plan","get_execution_progress","get_execution_job","get_model_assessments","prepare_screening_batch","prepare_bing_queries","save_screening_results","get_screening_results","complete_action_step"]),
     ("Recovery",["save_checkpoint","get_checkpoint"]),
 ]
@@ -536,7 +549,7 @@ The tables below cover typed nested objects and enums referenced by the agent ar
 
 """
 
-assert len(TOOLS)==67 and set(META)==set(TOOLS)
+assert len(TOOLS)==70 and set(META)==set(TOOLS)
 grouped=[name for _,names in GROUPS for name in names]
 assert len(grouped)==len(TOOLS) and len(set(grouped))==len(TOOLS) and set(grouped)==set(TOOLS)
 parts=[INTRO]
