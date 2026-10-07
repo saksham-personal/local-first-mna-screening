@@ -18,19 +18,20 @@ export type EnrichmentReport = {
   ambiguous?: { website: string | null; company_ids: string[] }[];
 };
 export function mergeEnrichmentReports(previous: EnrichmentReport | undefined, next: EnrichmentReport): EnrichmentReport {
-  if (!previous) return { ...next, report_ids: next.report_ids ?? [next.report_id] };
+  const report_ids = [...(previous ? previous.report_ids ?? [previous.report_id] : []), ...(next.report_ids ?? [next.report_id])];
+  // A PitchBook report already covers every candidate in the run, so the latest one replaces earlier ones.
+  if (!previous || next.purpose === "pitchbook") return { ...next, report_ids };
+  // ROGO facts are per import call: add rows up, but count each matched company once.
+  const matched = [...new Map([...previous.matched, ...next.matched].map(company => [company.company_id, company])).values()];
   const summary = { ...previous.summary, ...next.summary };
   for (const [key, value] of Object.entries(next.summary)) {
     if (typeof value === "number") summary[key] = (typeof previous.summary[key] === "number" ? previous.summary[key] : 0) + value;
   }
+  summary.matched_count = matched.length;
   return {
-    ...next, summary,
-    report_ids: [...(previous.report_ids ?? [previous.report_id]), ...(next.report_ids ?? [next.report_id])],
-    matched: [...previous.matched, ...next.matched],
-    ...(next.purpose === "pitchbook" ? { not_matched: [...(previous.not_matched ?? []), ...(next.not_matched ?? [])] } : {
-      unmatched_rows: { count: (previous.unmatched_rows?.count ?? 0) + (next.unmatched_rows?.count ?? 0), sample: [...(previous.unmatched_rows?.sample ?? []), ...(next.unmatched_rows?.sample ?? [])] },
-      ambiguous: [...(previous.ambiguous ?? []), ...(next.ambiguous ?? [])],
-    }),
+    ...next, summary, report_ids, matched,
+    unmatched_rows: { count: (previous.unmatched_rows?.count ?? 0) + (next.unmatched_rows?.count ?? 0), sample: [...(previous.unmatched_rows?.sample ?? []), ...(next.unmatched_rows?.sample ?? [])] },
+    ambiguous: [...(previous.ambiguous ?? []), ...(next.ambiguous ?? [])],
   };
 }
 export function initialReviewDecisions(companies: EnrichmentCompany[], flags: ReadonlyMap<string, boolean>): Record<string, boolean> {

@@ -249,10 +249,15 @@ test("initial review toggles preserve current hidden flags and unchanged Apply s
   assert.deepEqual(enrichmentReviewChanges([...rows, rows[2]], { ...decisions, retained: false, "unmatched-hidden": true }, flags), { hide: ["retained"], keep: ["unmatched-hidden"] });
 });
 
-test("multiple import batches retain every match report, sum counts and reopen the merged review", async () => {
+test("multiple PitchBook batches keep the latest run-wide report and every report id", async () => {
   const id = sessionStore.createSession("Batch reports"), prior = globalThis.fetch;
   updateChatState(id, { backendRunId: "run-batches", companies: companies.slice(0, 1), files: Array.from({ length: 33 }, (_, index) => ({ id: `batch-${index}.xlsx`, name: `Data ${index}.xlsx`, bytes: 4, kind: "xlsx", purpose: "pitchbook" as const, stagingStatus: "waiting" as const })) });
-  const reports: EnrichmentReport[] = [1, 2].map(index => ({ report_id: `ER-${index}`, run_id: "run-batches", purpose: "pitchbook", summary: { matched_count: index, not_matched_count: index + 1 }, matched: [{ company_id: `matched-${index}`, name: `Match ${index}`, website: null, considered: true }], not_matched: [{ company_id: `unmatched-${index}`, name: `Unmatched ${index}`, website: null, considered: true, reason: "no_data_row" }] }));
+  // The backend builds each PitchBook report from every candidate in the run, so batch 2 is a superset of batch 1.
+  const company = (id: string, reason?: "no_data_row") => ({ company_id: id, name: id, website: null, considered: true, ...(reason ? { reason } : {}) });
+  const reports: EnrichmentReport[] = [
+    { report_id: "ER-1", run_id: "run-batches", purpose: "pitchbook", summary: { matched_count: 1, not_matched_count: 2 }, matched: [company("a")], not_matched: [company("b", "no_data_row"), company("c", "no_data_row")] },
+    { report_id: "ER-2", run_id: "run-batches", purpose: "pitchbook", summary: { matched_count: 2, not_matched_count: 1 }, matched: [company("a"), company("b")], not_matched: [company("c", "no_data_row")] },
+  ];
   let imports = 0;
   globalThis.fetch = async (_url, init) => {
     const request = JSON.parse(String(init?.body));
@@ -264,12 +269,12 @@ test("multiple import batches retain every match report, sum counts and reopen t
   try {
     await processStagedUploads(id);
     assert.equal(imports, 2);
-    assert.equal(getChatState(id).files[0].stagingMessage, "3 companies matched; 5 companies not matched; 0 hidden by this action.");
+    assert.equal(getChatState(id).files[0].stagingMessage, "2 companies matched; 1 company not matched; 0 hidden by this action.");
     const saved = sessionStore.getSnapshot().sessions.find(session => session.id === id)!.events.find(event => event.title === "Company context updated")!.result as { report: EnrichmentReport };
     assert.deepEqual(saved.report.report_ids, ["ER-1", "ER-2"]);
     assert.equal(saved.report.report_id, "ER-2");
-    assert.deepEqual(saved.report.matched.map(row => row.company_id), ["matched-1", "matched-2"]);
-    assert.deepEqual(saved.report.not_matched!.map(row => row.company_id), ["unmatched-1", "unmatched-2"]);
+    assert.deepEqual(saved.report.matched.map(row => row.company_id), ["a", "b"]);
+    assert.deepEqual(saved.report.not_matched!.map(row => row.company_id), ["c"]);
     globalThis.fetch = async () => { assert.fail("Reopening the review must preserve the merged cached report"); };
     await requestPitchBookReview(id);
   } finally { globalThis.fetch = prior; }
@@ -283,4 +288,6 @@ test("ROGO batch reports merge unmatched samples and ambiguity without dropping 
   assert.equal(merged.unmatched_rows!.sample.length, 2);
   assert.equal(merged.ambiguous!.length, 2);
   assert.deepEqual(merged.report_ids, ["R-1", "R-2"]);
+  const again = mergeEnrichmentReports(merged, make(1));
+  assert.equal(again.summary.matched_count, 2, "a company matched in two batches counts once");
 });
