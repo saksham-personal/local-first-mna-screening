@@ -42,7 +42,10 @@ import ArtifactCard from "./chat/ArtifactCard";
 import SessionLog from "./SessionLog";
 import Tooltip from "./Tooltip";
 import ThemeMenu from "./theme/ThemeMenu";
-import FileDropArea from "./ui/FileDropArea";
+import DropChooser from "./ui/DropChooser";
+import { validateDropFiles } from "./ui/drop-zones";
+import PitchBookReviewDialog from "./enrichment/PitchBookReviewDialog";
+import type { EnrichmentReport } from "./lib/enrichment-client";
 import Skeleton from "./ui/Skeleton";
 import { promptTemplates } from "./lib/prompt-library";
 import type { ComposerControls } from "./chat/ChatThread";
@@ -51,8 +54,10 @@ const PdfPreview = lazy(() => import("./files/PdfPreview"));
 import type { ArtifactAction } from "./lib/chat-contract";
 import {
   approved,
+  artifactBase,
   getChatState,
   patchArtifact,
+  saveArtifact,
   useChatState,
 } from "./lib/chat-store";
 import { reviseCriteria, completeFitExamples, addResearchToCriteria } from "./lib/chat-driver";
@@ -398,10 +403,36 @@ function Palette({
     </Modal>
   );
 }
-export default function App() {
+export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[]) => void | Promise<void> } = {}) {
   const snapshot = useSessionSnapshot();
   const session = snapshot.sessions.find((s) => s.id === snapshot.activeId)!;
   const state = useChatState(session.id);
+  const [pitchBookReview, setPitchBookReview] = useState<{ sessionId: string; report: EnrichmentReport } | null>(null);
+  useEffect(() => {
+    const review = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string; report: EnrichmentReport }>).detail;
+      if (detail.sessionId === session.id && detail.report.run_id === getChatState(session.id).backendRunId) setPitchBookReview(detail);
+    };
+    window.addEventListener("screening:enrichment-review", review);
+    return () => window.removeEventListener("screening:enrichment-review", review);
+  }, [session.id]);
+  useEffect(() => setPitchBookReview(null), [session.id, state.backendRunId]);
+  const addSourceFiles = useCallback(async (files: File[], purpose: "pitchbook" | "rogo") => {
+    try {
+      validateDropFiles(files, purpose);
+      const upload = saveArtifact(session.id, { ...artifactBase(purpose === "pitchbook" ? "PitchBook data" : "ROGO data"), type: "enrichment-upload", source: purpose, files: [] });
+      try {
+        await stageUploads(files, { sessionId: session.id, purpose, uploadArtifactId: upload.id });
+      } catch (error) {
+        updateChatState(session.id, current => ({ ...current, artifacts: current.artifacts.filter(artifact => artifact.id !== upload.id) }));
+        throw error;
+      }
+      const messageId = crypto.randomUUID();
+      updateChatState(session.id, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
+      sessionStore.addEvent({ sessionId: session.id, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Files staged", text: "Files staged for company data.", content: [{ type: "data", name: "screening-artifact", data: { artifactId: upload.id } }] });
+      await processStagedUploads(session.id);
+    } catch (error) { setToast(error instanceof Error ? error.message : String(error)); }
+  }, [session.id]);
   const [mode, setMode] = useState(initialInterface),
     [sidebar, setSidebar] = useState(true),
     [mobileNav, setMobileNav] = useState(false),
@@ -1158,10 +1189,7 @@ export default function App() {
             </button>
           </div>
         </header>
-        <FileDropArea
-          className={`ct-body ct-body-${mode}${preview ? " ct-preview-open" : ""}`}
-          onFiles={addDroppedFiles}
-        >
+        <div className={`ct-body ct-body-${mode}${preview ? " ct-preview-open" : ""}`}>
           {mode === "workspace" && (
             <section
               className="ct-workspace-surface"
@@ -1176,6 +1204,7 @@ export default function App() {
                 onAction={onAction}
                 send={send}
                 openLog={openLog}
+                onIntakeFiles={onIntakeFiles}
               />
             </section>
           )}
@@ -1280,7 +1309,9 @@ export default function App() {
               <ScreeningInspector state={state} criteriaFirst send={send} edit={() => setDialog("criteria")} preview={artifactId => { void onAction({ type: "preview-file", artifactId }); }} />
             </aside>
           )}
-        </FileDropArea>
+        </div>
+        <DropChooser onChatFiles={addDroppedFiles} onSourceFiles={(files, purpose) => { void addSourceFiles(files, purpose); }} onIntakeFiles={onIntakeFiles} />
+        {pitchBookReview && <PitchBookReviewDialog key={pitchBookReview.report.report_id} sessionId={pitchBookReview.sessionId} report={pitchBookReview.report} onClose={() => setPitchBookReview(null)} />}
         <BackgroundRuns
           jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"}` }))}
           searches={searches}

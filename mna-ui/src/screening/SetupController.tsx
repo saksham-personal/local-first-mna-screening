@@ -150,13 +150,15 @@ export default function SetupController({
         onSaved(prepared);
         return prepared;
       }}
-      onHydrate={async (files) => {
+      onHydrate={async (files, source) => {
         guard();
         if (!initial.backendRunId)
           throw new Error(
             "Find and save companies before adding enrichment files.",
           );
-        await hydrateScreeningSources(sessionId, initial.backendRunId, files);
+        if (source !== "PB" && source !== "ROGO")
+          throw new Error("Choose PitchBook data or ROGO data before importing files.");
+        await hydrateScreeningSources(sessionId, initial.backendRunId, files, source === "PB" ? "pitchbook" : "rogo");
         setCatalog(await getScreeningCatalog(sessionId, initial.backendRunId));
       }}
     />

@@ -781,6 +781,7 @@ export default function ScreeningSetup({
                       </p>
                       <div
                         className="ss-drop"
+                        data-file-drop-zone="true"
                         onDragOver={(event) => {
                           event.preventDefault();
                           event.dataTransfer.dropEffect = "copy";

@@ -1,5 +1,4 @@
 import { useState, type DragEvent, type ReactNode } from "react";
-import { UploadCloud } from "lucide-react";
 
 /** Claims only file drags; ordinary text selections and links still work. */
 export default function FileDropArea({
@@ -17,16 +16,19 @@ export default function FileDropArea({
   return (
     <div
       className={`${className} ui-file-drop-area`}
+      data-file-drop-zone="true"
       data-dragging={dragging || undefined}
       onDragEnter={(event) => {
         if (isFiles(event)) {
           event.preventDefault();
+          event.stopPropagation();
           setDragging(true);
         }
       }}
       onDragOver={(event) => {
         if (isFiles(event)) {
           event.preventDefault();
+          event.stopPropagation();
           event.dataTransfer.dropEffect = "copy";
           setDragging(true);
         }
@@ -46,12 +48,7 @@ export default function FileDropArea({
       {children}
       {dragging && (
         <div className="ui-file-drop-overlay" role="status">
-          <div>
-            <UploadCloud size={30} />
-            <strong>Drop files to attach</strong>
-            <span>PDF, Word, text, CSV, or Excel · up to 20 MB each</span>
-            <small>Review the attachments in chat, then send.</small>
-          </div>
+          <strong>Drop files here</strong>
         </div>
       )}
     </div>

@@ -2,6 +2,7 @@ import { sessionStore } from "./session-store";
 import type { Company } from "./contracts";
 import type { StagedFile } from "./chat-contract";
 import { projectIdentity, usableText } from "./screening-data";
+import { validateDropFiles } from "../ui/drop-zones";
 import {
   artifactBase,
   getChatState,
@@ -148,6 +149,8 @@ export async function stageUploads(
     uploadArtifactId?: string;
   },
 ): Promise<StagedFile[]> {
+  const destination = options.purpose ?? "chat";
+  validateDropFiles(files, destination);
   if (
     !files.length ||
     files.some((file) => !file.size || file.size > 20 * 1024 * 1024)
@@ -173,34 +176,43 @@ export async function stageUploads(
     method: "POST",
     signal: options.signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ files: payload, sessionId: options.sessionId, purpose: options.purpose ?? "company-data" }),
+    body: JSON.stringify({ files: payload, sessionId: options.sessionId, purpose: options.purpose ?? "chat" }),
   });
   const parsed = await staged.json();
   if (!staged.ok)
     throw new Error(parsed.error ?? "Files could not be uploaded.");
-  const purpose = options.purpose ?? "company-data";
-  const stagedFiles = (parsed.files as StagedFile[]).map(file => ({ ...file, purpose, passToProvider: purpose === "chat", uploadArtifactId: options.uploadArtifactId, ...(file.importable ? { stagingStatus: "checking" as const, stagingMessage: "Checking spreadsheet…" } : {}) }));
-  const artifacts = (purpose === "chat" ? stagedFiles : []).map((file) =>
+  const purpose = options.purpose ?? "chat";
+  const existing = new Map(getChatState(options.sessionId).files.map(file => [file.id, file]));
+  const stagedFiles = [...new Map((parsed.files as StagedFile[]).map(file => {
+    const previous = existing.get(file.id);
+    const enrichment = purpose === "pitchbook" || purpose === "rogo";
+    // Successful imports can be reused; failed or unfinished uploads must be
+    // inspected again, with all subsequent status updates bound to this card.
+    const checking = enrichment && previous?.stagingStatus !== "imported";
+    const stagedFile: StagedFile = {
+      ...file, ...previous, name: file.name, purpose,
+      passToProvider: previous?.passToProvider ?? purpose === "chat",
+      uploadArtifactId: options.uploadArtifactId ?? previous?.uploadArtifactId,
+      ...(checking ? { stagingStatus: "checking", stagingMessage: "Checking spreadsheet...", hydratedScope: undefined, sourceKinds: undefined } : {}),
+    };
+    return [file.id, stagedFile] as const;
+  })).values()];
+  const newFiles = stagedFiles.filter(file => !existing.has(file.id));
+  const artifacts = (purpose === "chat" ? newFiles : []).map((file) =>
     saveArtifact(options.sessionId, {
-      ...artifactBase(file.name),
-      type: "file",
-      file,
-      importStatus: "Uploaded",
+      ...artifactBase(file.name), type: "file", file, importStatus: "Uploaded",
     }),
   );
-  updateChatState(options.sessionId, (state) => ({
-    ...state,
-    files: [...state.files, ...stagedFiles],
-  }));
+  const replacements = new Map(stagedFiles.map(file => [file.id, file]));
+  updateChatState(options.sessionId, (state) => ({ ...state, files: [...state.files.map(file => replacements.get(file.id) ?? file), ...newFiles] }));
   if (options.uploadArtifactId) {
     const upload = getChatState(options.sessionId).artifacts.find(artifact => artifact.id === options.uploadArtifactId);
-    if (upload?.type === "enrichment-upload") patchArtifact(options.sessionId, upload.id, { files: [...upload.files, ...stagedFiles] });
+    if (upload?.type === "enrichment-upload") patchArtifact(options.sessionId, upload.id, { files: [...new Map([...upload.files, ...stagedFiles].map(file => [file.id, file])).values()] });
   }
-  if (stagedFiles.some(file => file.importable)) {
-    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("screening:files-staged", { detail: { sessionId: options.sessionId, purpose } }));
+  if (purpose === "pitchbook" || purpose === "rogo") {
     void import("./import-pipeline").then(({ processStagedUploads }) => processStagedUploads(options.sessionId));
   }
-  if (options.workspaceMessage && purpose === "chat") {
+  if (options.workspaceMessage && purpose === "chat" && newFiles.length) {
     const messageId = crypto.randomUUID();
     updateChatState(options.sessionId, (state) => ({
       ...state,
@@ -217,7 +229,7 @@ export async function stageUploads(
       text: `Added ${stagedFiles.length} file${stagedFiles.length === 1 ? "" : "s"} in the workspace.`,
       content: [
         { type: "text", text: "Added files in the workspace." },
-        ...artifacts.filter(artifact => artifact.type !== "file" || !artifact.file.importable).map((artifact) => ({
+        ...artifacts.map((artifact) => ({
           type: "data",
           name: "screening-artifact",
           data: { artifactId: artifact.id },
@@ -231,10 +243,11 @@ export async function stageUploads(
 export async function uploadEnrichmentFiles(
   files: File[],
   runId: string,
-  options: { sessionId: string; signal?: AbortSignal },
+  options: { sessionId: string; signal?: AbortSignal; purpose?: "pitchbook" | "rogo" },
 ): Promise<{ files: { name: string; status: string }[]; summary: string }> {
   if (files.some((file) => !/\.(csv|xlsx)$/i.test(file.name)))
     throw new Error("Choose CSV or XLSX files for company data.");
+  if (!options.purpose) throw new Error("Choose PitchBook data or ROGO data before importing files.");
   const stagedFiles = await stageUploads(files, {
     ...options,
     workspaceMessage: true,
@@ -245,5 +258,5 @@ export async function uploadEnrichmentFiles(
   const errors = imported.filter(file => file.stagingStatus === "error" || file.stagingStatus === "unrecognized");
   if (errors.length) throw new Error(errors.map(file => `${file.name}: ${file.stagingMessage}`).join("\n"));
   if (latest.backendRunId !== runId) throw new Error("The screening changed. Open the original screening to view its files.");
-  return { files: imported.map(file => ({ name: file.name, status: file.stagingMessage ?? "Staged" })), summary: "Company context refreshed. Use /data to view the current table." };
+  return { files: imported.map(file => ({ name: file.name, status: file.stagingMessage ?? "Staged" })), summary: imported.find(file => file.stagingStatus === "imported")?.stagingMessage ?? "Files ready to import when companies are available." };
 }

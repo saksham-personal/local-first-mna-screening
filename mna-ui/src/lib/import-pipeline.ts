@@ -2,10 +2,12 @@ import { artifactBase, getChatState, patchArtifact, saveArtifact, updateChatStat
 import { callTool, type ToolResult } from "./tool-client";
 import { refreshCompanyContext } from "./company-data-client";
 import { sessionStore } from "./session-store";
-import { plural } from "./format";
+import { mergeEnrichmentReports, notifyPitchBookReview, rememberEnrichmentReport, reportSummary, type EnrichmentReport } from "./enrichment-client";
 import type { StagedFile } from "./chat-contract";
 
-type Inspection = { file: string; eligible: boolean; sheets: { kind: string }[] };
+type Inspection = { file: string; eligible: boolean; reason?: string; error?: string; sheets: { kind: string; error?: string }[] };
+const isEnrichment = (file: StagedFile) => file.purpose === "pitchbook" || file.purpose === "rogo";
+const fileArgs = (files: StagedFile[], purpose: "pitchbook" | "rogo") => ({ files: files.map(file => file.id), purpose_hint: purpose, display_names: Object.fromEntries(files.map(file => [file.id, file.name])) });
 const queues = new Map<string, Promise<void>>();
 function patchFile(sessionId: string, id: string, patch: Partial<StagedFile>) {
   updateChatState(sessionId, state => ({ ...state, files: state.files.map(file => file.id === id ? { ...file, ...patch } : file) }));
@@ -20,18 +22,27 @@ async function traced(sessionId: string, name: string, args: ToolResult) {
   catch (error) { sessionStore.finishTool(receipt, null, "error", String(error)); throw error; }
 }
 async function process(sessionId: string) {
-  const unchecked = getChatState(sessionId).files.filter(f => f.importable && (!f.stagingStatus || f.stagingStatus === "checking"));
-  for (let offset = 0; offset < unchecked.length; offset += 32) {
-    const batch = unchecked.slice(offset, offset + 32);
-    try {
-      const inspection = await traced(sessionId, "inspect_enrichment_files", { files: batch.map(f => f.id) });
-      for (const item of inspection.files as Inspection[]) patchFile(sessionId, item.file, {
-        sourceKinds: [...new Set(item.sheets.map(s => s.kind === "PB_MAPPING" ? "mapping" : s.kind === "PB_DATA" ? "pitchbook" : s.kind === "ROGO" ? "rogo" : s.kind))], stagingStatus: item.eligible ? "waiting" : "unrecognized",
-        stagingMessage: item.eligible ? (batch.find(file => file.id === item.file)?.purpose === "chat" ? "Company spreadsheet detected · attached to chat" : "Ready to add to companies") : "Saved for review",
-      });
-    } catch (error) {
-      batch.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "error", stagingMessage: String(error) }));
-      return;
+  for (const purpose of ["pitchbook", "rogo"] as const) {
+    const unchecked = getChatState(sessionId).files.filter(f => f.purpose === purpose && f.importable && (!f.stagingStatus || f.stagingStatus === "checking"));
+    for (let offset = 0; offset < unchecked.length; offset += 32) {
+      const batch = unchecked.slice(offset, offset + 32);
+      try {
+        const inspection = await traced(sessionId, "inspect_enrichment_files", fileArgs(batch, purpose));
+        for (const file of batch) {
+          const item = (inspection.files as Inspection[]).find(item => item.file === file.id);
+          const kinds = item?.sheets.map(sheet => sheet.kind) ?? [];
+          const mismatch = purpose === "pitchbook" ? kinds.includes("ROGO") : kinds.some(kind => kind === "PB_MAPPING" || kind === "PB_DATA");
+          const message = mismatch ? `This looks like a ${purpose === "pitchbook" ? "ROGO" : "PitchBook"} file \u2014 drop it in ${purpose === "pitchbook" ? "ROGO" : "PitchBook"} data` : item?.error ?? item?.reason ?? item?.sheets.find(sheet => sheet.error)?.error ?? "File format not recognized";
+          const eligible = item?.eligible && !mismatch;
+          patchFile(sessionId, file.id, {
+            sourceKinds: [...new Set(kinds.map(kind => kind === "PB_MAPPING" ? "mapping" : kind === "PB_DATA" ? "pitchbook" : kind === "ROGO" ? "rogo" : kind).filter(Boolean))],
+            stagingStatus: eligible ? "waiting" : "error",
+            stagingMessage: eligible ? "Ready to import" : `${file.name}: ${message}`,
+          });
+        }
+      } catch (error) {
+        batch.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "error", stagingMessage: `${file.name}: ${String(error)}` }));
+      }
     }
   }
   const state = getChatState(sessionId);
@@ -40,35 +51,46 @@ async function process(sessionId: string) {
   if (discovery?.state === "running") return;
   const bytes = new TextEncoder().encode(JSON.stringify([state.backendRunId, state.companies.map(company => company.pk).sort()]));
   const scope = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(byte => byte.toString(16).padStart(2, "0")).join("");
-  const pending = state.files.filter(file => file.purpose !== "chat" && (file.stagingStatus === "waiting" || (file.stagingStatus === "imported" && file.hydratedScope !== scope)));
-  if (!pending.length) return;
-  // Re-read previously imported sheets with new mappings: a data workbook may arrive before its mapping CSV.
-  const pendingIds = new Set(pending.map(file => file.id));
-  const files = state.files.filter(file => file.purpose !== "chat" && (file.stagingStatus === "waiting" || file.stagingStatus === "imported") && (!file.sourceKinds?.includes("mapping") || pendingIds.has(file.id)));
-  pending.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "importing", stagingMessage: "Adding company data…" }));
-  try {
-    const totals: ToolResult = {};
-    // Mapping sheets go first if separate requests are needed.
-    files.sort((a, b) => Number(b.sourceKinds?.includes("mapping")) - Number(a.sourceKinds?.includes("mapping")));
-    for (let offset = 0; offset < files.length; offset += 32) {
-      const group = files.slice(offset, offset + 32);
-      const result = await traced(sessionId, "import_enrichment_files", { run_id: state.backendRunId, files: group.map(f => f.id), exclude_unmapped: group.some(file => file.sourceKinds?.includes("mapping")) });
-      for (const [key, value] of Object.entries(result)) if (typeof value === "number") totals[key] = Number(totals[key] ?? 0) + value;
+  for (const purpose of ["pitchbook", "rogo"] as const) {
+    const pending = getChatState(sessionId).files.filter(file => file.purpose === purpose && (file.stagingStatus === "waiting" || (file.stagingStatus === "imported" && file.hydratedScope !== scope)));
+    if (!pending.length) continue;
+    const pendingIds = new Set(pending.map(file => file.id));
+    // A newly supplied mapping may match a previously imported data workbook.
+    const files = getChatState(sessionId).files.filter(file => file.purpose === purpose && (file.stagingStatus === "waiting" || file.stagingStatus === "imported") && (!file.sourceKinds?.includes("mapping") || pendingIds.has(file.id)));
+    pending.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "importing", stagingMessage: "Adding company data..." }));
+    try {
+      let report: EnrichmentReport | undefined;
+      files.sort((a, b) => Number(b.sourceKinds?.includes("mapping")) - Number(a.sourceKinds?.includes("mapping")));
+      for (let offset = 0; offset < files.length; offset += 32) {
+        const group = files.slice(offset, offset + 32);
+        const result = await traced(sessionId, "import_enrichment_files", { run_id: state.backendRunId, ...fileArgs(group, purpose) });
+        const entries = result.files as { file: string; status: string; error?: string; sheets?: { error?: string }[] }[] | undefined;
+        for (const file of group) {
+          const entry = entries?.find(item => item.file === file.id);
+          if (entry && entry.status !== "imported") throw new Error(`${file.name}: ${entry.error ?? entry.sheets?.find(sheet => sheet.error)?.error ?? "File could not be imported"}`);
+        }
+        let groupReport = (result.reports as EnrichmentReport[] | undefined)?.find(item => item.purpose === purpose);
+        if (!groupReport && typeof result.report_id === "string") groupReport = await (await import("./enrichment-client")).getEnrichmentReport(state.backendRunId, result.report_id);
+        if (!groupReport) throw new Error("The import did not return a match report. Recheck these files.");
+        report = mergeEnrichmentReports(report, groupReport);
+      }
+      if (!report) throw new Error("The import did not return a match report. Recheck these files.");
+      await refreshCompanyContext(sessionId, state.backendRunId);
+      await (await import("./review-client")).refreshShortlist(sessionId, state.backendRunId);
+      const summary = reportSummary(report);
+      pending.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "imported", stagingMessage: summary, hydratedScope: scope }));
+      const artifactIds = [...new Set(pending.map(file => file.uploadArtifactId).filter((id): id is string => Boolean(id)))];
+      for (const artifactId of artifactIds) {
+        const artifact = getChatState(sessionId).artifacts.find(item => item.id === artifactId);
+        if (artifact?.type === "enrichment-upload") patchArtifact(sessionId, artifact.id, { summary });
+      }
+      rememberEnrichmentReport(sessionId, report, artifactIds);
+      saveArtifact(sessionId, { ...artifactBase(purpose === "rogo" ? "ROGO data added" : "PitchBook data added"), type: "handoff", service: "Company data", state: "complete", detail: summary });
+      sessionStore.addEvent({ sessionId, kind: "artifact", origin: "workspace", status: "success", title: "Company context updated", text: summary, result: { report, files: pending.map(file => file.id), runId: state.backendRunId } });
+      if (purpose === "pitchbook") notifyPitchBookReview(sessionId, report);
+    } catch (error) {
+      pending.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "error", stagingMessage: `${file.name}: ${String(error)}` }));
     }
-    await refreshCompanyContext(sessionId, state.backendRunId);
-    await (await import("./review-client")).refreshShortlist(sessionId, state.backendRunId);
-    const count = (key: string) => Number(totals[key] ?? 0), needReview = count("quarantined");
-    const summary = `${plural(count("mapping_unique_companies"), "PitchBook ID")}, ${plural(count("pb_unique_companies"), "PitchBook company record")} and ${plural(count("rogo_unique_companies"), "ROGO record")} matched. ${plural(count("pb_unmatched") + count("rogo_unmatched"), "row")} unmatched; ${plural(needReview, "row")} ${needReview === 1 ? "needs" : "need"} review.`;
-    pending.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "imported", stagingMessage: "Data added", hydratedScope: scope }));
-    for (const artifactId of new Set(pending.map(file => file.uploadArtifactId).filter(Boolean))) {
-      const artifact = getChatState(sessionId).artifacts.find(item => item.id === artifactId);
-      if (artifact?.type === "enrichment-upload") patchArtifact(sessionId, artifact.id, { summary });
-    }
-    const sources = new Set(files.flatMap(f => f.sourceKinds ?? []));
-    saveArtifact(sessionId, { ...artifactBase(sources.has("rogo") && (sources.has("pitchbook") || sources.has("mapping")) ? "PitchBook and ROGO data added" : sources.has("rogo") ? "ROGO data added" : "PitchBook data added"), type: "handoff", service: "Company data", state: "complete", detail: `${summary} Use /data to view the current table. Saved screening setups need a fresh preview and approval.` });
-    sessionStore.addEvent({ sessionId, kind: "artifact", origin: "workspace", status: "success", title: "Company context updated", text: summary, result: { ...totals, files: pending.map(f => f.id), runId: state.backendRunId } });
-  } catch (error) {
-    pending.forEach(file => patchFile(sessionId, file.id, { stagingStatus: "error", stagingMessage: String(error) }));
   }
 }
 export function processStagedUploads(sessionId: string): Promise<void> {
@@ -80,6 +102,6 @@ export function processStagedUploads(sessionId: string): Promise<void> {
 }
 
 export function retryStagedUploads(sessionId: string): Promise<void> {
-  updateChatState(sessionId, state => ({ ...state, files: state.files.map(file => file.stagingStatus === "error" ? { ...file, stagingStatus: "checking", stagingMessage: "Checking again…" } : file) }));
+  updateChatState(sessionId, state => ({ ...state, files: state.files.map(file => isEnrichment(file) && file.stagingStatus === "error" ? { ...file, stagingStatus: "checking", stagingMessage: "Checking again…" } : file) }));
   return processStagedUploads(sessionId);
 }

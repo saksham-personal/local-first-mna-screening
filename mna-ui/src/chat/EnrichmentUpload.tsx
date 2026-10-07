@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Check, FileSpreadsheet, LoaderCircle, UploadCloud } from "lucide-react";
 import type { ArtifactAction, ChatArtifact, ChatState, StagedFile } from "../lib/chat-contract";
+import { requestPitchBookReview } from "../lib/enrichment-client";
 import FileDropArea from "../ui/FileDropArea";
 import Tooltip from "../Tooltip";
 import "./shortlist-flow.css";
@@ -46,7 +47,7 @@ export default function EnrichmentUpload({ artifact, context, onAction }: Props)
   const receiveFiles = async (incoming: File[]) => {
     if (uploading) return;
     const accepted = incoming.filter((file) => /\.(csv|xlsx)$/i.test(file.name));
-    setFileError(accepted.length === incoming.length ? "" : "Choose CSV or XLSX files.");
+    setFileError(accepted.length === incoming.length ? "" : incoming.filter(file => !accepted.includes(file)).map(file => `${file.name}: Choose CSV or XLSX files.`).join(" "));
     if (!accepted.length) return;
     setUploading(true);
     try { await onAction({ type: "upload-source", artifactId: artifact.id, source, files: accepted }); }
@@ -74,6 +75,7 @@ export default function EnrichmentUpload({ artifact, context, onAction }: Props)
       <div className="sf-staged-head"><strong>{imported ? `${imported} file${imported === 1 ? "" : "s"} added` : "File status"}</strong>{working && <span><LoaderCircle className="sf-spin" size={13} /> Processing</span>}{!working && imported > 0 && <span className="sf-imported"><Check size={13} /> Ready</span>}</div>
       {artifact.summary && imported > 0 && <p className="sf-success-summary">{artifact.summary}</p>}
       <ul>{files.map((file) => <li key={file.id}><FileSpreadsheet size={14} /><span><strong>{file.name}</strong><small>{formatBytes(file.bytes)} · {statusCopy(file)}</small></span></li>)}</ul>
+      {source === "pitchbook" && files.some(file => file.purpose === "pitchbook" && file.stagingStatus === "imported") && context && <button type="button" className="sf-retry" onClick={() => void requestPitchBookReview(context.sessionId, artifact.id).catch(error => setFileError(String(error)))}>Review matches</button>}
       {failed && <button className="sf-retry" type="button" onClick={() => inputRef.current?.click()}>Choose files to retry</button>}
     </section>}
   </section>;
