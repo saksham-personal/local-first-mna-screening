@@ -484,7 +484,7 @@ impl Worker {
                 continue;
             }
             if !validated {
-                self.validate_headers(&headers)?;
+                self.validate_headers(&mut headers)?;
                 validated = true;
                 self.end(1, "done", None)?;
                 self.begin(2, self.total)?;
@@ -509,7 +509,7 @@ impl Worker {
             }
         }
         if !validated {
-            self.validate_headers(&headers)?;
+            self.validate_headers(&mut headers)?;
             self.end(1, "done", None)?;
             self.begin(2, self.total)?;
             self.begin(3, self.total)?;
@@ -598,11 +598,28 @@ impl Worker {
         tx.commit()?;
         Ok(())
     }
-    fn validate_headers(&mut self, headers: &BTreeMap<u32, String>) -> Result<()> {
-        let present: BTreeSet<String> = headers.values().map(|s| normalize_header(s)).collect();
-        if present.len() != headers.len() {
-            return Err(Error::Validation("Duplicate workbook header names".into()));
+    fn validate_headers(&mut self, headers: &mut BTreeMap<u32, String>) -> Result<()> {
+        // Keep the first of any headers that normalize to the same name; ignore the rest.
+        let mut seen = BTreeSet::new();
+        let mut duplicates = Vec::new();
+        headers.retain(|_, name| {
+            let keep = seen.insert(normalize_header(name));
+            if !keep {
+                duplicates.push(name.clone());
+            }
+            keep
+        });
+        if !duplicates.is_empty() {
+            append_log(
+                &mut self.log,
+                "warn",
+                &format!(
+                    "Duplicate column names; using the first and ignoring: {}",
+                    duplicates.join(", ")
+                ),
+            );
         }
+        let present: BTreeSet<String> = headers.values().map(|s| normalize_header(s)).collect();
         let has = |columns: &[String]| {
             columns
                 .iter()
@@ -662,7 +679,11 @@ impl Worker {
     fn store_batch(&mut self, batch: &[Value], read_seconds: f64) -> Result<()> {
         self.check_cancel()?;
         let clock = Instant::now();
-        let tx = self.conn.transaction()?;
+        // IMMEDIATE: the batch reads before it writes, and the live app writes on other
+        // connections; a deferred transaction would fail with SQLITE_BUSY_SNAPSHOT.
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for row in batch {
             if let Some(company) = ingest_source_row(&tx, "MID", "", "", row, &mut self.counters)? {
                 let desc = self
