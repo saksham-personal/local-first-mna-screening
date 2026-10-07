@@ -33,6 +33,7 @@ import type {
   JobSnapshot,
 } from "./lib/chat-contract";
 import type { ExportKind } from "./lib/contracts";
+import { callTool } from "./lib/tool-client";
 import { approved } from "./lib/chat-store";
 import { consideredCompanies } from "./lib/chat-policy";
 import {
@@ -215,20 +216,32 @@ function Overview({
   const [rounds, setRounds] = useState<ScreeningRound[]>([]);
   const [roundsLoading, setRoundsLoading] = useState(false);
   const [roundsError, setRoundsError] = useState("");
-  const [simulated, setSimulated] = useState(false);
-  const [summaryGrid, setSummaryGrid] = useState<ScreeningGrid | null>(null);
+  // Light reads only: the Overview needs counts and flags, not every grid row.
+  const [simulatedMode, setSimulatedMode] = useState(false);
+  const [summary, setSummary] = useState<{ total: number; mid: number; iscc: number; both: number } | null>(null);
+  const shownRun = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    void fetch("/api/health").then((response) => response.json()).then((data) => setSimulatedMode(data?.simulated === true)).catch(() => {});
+  }, []);
   useEffect(() => {
     let current = true;
-    setRounds([]);
-    setSimulated(false);
-    setSummaryGrid(null);
+    // Keep the previous numbers while refreshing the same run; clear them only for another run.
+    if (shownRun.current !== state.backendRunId) {
+      shownRun.current = state.backendRunId;
+      setRounds([]);
+      setSummary(null);
+    }
     if (!state.backendRunId) return;
-    setRoundsLoading(true);
+    const runId = state.backendRunId;
     setRoundsError("");
-    void fetchScreeningGrid(state.sessionId, state.backendRunId).then((grid) => { if (current) { setSimulated(grid.rows.some((row) => row.simulated)); setSummaryGrid(grid); } }).catch(() => {});
-    const load = () => fetchScreeningRounds(state.sessionId, state.backendRunId!).then((result) => {
+    void callTool("get_discovery_summary", { run_id: runId }).then((result) => {
+      const count = (key: string) => (typeof result[key] === "number" ? (result[key] as number) : 0);
+      if (current) setSummary({ total: count("total_unique"), mid: count("mid_only"), iscc: count("iscc_only"), both: count("both") });
+    }).catch(() => {});
+    const load = () => fetchScreeningRounds(state.sessionId, runId).then((result) => {
       if (current) { setRounds(result); setRoundsError(""); }
     }).catch((error) => { if (current) setRoundsError(error instanceof Error ? error.message : "Screening rounds could not be loaded."); }).finally(() => { if (current) setRoundsLoading(false); });
+    setRoundsLoading(true);
     void load();
     const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 15000);
     return () => { current = false; window.clearInterval(timer); };
@@ -247,12 +260,12 @@ function Overview({
             (artifact) => artifact.type === "job" && artifact.jobId === job.id,
           )
       : undefined;
-  const total = summaryGrid?.consideredCount ?? consideredCompanies(state).length;
-  const sourceCount = (source: GridCompany["source"], fallback: number) => summaryGrid ? summaryGrid.rows.filter((row) => row.considered && row.source === source).length : fallback;
+  const total = summary?.total ?? consideredCompanies(state).length;
+  const sourceCount = (source: GridCompany["source"], fallback: number) => summary ? (source === "MID" ? summary.mid : source === "ISCC" ? summary.iscc : summary.both) : fallback;
   return (
     <div className="ws-overview">
-      {(simulated || rounds.some((round) => round.simulated)) && <SimulatedBanner />}
-      {roundsLoading && <Skeleton variant="card" rows={2} label="Loading screening rounds" />}
+      {(simulatedMode || rounds.some((round) => round.simulated)) && <SimulatedBanner />}
+      {roundsLoading && !rounds.length && <Skeleton variant="card" rows={2} label="Loading screening rounds" />}
       {roundsError && <p className="ws-grid-error" role="alert">{roundsError}</p>}
       {rounds.length > 0 && <section className="ws-card ws-rounds-card">
         <div className="ws-section-head"><h2>Screening rounds</h2><HelpTip label="About screening rounds">Each round keeps its own provider scores and outputs. Counts describe the saved round results, including companies later hidden.</HelpTip></div>
@@ -450,6 +463,8 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
     try { localStorage.setItem(`ws-company-columns:${sourceTab}`, JSON.stringify(next)); } catch { /* storage may be disabled */ }
   }, [columns, sourceTab]);
   const gridRequest = useRef(0);
+  const hasGridData = useRef(false);
+  const gridRun = useRef<string | undefined>(undefined);
   const result = state.artifacts
     .slice()
     .reverse()
@@ -469,6 +484,14 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
     [allRows, showHidden, sourceTab],
   );
   const selected = allRows.find((row) => row.company_id === drawerId) ?? null;
+  // Refetch when screening/enrichment jobs change state, not on every chat artifact update.
+  const resultsKey = useMemo(
+    () => state.artifacts
+      .filter((artifact) => artifact.type === "job" || artifact.type === "enrichment-upload")
+      .map((artifact) => `${artifact.id}:${JSON.stringify((artifact as { state?: unknown; status?: unknown }).state ?? (artifact as { status?: unknown }).status ?? "")}`)
+      .join("|"),
+    [state.artifacts],
+  );
   const loadGrid = useCallback(async () => {
     const request = ++gridRequest.current;
     const runId = state.backendRunId;
@@ -478,10 +501,17 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
       setLoading(false);
       return null;
     }
-    setLoading(true);
+    // Refreshes keep the current rows on screen; a first load (or another run) shows the skeleton.
+    if (gridRun.current !== runId) {
+      gridRun.current = runId;
+      hasGridData.current = false;
+      setGridData(null);
+    }
+    if (!hasGridData.current) setLoading(true);
     setGridError("");
     try {
       const data = await fetchScreeningGrid(state.sessionId, runId);
+      if (request === gridRequest.current) hasGridData.current = true;
       if (request === gridRequest.current) setGridData(data);
       return data;
     } catch (caught) {
@@ -493,7 +523,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
   }, [state.backendRunId, state.sessionId]);
   useEffect(() => {
     void loadGrid().catch(() => {});
-  }, [loadGrid, state.selectionRevision, state.artifacts]);
+  }, [loadGrid, state.selectionRevision, resultsKey]);
   useEffect(() => {
     const visibleIds = new Set(rows.map((row) => row.company_id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));

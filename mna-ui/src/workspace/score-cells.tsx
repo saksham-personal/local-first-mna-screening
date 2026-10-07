@@ -8,12 +8,12 @@ export function ScorePill({ value }: { value: unknown }) {
   const score = parseScore(value);
   if (score === null) return <span className="ws-score-missing">—</span>;
   const tone = score === "CHECK" ? "neutral" : score < 4 ? "danger" : score < 7 ? "warning" : "success";
-  return <span className={`ws-score-pill ws-score-${tone}`} aria-label={score === "CHECK" ? "CHECK" : `Score ${score} out of 10`}>{score}</span>;
+  return <span role="img" className={`ws-score-pill ws-score-${tone}`} aria-label={score === "CHECK" ? "CHECK" : `Score ${score} out of 10`}>{score}</span>;
 }
 
 export function SemanticBar({ value }: { value: number | null }) {
   if (value === null) return <span className="ws-score-missing">—</span>;
-  return <span className="ws-semantic" aria-label={`MID semantic score ${value.toFixed(1)} out of 10`}>
+  return <span role="img" className="ws-semantic" aria-label={`MID semantic score ${value.toFixed(1)} out of 10`}>
     <span className="ws-semantic-track" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(10, value)) * 10}%` }} /></span>
     <span>{value.toFixed(1)}</span>
   </span>;
