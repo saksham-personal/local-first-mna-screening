@@ -12,6 +12,11 @@ export function allowedExtensions(purpose: DropPurpose | "company-data") {
 export function routeDrop(purpose: string | null | undefined): DropPurpose | undefined {
   return dropTargets.find(target => target.purpose === purpose)?.purpose;
 }
+export function validateDropFiles(files: { name: string }[], purpose: DropPurpose | "company-data") {
+  const extensions = allowedExtensions(purpose);
+  const invalid = files.find(file => !extensions.some(extension => file.name.toLowerCase().endsWith(extension)));
+  if (invalid) throw new Error(`${invalid.name}: ${dropTargets.find(target => target.purpose === purpose)?.label ?? "Company data"} accepts ${extensions.join(", ")} files.`);
+}
 export function dedupeKey(sessionId: string, purpose: string, sha256: string) {
   return JSON.stringify([sessionId, purpose, sha256]);
 }

@@ -2,7 +2,7 @@ import { artifactBase, getChatState, patchArtifact, saveArtifact, updateChatStat
 import { callTool, type ToolResult } from "./tool-client";
 import { refreshCompanyContext } from "./company-data-client";
 import { sessionStore } from "./session-store";
-import { notifyPitchBookReview, rememberEnrichmentReport, reportSummary, type EnrichmentReport } from "./enrichment-client";
+import { mergeEnrichmentReports, notifyPitchBookReview, rememberEnrichmentReport, reportSummary, type EnrichmentReport } from "./enrichment-client";
 import type { StagedFile } from "./chat-contract";
 
 type Inspection = { file: string; eligible: boolean; reason?: string; error?: string; sheets: { kind: string; error?: string }[] };
@@ -69,8 +69,10 @@ async function process(sessionId: string) {
           const entry = entries?.find(item => item.file === file.id);
           if (entry && entry.status !== "imported") throw new Error(`${file.name}: ${entry.error ?? entry.sheets?.find(sheet => sheet.error)?.error ?? "File could not be imported"}`);
         }
-        report = (result.reports as EnrichmentReport[] | undefined)?.find(item => item.purpose === purpose);
-        if (!report && typeof result.report_id === "string") report = await (await import("./enrichment-client")).getEnrichmentReport(state.backendRunId, result.report_id);
+        let groupReport = (result.reports as EnrichmentReport[] | undefined)?.find(item => item.purpose === purpose);
+        if (!groupReport && typeof result.report_id === "string") groupReport = await (await import("./enrichment-client")).getEnrichmentReport(state.backendRunId, result.report_id);
+        if (!groupReport) throw new Error("The import did not return a match report. Recheck these files.");
+        report = mergeEnrichmentReports(report, groupReport);
       }
       if (!report) throw new Error("The import did not return a match report. Recheck these files.");
       await refreshCompanyContext(sessionId, state.backendRunId);

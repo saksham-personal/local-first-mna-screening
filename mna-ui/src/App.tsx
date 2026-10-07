@@ -43,6 +43,7 @@ import SessionLog from "./SessionLog";
 import Tooltip from "./Tooltip";
 import ThemeMenu from "./theme/ThemeMenu";
 import DropChooser from "./ui/DropChooser";
+import { validateDropFiles } from "./ui/drop-zones";
 import PitchBookReviewDialog from "./enrichment/PitchBookReviewDialog";
 import type { EnrichmentReport } from "./lib/enrichment-client";
 import Skeleton from "./ui/Skeleton";
@@ -418,8 +419,14 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   useEffect(() => setPitchBookReview(null), [session.id, state.backendRunId]);
   const addSourceFiles = useCallback(async (files: File[], purpose: "pitchbook" | "rogo") => {
     try {
+      validateDropFiles(files, purpose);
       const upload = saveArtifact(session.id, { ...artifactBase(purpose === "pitchbook" ? "PitchBook data" : "ROGO data"), type: "enrichment-upload", source: purpose, files: [] });
-      await stageUploads(files, { sessionId: session.id, purpose, uploadArtifactId: upload.id });
+      try {
+        await stageUploads(files, { sessionId: session.id, purpose, uploadArtifactId: upload.id });
+      } catch (error) {
+        updateChatState(session.id, current => ({ ...current, artifacts: current.artifacts.filter(artifact => artifact.id !== upload.id) }));
+        throw error;
+      }
       const messageId = crypto.randomUUID();
       updateChatState(session.id, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
       sessionStore.addEvent({ sessionId: session.id, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Files staged", text: "Files staged for company data.", content: [{ type: "data", name: "screening-artifact", data: { artifactId: upload.id } }] });

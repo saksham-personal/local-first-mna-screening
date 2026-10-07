@@ -2,7 +2,7 @@ import { sessionStore } from "./session-store";
 import type { Company } from "./contracts";
 import type { StagedFile } from "./chat-contract";
 import { projectIdentity, usableText } from "./screening-data";
-import { allowedExtensions } from "../ui/drop-zones";
+import { validateDropFiles } from "../ui/drop-zones";
 import {
   artifactBase,
   getChatState,
@@ -150,8 +150,7 @@ export async function stageUploads(
   },
 ): Promise<StagedFile[]> {
   const destination = options.purpose ?? "chat";
-  const invalid = files.find(file => !allowedExtensions(destination).some(extension => file.name.toLowerCase().endsWith(extension)));
-  if (invalid) throw new Error(`${invalid.name}: ${destination} accepts ${allowedExtensions(destination).join(", ")} files.`);
+  validateDropFiles(files, destination);
   if (
     !files.length ||
     files.some((file) => !file.size || file.size > 20 * 1024 * 1024)
@@ -184,14 +183,28 @@ export async function stageUploads(
     throw new Error(parsed.error ?? "Files could not be uploaded.");
   const purpose = options.purpose ?? "chat";
   const existing = new Map(getChatState(options.sessionId).files.map(file => [file.id, file]));
-  const stagedFiles = [...new Map((parsed.files as StagedFile[]).map(file => [file.id, existing.get(file.id) ?? { ...file, purpose, passToProvider: purpose === "chat", uploadArtifactId: options.uploadArtifactId, ...(purpose === "pitchbook" || purpose === "rogo" ? { stagingStatus: "checking" as const, stagingMessage: "Checking spreadsheet..." } : {}) }])).values()];
+  const stagedFiles = [...new Map((parsed.files as StagedFile[]).map(file => {
+    const previous = existing.get(file.id);
+    const enrichment = purpose === "pitchbook" || purpose === "rogo";
+    // Successful imports can be reused; failed or unfinished uploads must be
+    // inspected again, with all subsequent status updates bound to this card.
+    const checking = enrichment && previous?.stagingStatus !== "imported";
+    const stagedFile: StagedFile = {
+      ...file, ...previous, name: file.name, purpose,
+      passToProvider: previous?.passToProvider ?? purpose === "chat",
+      uploadArtifactId: options.uploadArtifactId ?? previous?.uploadArtifactId,
+      ...(checking ? { stagingStatus: "checking", stagingMessage: "Checking spreadsheet...", hydratedScope: undefined, sourceKinds: undefined } : {}),
+    };
+    return [file.id, stagedFile] as const;
+  })).values()];
   const newFiles = stagedFiles.filter(file => !existing.has(file.id));
   const artifacts = (purpose === "chat" ? newFiles : []).map((file) =>
     saveArtifact(options.sessionId, {
       ...artifactBase(file.name), type: "file", file, importStatus: "Uploaded",
     }),
   );
-  updateChatState(options.sessionId, (state) => ({ ...state, files: [...state.files, ...newFiles] }));
+  const replacements = new Map(stagedFiles.map(file => [file.id, file]));
+  updateChatState(options.sessionId, (state) => ({ ...state, files: [...state.files.map(file => replacements.get(file.id) ?? file), ...newFiles] }));
   if (options.uploadArtifactId) {
     const upload = getChatState(options.sessionId).artifacts.find(artifact => artifact.id === options.uploadArtifactId);
     if (upload?.type === "enrichment-upload") patchArtifact(options.sessionId, upload.id, { files: [...new Map([...upload.files, ...stagedFiles].map(file => [file.id, file])).values()] });

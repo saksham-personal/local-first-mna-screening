@@ -153,8 +153,10 @@ export async function approveScreening(
   });
   return prepared;
 }
-export async function hydrateScreeningSources(sessionId: string, runId: string, files: File[]): Promise<void> {
-  await uploadEnrichmentFiles(files, runId, { sessionId });
+export async function hydrateScreeningSources(sessionId: string, runId: string, files: File[], purpose: "pitchbook" | "rogo"): Promise<void> {
+  if (purpose !== "pitchbook" && purpose !== "rogo")
+    throw new Error("Choose PitchBook data or ROGO data before importing files.");
+  await uploadEnrichmentFiles(files, runId, { sessionId, purpose });
 }
 
 export type ScreeningPromptInput = {

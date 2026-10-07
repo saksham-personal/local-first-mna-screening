@@ -4,8 +4,10 @@ import { companies } from "../src/lib/fixtures";
 import { getChatState, updateChatState } from "../src/lib/chat-store";
 import { processStagedUploads } from "../src/lib/import-pipeline";
 import { sessionStore } from "../src/lib/session-store";
-import { reportSummary, applyEnrichmentReview, type EnrichmentReport } from "../src/lib/enrichment-client";
+import { reportSummary, applyEnrichmentReview, enrichmentReviewChanges, initialReviewDecisions, mergeEnrichmentReports, requestPitchBookReview, type EnrichmentReport } from "../src/lib/enrichment-client";
 import { stageUploads } from "../src/lib/tool-client";
+import { hydrateScreeningSources } from "../src/lib/screening-client";
+import { artifactBase, saveArtifact } from "../src/lib/chat-store";
 
 test("enrichment waits for companies and replays imported files when discovery broadens the scope", async () => {
   const id = sessionStore.createSession("Import scope regression");
@@ -168,4 +170,117 @@ test("identical staged IDs do not duplicate files or reset an already imported u
     assert.equal(getChatState(id).files[0].stagingStatus, "imported");
     assert.equal(getChatState(id).files[0].hydratedScope, "saved-scope");
   } finally { globalThis.fetch = priorFetch; globalThis.FileReader = priorReader; }
+});
+
+test("deduplicated errored and stale uploads retry inspection on the current card", async () => {
+  const priorFetch = globalThis.fetch, priorReader = globalThis.FileReader;
+  class Reader {
+    result = "data:application/octet-stream;base64,c2FtZQ=="; onload: (() => void) | null = null;
+    readAsDataURL() { this.onload?.(); }
+  }
+  globalThis.FileReader = Reader as unknown as typeof FileReader;
+  try {
+    for (const status of ["error", "unrecognized", "waiting", "importing", undefined] as const) {
+      const id = sessionStore.createSession(`Retry ${status}`);
+      const old = saveArtifact(id, { ...artifactBase("Old upload"), type: "enrichment-upload", source: "rogo", files: [] });
+      const current = saveArtifact(id, { ...artifactBase("Current upload"), type: "enrichment-upload", source: "rogo", files: [] });
+      updateChatState(id, { files: [{ id: "same.xlsx", name: "Old.xlsx", kind: "xlsx", bytes: 4, purpose: "rogo", importable: true, uploadArtifactId: old.id, stagingStatus: status, stagingMessage: "Old error", hydratedScope: "stale" }] });
+      const calls: any[] = [];
+      globalThis.fetch = async (url, init) => {
+        if (url === "/api/files") return new Response(JSON.stringify({ files: [{ id: "same.xlsx", name: "Current.xlsx", kind: "xlsx", bytes: 4, importable: true, deduplicated: true }] }));
+        const request = JSON.parse(String(init?.body)); calls.push(request);
+        assert.equal(request.tool, "inspect_enrichment_files");
+        return new Response(JSON.stringify({ ok: true, result: { files: [{ file: "same.xlsx", eligible: true, sheets: [{ kind: "ROGO" }] }] } }));
+      };
+      const staged = await stageUploads([new File(["same"], "Current.xlsx")], { sessionId: id, purpose: "rogo", uploadArtifactId: current.id });
+      assert.equal(staged[0].stagingStatus, "checking");
+      assert.equal(staged[0].uploadArtifactId, current.id);
+      assert.equal(staged[0].hydratedScope, undefined);
+      await processStagedUploads(id);
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0].arguments.display_names, { "same.xlsx": "Current.xlsx" });
+      assert.equal(getChatState(id).files.length, 1);
+      const card = getChatState(id).artifacts.find(item => item.id === current.id)!;
+      assert.equal(card.type, "enrichment-upload");
+      if (card.type === "enrichment-upload") assert.equal(card.files[0].stagingStatus, "waiting");
+    }
+  } finally { globalThis.fetch = priorFetch; globalThis.FileReader = priorReader; }
+});
+
+test("Screening Setup forwards both upload purposes and rejects other sources without staging", async () => {
+  const priorFetch = globalThis.fetch, priorReader = globalThis.FileReader;
+  class Reader {
+    result = "data:application/octet-stream;base64,c2FtZQ=="; onload: (() => void) | null = null;
+    readAsDataURL() { this.onload?.(); }
+  }
+  globalThis.FileReader = Reader as unknown as typeof FileReader;
+  try {
+    for (const purpose of ["pitchbook", "rogo"] as const) {
+      const id = sessionStore.createSession(`Setup ${purpose}`);
+      updateChatState(id, { backendRunId: "run-setup" });
+      const calls: any[] = [];
+      globalThis.fetch = async (url, init) => {
+        const body = JSON.parse(String(init?.body)); calls.push({ url, body });
+        return new Response(JSON.stringify(url === "/api/files" ? { files: [{ id: "setup.xlsx", name: "Setup.xlsx", bytes: 4, kind: "xlsx", importable: true }] }
+          : { ok: true, result: { files: [{ file: "setup.xlsx", eligible: true, sheets: [{ kind: purpose === "pitchbook" ? "PB_DATA" : "ROGO" }] }] } }));
+      };
+      await hydrateScreeningSources(id, "run-setup", [new File(["same"], "Setup.xlsx")], purpose);
+      assert.equal(calls[0].body.purpose, purpose);
+      assert.equal(calls[1].body.arguments.purpose_hint, purpose);
+      assert.equal(getChatState(id).files[0].stagingStatus, "waiting");
+      const count = calls.length;
+      await assert.rejects(hydrateScreeningSources(id, "run-setup", [], "MID" as "pitchbook"), /Choose PitchBook data or ROGO data/);
+      assert.equal(calls.length, count);
+    }
+  } finally { globalThis.fetch = priorFetch; globalThis.FileReader = priorReader; }
+});
+
+test("initial review toggles preserve current hidden flags and unchanged Apply sends empty lists", () => {
+  const rows = [
+    { company_id: "matched-hidden", name: "A", website: null, considered: true },
+    { company_id: "unmatched-hidden", name: "B", website: null, considered: true },
+    { company_id: "retained", name: "C", website: null, considered: false },
+    { company_id: "report-only", name: "D", website: null, considered: false },
+  ];
+  const flags = new Map([["matched-hidden", false], ["unmatched-hidden", false], ["retained", true]]);
+  const decisions = initialReviewDecisions(rows, flags);
+  assert.deepEqual(decisions, { "matched-hidden": false, "unmatched-hidden": false, retained: true, "report-only": false });
+  assert.deepEqual(enrichmentReviewChanges(rows, decisions, flags), { hide: [], keep: [] });
+  assert.deepEqual(enrichmentReviewChanges([...rows, rows[2]], { ...decisions, retained: false, "unmatched-hidden": true }, flags), { hide: ["retained"], keep: ["unmatched-hidden"] });
+});
+
+test("multiple import batches retain every match report, sum counts and reopen the merged review", async () => {
+  const id = sessionStore.createSession("Batch reports"), prior = globalThis.fetch;
+  updateChatState(id, { backendRunId: "run-batches", companies: companies.slice(0, 1), files: Array.from({ length: 33 }, (_, index) => ({ id: `batch-${index}.xlsx`, name: `Data ${index}.xlsx`, bytes: 4, kind: "xlsx", purpose: "pitchbook" as const, stagingStatus: "waiting" as const })) });
+  const reports: EnrichmentReport[] = [1, 2].map(index => ({ report_id: `ER-${index}`, run_id: "run-batches", purpose: "pitchbook", summary: { matched_count: index, not_matched_count: index + 1 }, matched: [{ company_id: `matched-${index}`, name: `Match ${index}`, website: null, considered: true }], not_matched: [{ company_id: `unmatched-${index}`, name: `Unmatched ${index}`, website: null, considered: true, reason: "no_data_row" }] }));
+  let imports = 0;
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    const result = request.tool === "import_enrichment_files" ? { reports: [reports[imports++]] }
+      : request.tool === "get_shortlist_context" ? { total: 1, considered_count: 1, selection_revision: 0, source_hash: "stable", has_more: false, candidates: [{ company_id: companies[0].pk, considered: true }], review_columns: {}, coverage: {} }
+      : { total: 1, rows: [{ pk: companies[0].pk, PBId: null, sources: { MID: {}, ISCC: {}, PB: {}, ROGO: {} }, provenance: {} }], next_cursor: null };
+    return new Response(JSON.stringify({ ok: true, result }));
+  };
+  try {
+    await processStagedUploads(id);
+    assert.equal(imports, 2);
+    assert.equal(getChatState(id).files[0].stagingMessage, "3 companies matched; 5 companies not matched; 0 hidden by this action.");
+    const saved = sessionStore.getSnapshot().sessions.find(session => session.id === id)!.events.find(event => event.title === "Company context updated")!.result as { report: EnrichmentReport };
+    assert.deepEqual(saved.report.report_ids, ["ER-1", "ER-2"]);
+    assert.equal(saved.report.report_id, "ER-2");
+    assert.deepEqual(saved.report.matched.map(row => row.company_id), ["matched-1", "matched-2"]);
+    assert.deepEqual(saved.report.not_matched!.map(row => row.company_id), ["unmatched-1", "unmatched-2"]);
+    globalThis.fetch = async () => { assert.fail("Reopening the review must preserve the merged cached report"); };
+    await requestPitchBookReview(id);
+  } finally { globalThis.fetch = prior; }
+});
+
+test("ROGO batch reports merge unmatched samples and ambiguity without dropping earlier rows", () => {
+  const make = (index: number): EnrichmentReport => ({ report_id: `R-${index}`, run_id: "run", purpose: "rogo", summary: { matched_count: 1, unmatched_row_count: index, ambiguous_count: 1 }, matched: [{ company_id: `${index}`, name: "Match", website: null, considered: true }], unmatched_rows: { count: index, sample: [{ row: index, website: null }] }, ambiguous: [{ website: null, company_ids: [`${index}`] }] });
+  const merged = mergeEnrichmentReports(mergeEnrichmentReports(undefined, make(1)), make(2));
+  assert.equal(merged.summary.matched_count, 2);
+  assert.equal(merged.unmatched_rows!.count, 3);
+  assert.equal(merged.unmatched_rows!.sample.length, 2);
+  assert.equal(merged.ambiguous!.length, 2);
+  assert.deepEqual(merged.report_ids, ["R-1", "R-2"]);
 });

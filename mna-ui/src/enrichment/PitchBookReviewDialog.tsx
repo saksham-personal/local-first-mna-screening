@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Dialog, Tabs } from "radix-ui";
 import { Search, X } from "lucide-react";
-import { applyEnrichmentReview, type EnrichmentCompany, type EnrichmentReport } from "../lib/enrichment-client";
+import { applyEnrichmentReview, enrichmentReviewChanges, initialReviewDecisions, type EnrichmentCompany, type EnrichmentReport } from "../lib/enrichment-client";
 import { getChatState } from "../lib/chat-store";
 import "./enrichment.css";
 
@@ -15,7 +15,7 @@ export default function PitchBookReviewDialog({ sessionId, report, onClose }: { 
     return { revision: state.selectionRevision, flags: new Map(state.companies.map(company => [company.pk, company.considered !== false])) };
   });
   const all = useMemo(() => [...report.matched, ...(report.not_matched ?? [])], [report]);
-  const [decisions, setDecisions] = useState<Record<string, boolean>>(() => Object.fromEntries(all.map(company => [company.company_id, true])));
+  const [decisions, setDecisions] = useState(() => initialReviewDecisions(all, snapshot.flags));
   const [tab, setTab] = useState("matched");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -25,9 +25,9 @@ export default function PitchBookReviewDialog({ sessionId, report, onClose }: { 
   const choose = (companies: EnrichmentCompany[], retain: boolean) => setDecisions(current => ({ ...current, ...Object.fromEntries(companies.map(company => [company.company_id, retain])) }));
   const apply = async () => {
     setBusy(true); setError("");
-    const changes = all.filter(company => decisions[company.company_id] !== (snapshot.flags.get(company.company_id) ?? company.considered));
+    const changes = enrichmentReviewChanges(all, decisions, snapshot.flags);
     try {
-      await applyEnrichmentReview(sessionId, report, changes.filter(company => !decisions[company.company_id]).map(company => company.company_id), changes.filter(company => decisions[company.company_id]).map(company => company.company_id), snapshot.revision);
+      await applyEnrichmentReview(sessionId, report, changes.hide, changes.keep, snapshot.revision);
       onClose();
     } catch (caught) { setError(caught instanceof Error ? caught.message : "The review could not be applied."); }
     finally { setBusy(false); }
@@ -47,7 +47,7 @@ export default function PitchBookReviewDialog({ sessionId, report, onClose }: { 
       </Tabs.Root>
       {rows.length > 100 && <nav className="enrichment-pages" aria-label="Match pages"><button disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span>{page * 100 + 1}–{Math.min(rows.length, (page + 1) * 100)} of {rows.length}</span><button disabled={(page + 1) * 100 >= rows.length} onClick={() => setPage(page + 1)}>Next</button></nav>}
       {error && <p className="enrichment-error" role="alert">{error}</p>}
-      <footer><p>Companies are retained unless you choose Hide.</p><button disabled={busy} onClick={onClose}>Cancel</button><button disabled={busy} onClick={() => void apply()}>{busy ? "Applying…" : "Apply"}</button></footer>
+      <footer><p>Current Retain/Hide choices stay in place until you change them.</p><button disabled={busy} onClick={onClose}>Cancel</button><button disabled={busy} onClick={() => void apply()}>{busy ? "Applying…" : "Apply"}</button></footer>
     </Dialog.Content>
   </Dialog.Portal></Dialog.Root>;
 }
