@@ -28,7 +28,8 @@ import type {
   ScreeningProvider,
 } from "../lib/screening-contract";
 import { defaultScreeningConfig } from "../lib/screening-data";
-import Tooltip from "../Tooltip";
+import HelpTip from "../ui/HelpTip";
+import { plural } from "../lib/format";
 import ColumnChips from "./ColumnChips";
 import "./screening-setup.css";
 
@@ -361,8 +362,7 @@ export default function ScreeningSetup({
               <span className="ss-eyebrow">Prepare {providerLabel}</span>
               <Dialog.Title id={headingId}>Screening setup</Dialog.Title>
               <Dialog.Description>
-                Choose the columns and instructions, then review a real data
-                preview before saving.
+                Choose columns, edit the prompt, and review real rows.
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>
@@ -382,19 +382,19 @@ export default function ScreeningSetup({
               <div className="ss-section-top">
                 <div>
                   <span className="ss-step">01</span>
-                  <h3>Data in, results out</h3>
+                  <h3>Inputs and outputs</h3>
                 </div>
                 <span className="ss-muted">
-                  {catalog.total.toLocaleString()} companies
+                  {plural(catalog.total, "company", "companies")}
                 </span>
               </div>
               <div className="ss-field">
-                <span>Input columns</span>
+                <span>Input columns <HelpTip label="About input columns">The index is always included; missing source values stay blank.</HelpTip></span>
                 <div className="ss-chips">
                   {config.inputColumns.map((column) => (
                     <span className="ss-chip" key={column}>
                       {column}
-                      {column === "LinkedIn URL" && keepLinkedIn && <Tooltip label="LinkedIn input">M365 Copilot uses the LinkedIn company page supplied by PitchBook when it is available.</Tooltip>}
+                      {column === "LinkedIn URL" && keepLinkedIn && <HelpTip label="LinkedIn input" size="sm">M365 screening uses the company's PitchBook LinkedIn URL when available.</HelpTip>}
                       {column !== "index" && !(column === "LinkedIn URL" && keepLinkedIn) && (
                         <button
                           type="button"
@@ -414,15 +414,11 @@ export default function ScreeningSetup({
                     <Plus size={14} /> Add sources
                   </button>
                 </div>
-                <small>
-                  index stays pinned. Missing source values remain blank for a
-                  company.
-                </small>
               </div>
               <div className="ss-field">
                 <span>Output columns</span>
                 <ColumnChips label="Output columns" values={config.outputColumns.filter((column) => column !== "index")} pinned="index" placeholder="Add a column…" onChange={changeOutput} />
-                <small>Type a column and press Enter or comma. index stays pinned.</small>
+                <small>Press Enter or comma to add a column. The index is always included.</small>
               </div>
             </section>
 
@@ -430,7 +426,7 @@ export default function ScreeningSetup({
               <div className="ss-section-top">
                 <div>
                   <span className="ss-step">02</span>
-                  <h3>Instructions and capacity</h3>
+                  <h3>Prompt and batch size</h3>
                 </div>
               </div>
               <div className="ss-two-fields">
@@ -446,9 +442,10 @@ export default function ScreeningSetup({
                     autoComplete="off"
                   />
                 </div>
-                <label className="ss-field">
-                  <span>Companies per batch</span>
+                <div className="ss-field">
+                  <span><label htmlFor="ss-batch-size">Companies per batch</label> <HelpTip label="About batch timing">LLM Suite allows up to seven sends per minute. Provider response times can add delays.</HelpTip></span>
                   <input
+                    id="ss-batch-size"
                     type="number"
                     min={1}
                     max={200}
@@ -458,14 +455,14 @@ export default function ScreeningSetup({
                       edit({ ...config, batchSize: Number(event.target.value) })
                     }
                   />
-                </label>
+                </div>
               </div>
               <label className="ss-field">
                 <span>
                   Prompt{" "}
-                  <Tooltip label="About the prompt">
-                    This editable instruction guides the screening run. Local suggestions are templates, not AI-generated text.
-                  </Tooltip>
+                  <HelpTip label="About the prompt">
+                    This instruction guides screening. Local suggestions are templates, not AI-generated text.
+                  </HelpTip>
                 </span>
                 <div className="ss-prompt-wrap">
                   <textarea
@@ -504,14 +501,12 @@ export default function ScreeningSetup({
               )}
               {provider === "llm_suite" && (
                 <p className="ss-timing">
-                  {catalog.total.toLocaleString()} companies ·{" "}
-                  {batches.toLocaleString()}{" "}
-                  {batches === 1 ? "batch" : "batches"}, up to{" "}
-                  {config.batchSize} each.
+                  {plural(catalog.total, "company", "companies")} ·{" "}
+                  {plural(batches, "batch", "batches")}, up to{" "}
+                  {plural(config.batchSize, "company", "companies")} each.
                   {minimumMinutes > 0
-                    ? ` The rate limit alone adds at least ${minimumMinutes.toLocaleString()} min.`
-                    : " This fits within one rate window if capacity is free."}{" "}
-                  Shared rate limits and provider response time can add delays.
+                    ? ` The rate limit adds at least ${plural(minimumMinutes, "minute", "minutes")}.`
+                    : " This fits one rate window if capacity is free."}
                 </p>
               )}
             </section>
@@ -548,13 +543,12 @@ export default function ScreeningSetup({
                     </span>
                     <span>
                       {validPreview.companyCount
-                        ? `${validPreview.companyCount.toLocaleString()} companies`
+                        ? plural(validPreview.companyCount, "company", "companies")
                         : "General question"}{" "}
-                      · {validPreview.batches.toLocaleString()}{" "}
-                      {validPreview.batches === 1 ? "batch" : "batches"}
+                      · {plural(validPreview.batches, "batch", "batches")}
                       {provider === "llm_suite" &&
                         validPreview.estimatedMinimumMinutes > 0 &&
-                        ` · request time at least ${validPreview.estimatedMinimumMinutes.toLocaleString()} min`}
+                        ` · request time at least ${plural(validPreview.estimatedMinimumMinutes, "minute", "minutes")}`}
                     </span>
                   </div>
                   {validPreview.warnings.filter((warning) => !(/\b(?:PBId|LinkedIn)\b.*\b(?:blank|missing|empty|unavailable)\b|\b(?:blank|missing|empty|unavailable)\b.*\b(?:PBId|LinkedIn)\b/i.test(warning))).map((warning, index) => (
@@ -606,7 +600,7 @@ export default function ScreeningSetup({
 
           <footer className="ss-footer">
             <p>
-              Approval saves this snapshot. Provider status and progress appear in Background screening.
+              Approval saves this setup; provider status appears in Background screening.
             </p>
             <div>
               <button
@@ -652,7 +646,7 @@ export default function ScreeningSetup({
                   <div>
                     <Dialog.Title>Add source fields</Dialog.Title>
                     <Dialog.Description id="ss-picker-description">
-                      Choose extra columns and sources for company details.
+                      Select extra fields for screening.
                     </Dialog.Description>
                   </div>
                   <Dialog.Close asChild>
@@ -691,8 +685,8 @@ export default function ScreeningSetup({
                         {source === "RESULTS" ? "Saved results" : source === "BING" ? "Bing research" : source}
                         <small>
                           {item?.hydrated
-                            ? `${item.companyCount.toLocaleString()} ${item.companyCount === 1 ? "company" : "companies"}`
-                            : "Not populated"}
+                            ? plural(item.companyCount, "company", "companies")
+                            : "No data"}
                         </small>
                       </button>
                     );
@@ -703,8 +697,8 @@ export default function ScreeningSetup({
                     <strong>{selectedSource?.label ?? pickerSource}</strong>
                     <span>
                       {selectedSource?.hydrated
-                        ? `${selectedSource.companyCount.toLocaleString()} ${selectedSource.companyCount === 1 ? "company" : "companies"} available`
-                        : "Source data has not been populated"}
+                        ? `${plural(selectedSource.companyCount, "company", "companies")} available`
+                        : "No saved data for this source"}
                     </span>
                   </div>
                   {(selectedSource?.fields.length ?? 0) > 0 ? (
@@ -721,8 +715,7 @@ export default function ScreeningSetup({
                             <span className="ss-option-copy">
                               <strong>{field.label}</strong>
                               <small>
-                                {field.id} · {field.count.toLocaleString()}{" "}
-                                populated
+                                {field.id} · {plural(field.count, "value", "values")}
                                 {field.example
                                   ? ` · e.g. ${field.example}`
                                   : ""}
@@ -738,13 +731,7 @@ export default function ScreeningSetup({
                     </p>
                   )}
                   <fieldset className="ss-fieldset">
-                    <legend>Company detail sources</legend>
-                    <p>
-                      Name and website use the first available value from PB →
-                      MID → ISCC. Description combines the selected sources in
-                      that order, with a label for each. Missing values stay
-                      blank.
-                    </p>
+                    <legend>Company details <HelpTip label="How company details are built">Name and website use the first available PB, MID, then ISCC value. Descriptions combine selected sources in that order and label each source.</HelpTip></legend>
                     <div className="ss-identity-grid">
                       {IDENTITY_LABELS.map(({ key, label }) => (
                         <div key={key}>
@@ -773,12 +760,9 @@ export default function ScreeningSetup({
                       aria-label={`${pickerSource} upload`}
                     >
                       <h3>
-                        <FileSpreadsheet size={17} /> Populate {pickerSource}
+                        <FileSpreadsheet size={17} /> Add {pickerSource === "PB" ? "PitchBook data" : "ROGO data"}
                       </h3>
-                      <p>
-                        Choose local CSV or XLSX files. They are uploaded only
-                        after you select “Upload and populate.”
-                      </p>
+                      <p>Select CSV or XLSX files, then upload them to add data.</p>
                       <div
                         className="ss-drop"
                         data-file-drop-zone="true"
@@ -813,8 +797,7 @@ export default function ScreeningSetup({
                         <div className="ss-pending">
                           <div>
                             <strong>
-                              {pendingFiles.length} file
-                              {pendingFiles.length === 1 ? "" : "s"} pending
+                              {plural(pendingFiles.length, "file", "files")} pending
                             </strong>
                             <button
                               type="button"
@@ -841,7 +824,7 @@ export default function ScreeningSetup({
                                 Uploading…
                               </>
                             ) : (
-                              "Upload and populate"
+                              "Upload and add data"
                             )}
                           </button>
                         </div>
@@ -860,7 +843,7 @@ export default function ScreeningSetup({
                   )}
                 </div>
                 <footer className="ss-picker-footer">
-                  <span>{config.inputColumns.length} inputs selected</span>
+                  <span>{plural(config.inputColumns.length, "input", "inputs")} selected</span>
                   <Dialog.Close asChild>
                     <button
                       type="button"

@@ -3,12 +3,11 @@ import assert from "node:assert/strict";
 import { createFileAdapter } from "../src/lib/chat-driver";
 import { attachmentError } from "../src/lib/attachment-policy";
 import { getChatState } from "../src/lib/chat-store";
-import { productCopy } from "../src/lib/product-copy";
 import { sessionStore } from "../src/lib/session-store";
 
 test("picked and dropped files use the same supported extensions and size boundary", () => {
   for (const name of [
-    "DDI.PDF",
+    "Intake Form.pdf",
     "criteria.docx",
     "brief.txt",
     "mapping.csv",
@@ -58,18 +57,5 @@ test("unsupported file drops are rejected by the adapter before staging", async 
   await assert.rejects(
     async () => adapter.add({ file: new File(["content"], "file.zip") }),
     /use a PDF/,
-  );
-});
-
-test("historical assistant copy uses product terms while preserving business words", () => {
-  assert.equal(
-    productCopy(
-      "This example uses real Rust tools. Rust checkpoints remain saved.",
-    ),
-    "This example uses working tools. saved checkpoints remain saved.",
-  );
-  assert.equal(
-    productCopy("Trusted firms support industrial rust prevention."),
-    "Trusted firms support industrial rust prevention.",
   );
 });

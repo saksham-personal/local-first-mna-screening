@@ -27,7 +27,7 @@ Your intended lead orchestrator is **LLM Suite**. Its subagents also use LLM Sui
 | Reranking | Replaceable contract implemented; production model not selected |
 | Live ISCC, LLM Suite, M365, and Bing | Transport boundaries exist; corporate connections are unconfigured and unverified |
 | PDF/DOCX attachment text for direct questions | Bounded extraction implemented in the bridge |
-| PDF/DOCX DDI-to-criteria extraction | Not connected; uploading or previewing a DDI does not prove its criteria were extracted |
+| Intake Form PDF pre-fill | PDF opens and label matches pre-fill fields; check each field. Full parsing is deferred. |
 | Python LangGraph | Tested offline scaffold; not wired to the running UI/bridge/Rust service |
 
 The intended flow below describes connected operation. A disconnected operation must remain visibly unexecuted. A prepared or approved job is not a completed model assessment.
@@ -36,7 +36,7 @@ The intended flow below describes connected operation. A disconnected operation 
 
 ~~~mermaid
 flowchart TD
-    A[Name screening and provide criteria or DDI] --> B[Draft core-business criteria]
+    A[Name screening and provide criteria or Intake Form] --> B[Draft core-business criteria]
     B --> C[Review business criteria]
     C --> D{Accept business interpretation?}
     D -- Revise --> B
@@ -62,7 +62,7 @@ flowchart TD
 
 ### Step 1 — Start and name the screening
 
-**Analyst:** Click New screening, enter a useful name, and either describe the business or attach the DDI. Example: “Find companies that sell policy administration and claims-management software to insurers.”
+**Analyst:** Click New screening, enter a name, and describe the business or attach an Intake Form. Example: “Find companies that sell policy administration and claims-management software to insurers.”
 
 **Application:** Create a run that owns the criteria history, candidate membership, approvals, research, and assessments. Stage attached files with their purpose. Keep the original supplied material available for audit.
 
@@ -189,7 +189,7 @@ These are different actions:
 
 | Direct question | Scored/company-table screening |
 |---|---|
-| Select Ask LLM Suite or Ask M365 Copilot and write the question | Choose screening and review its setup |
+| Choose LLM Suite or M365 Copilot for a direct question | Choose screening and review its setup |
 | No screening setup modal | Inputs, prompt, outputs, model, and batch size are reviewable |
 | Answer shown in chat | Results join back to individual companies |
 | No automatic fit score or shortlist change | Declared score columns accept 0–10 or CHECK |

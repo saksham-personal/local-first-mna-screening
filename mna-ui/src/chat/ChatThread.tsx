@@ -115,8 +115,7 @@ function ArtifactPart({ data }: { data: unknown }) {
     <ArtifactCard artifact={artifact} onAction={scope.onAction} context={state} />
   ) : (
     <p className="ct-missing-artifact">
-      This artifact is no longer available. The session log retains its original
-      record.
+      This item is no longer available. The session log keeps the original entry.
     </p>
   );
 }

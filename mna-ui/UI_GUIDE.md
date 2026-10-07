@@ -6,7 +6,7 @@ Use **Screen** in the header and choose LLM Suite or M365 Copilot screening. The
 
 Review the input chips. **index** stays pinned. Use **Add sources** to inspect MID, current-screening ISCC, PitchBook, and ROGO columns with actual coverage counts and examples. Name and website independently prefer usable PB, MID, then ISCC values. Description combines the selected source descriptions with labels. Source-specific fields stay blank for companies without that source. LinkedIn is optional and comes from genuine PB data.
 
-Upload mapping CSVs and PitchBook workbooks, or ROGO files, directly inside the source picker. File names do not determine their role. **Upload and populate** imports the pending files, reports matching counts in chat, and refreshes the picker. Uploads invalidate the previous preview.
+Upload mapping CSVs and PitchBook workbooks, or ROGO files, directly inside the source picker. File names do not determine their role. **Upload and add data** imports the pending files, reports matching counts in chat, and refreshes the picker. Uploads invalidate the previous preview.
 
 Edit the requested output columns, prompt, deployment, and batch size. Suggestions currently use a local template; the deployment remains an editable field because model names will be supplied later. **Generate preview** shows real projected values. **Approve and save setup** approves the exact backend digest and stores frozen inputs, the index-to-company mapping and durable jobs, adds a chat artifact, and records tool calls in Session log. Editing any setting requires a new preview. Use **Edit a new version** on a saved card to prepare another setup.
 

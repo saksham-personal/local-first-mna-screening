@@ -23,6 +23,7 @@ import {
   MessageSquare,
   UploadCloud,
 } from "lucide-react";
+import HelpTip from "./ui/HelpTip";
 import Skeleton from "./ui/Skeleton";
 import ArtifactCard from "./chat/ArtifactCard";
 import type {
@@ -46,6 +47,7 @@ import {
 } from "./lib/grid-client";
 import type { DataGridProps } from "./grid/DataGrid";
 import { companyColumns } from "./workspace/company-columns";
+import { plural } from "./lib/format";
 import "./workspace/workspace.css";
 import FilesTab from "./workspace/FilesTab";
 import { processStagedUploads } from "./lib/import-pipeline";
@@ -84,15 +86,17 @@ function StatCard({
   value,
   tone,
   detail,
+  help,
 }: {
   label: string;
   value: number | string;
   tone: "accent" | "success" | "info" | "warning";
   detail: string;
+  help?: string;
 }) {
   return (
     <article className={`ws-stat ws-stat-${tone}`}>
-      <span>{label}</span>
+      <span>{label}{help && <HelpTip label={`About ${label.toLowerCase()}`}>{help}</HelpTip>}</span>
       <strong>{value}</strong>
       <small>{detail}</small>
     </article>
@@ -125,13 +129,13 @@ function WorkspaceStatus({
       label: "Company search",
       detail:
         job?.state === "running"
-          ? "Running local tools"
+          ? "Searching"
           : job?.state === "error"
             ? "Failed — see the chat for details"
             : job?.state === "cancelled"
-              ? "Stopped — completed work is saved"
+              ? "Stopped; completed work is saved"
               : searched
-                ? `${state.companies.length} companies saved`
+                ? `${plural(state.companies.length, "company", "companies")} saved`
                 : "Not started",
       done: searched,
       active: job?.state === "running" || (isApproved && !job && !searched),
@@ -222,11 +226,8 @@ function Overview({
           label="Shortlist"
           value={total}
           tone="accent"
-          detail={
-            total
-              ? "Companies currently under consideration"
-              : "Run search after approval"
-          }
+          detail={total ? "Currently considered" : "Search after approval"}
+          help="Considered companies stay in the active working set. Hidden companies remain saved and can be restored."
         />
         <StatCard
           label="MID only"
@@ -343,11 +344,8 @@ function Overview({
       {!state.criteriaText && (
         <section className="ws-starter">
           <div>
-            <h2>See the full workflow with fictional data</h2>
-            <p>
-              The example uses the local tools and waits for your approval
-              before discovery.
-            </p>
+            <h2>Try a screening with fictional data</h2>
+            <p>Review and approve the criteria before discovery.</p>
           </div>
           <button
             type="button"
@@ -477,7 +475,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
             {loading && !gridData ? "Loading companies…" : <><strong>{(gridData?.consideredCount ?? 0).toLocaleString()}</strong> considered · <strong>{(gridData?.hiddenCount ?? 0).toLocaleString()}</strong> hidden</>}
           </span>
           <span>
-            MID and ISCC scores use different methods and stay separate.
+            Source scores <HelpTip label="About source scores">MID and ISCC scores use different retrieval methods and stay separate from each other and from screening scores.</HelpTip>
           </span>
         </div>
         {gridError && <p className="ws-grid-error" role="alert">{gridError}</p>}
