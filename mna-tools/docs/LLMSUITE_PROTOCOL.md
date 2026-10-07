@@ -7,11 +7,20 @@ The controller sends the model the tools allowed for the current turn and their 
 ```text
 BEGIN TOOL v1 search_mid
 run_id:text = "run-42"
-query:text = "industrial pump manufacturers"
-mode:text = "hybrid"
-limit:number = 1000
+rationale:text = "Find businesses that own industrial pump products"
+keywords[0].id:text = "pumps"
+keywords[0].text:text = "industrial pumps"
+keywords[0].weight:number = 2
+keywords[0].match:text = "stem"
+keywords[1].id:text = "maker"
+keywords[1].text:text = "pump manufacturer"
+keywords[1].match:text = "exact"
+expression:text = "pumps OR maker"
+limit:number = 5000
 END TOOL
 ```
+
+This `search_mid` v2 form saves the rationale and display query. Match % is the weight of matched positive keywords divided by all positive weights. `AND`, `OR`, parentheses and `AND NOT` combine keyword IDs; a negative term must match an approved core-business exclusion. The older `query`/`mode` form remains valid with its 1,000-result limit. `score_mid_semantic` takes `run_id`; `search_mid_semantic` also takes `rationale` and `min_score` from 0 to 10. Semantic calls report `skipped` when the configured model or active vectors are unavailable.
 
 The controller passes the exact allowed tool names to `parse_tool_response`. The parser returns a typed object for the internal runtime. The model never emits a JSON tool call. The runtime validates each tool's argument schema, authorization and run scope before execution. An empty argument object is represented by a header immediately followed by `END TOOL`. The live `/agent/tools` catalog gives plain-language guidance; `/agent/commands` validates the response, performs the tool and caches its outcome under the request/attempt key. It excludes analyst labels and legacy result-saving handoffs from the model allowlist. A crashed PENDING command is held for operator reconciliation, not silently replayed.
 

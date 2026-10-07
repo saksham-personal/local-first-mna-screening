@@ -2649,6 +2649,11 @@
             "null"
           ]
         },
+        "include_company_payload": {
+          "default": false,
+          "description": "Include larger bridge-only fields needed to construct Company records.",
+          "type": "boolean"
+        },
         "include_hidden": {
           "default": true,
           "description": "Include companies hidden by review (default true). Hidden rows carry considered=false.",

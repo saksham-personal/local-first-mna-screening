@@ -11,7 +11,7 @@ records, and an offline orchestration scaffold.
   iterative screening, export, and session history.
 - **`mna-tools/`** — Rust service for company data, retrieval, evidence,
   imports, exports, criteria and shortlist versions, prepared plans, durable
-  jobs, and a provider-text gateway. Its catalog has 70 agent tools and 24
+  jobs, and a provider-text gateway. Its catalog has 76 agent tools and 28
   privileged operations.
 - **`mna-orchestrator/`** — Python and LangGraph scaffold for future workflow
   orchestration. Its external ports are disabled and it is not connected to
@@ -69,6 +69,8 @@ instructions in `mna-orchestrator/README.md`.
 
 ## Screening policy
 
+The UI can **Build Index** from a staged MID workbook using `mna-tools/config/mid-index.json`. MID keyword discovery records a rationale and weighted Match %; configured semantic embeddings add a separate 0–10 score, while ISCC relevancy stays on its 0–1 scale. Approved LLM Suite and M365 scored plans are shown as separate rounds. The workspace provides All/MID/ISCC views, score histograms and filters, and the analyst can hide or restore companies between hydration and screening passes. `SCREENING_SIMULATE=1` enables labelled deterministic provider output for development; exports reject simulated rows unless explicitly allowed and labelled. Large 150,000-row performance, real embedding inference and live corporate connections are unverified.
+
 Discovery focuses on a company's core business. Geography, financial size,
 ownership, and industry classifications remain available as review details
 and do not narrow discovery. MID and ISCC scores use different methods and
@@ -77,10 +79,11 @@ their own provenance. Research leads remain unverified until analyst review.
 
 ## Validation
 
-The latest local release checks passed: 120 Rust tests, strict Clippy, release
+The prior local release checks passed: 120 Rust tests, strict Clippy, release
 build, 119 UI tests, and UI build. An eight-row fictional MID smoke covered
 database restart, criteria lineage, PitchBook hide/restore, three XLSX export
 types, and prepared `executed:false` runs. It did not call a corporate provider.
+Those results predate Phase 2; they do not validate the new large MID index path.
 
 ## Data and credentials
 

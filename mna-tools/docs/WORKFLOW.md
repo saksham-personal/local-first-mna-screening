@@ -14,7 +14,8 @@ flowchart TD
     C -- Yes --> E[Add good-fit and bad-fit examples or skip]
     E --> F{Approve final criteria revision?}
     F -- Edit --> B
-    F -- Yes --> G[Search MID and configured ISCC]
+    F -- Yes --> X[Build or select MID index]
+    X --> G[Search MID and configured ISCC]
     G --> H[Review all saved companies and considered count]
     H -- Broaden --> G
     H --> I[Choose company enrichment or research and screening]
@@ -30,6 +31,18 @@ flowchart TD
 
 The analyst can return to criteria from any later point. Each edit is saved as a new database revision. The last revision needs its own approval. An old approval or prepared execution plan cannot authorize work for changed criteria; prepare and approve affected work again. Saved companies, source observations, hidden flags, and historical results remain available for review.
 
+## Build Index and Phase 2 discovery
+
+The **Build Index** button opens a MID workbook window. Its validated column mapping is `mna-tools/config/mid-index.json`. The durable build reports eight steps: read workbook, check columns, match company IDs, store rows, build keyword index, semantic embeddings, verify, and activate. Builds can be cancelled; a ready or superseded bundle can be activated later. A previous bundle remains available for rollback. The semantic step says **skipped** when `MNA_EMBED_ENDPOINT` is not configured. Neither 150,000-row performance nor a real embedding model has been verified.
+
+For broad MID discovery, turn the approved core business into weighted keyword groups and save a rationale. `search_mid` v2 accepts stem or exact terms and a Boolean expression using `AND`, `OR`, parentheses and `AND NOT`. A negative term must come from approved core-business exclusions. Match % is the weight of matched positive terms divided by all positive term weights. Aim for a reviewable broad funnel of roughly 4,000–5,000 companies where the source population supports it; that is an analyst target, not an automatic count or verified recall result. The legacy `query` form remains available. With a configured and ready vector index, `score_mid_semantic` adds a separate 0–10 score and `search_mid_semantic` can add semantic matches. Without it, semantic scoring reports **skipped**.
+
+ISCC supplies a separate **Relevancy Score** from 0 to 1. Exact ECID/ECI identifiers bridge first, then CID/Crescendo ID; Crescendo ID is the CID alias. The All, MID and ISCC company tabs show source coverage without combining retrieval scores. The grid keeps MID keyword Match %, MID semantic score, ISCC relevancy and each screening round in distinct fields.
+
+Approved LLM Suite or M365 Copilot scored plans are numbered R1, R2 and so on. Each round remains tied to its plan and provider; approval alone does not mean the provider ran. The grid and Overview show saved results by round. Score filters offer numeric ranges and buckets, with `CHECK` last and included by default until the analyst deselects it. Histograms show score distributions and let the analyst select buckets. Review the scores, hide weak rows, restore mistakes, hydrate with PitchBook, ROGO or Bing, then screen and filter again. Only considered companies enter the next scope and export.
+
+`SCREENING_SIMULATE=1` is a development mode. It supplies deterministic simulated ISCC rows, LLM Suite/M365 tables and Bing leads instead of corporate calls. Rows and the UI carry **Simulated** labels. Export refuses simulated rows unless `allow_simulated` is passed to the export tool, in which case the workbook is marked. This mode is not evidence that live providers or embedding models have been verified.
+
 ## 1. Review and approve criteria
 
 Enter a core-business description or attach an Intake Form. A PDF opens and pre-fills fields by simple label match; check each field. Full parsing is deferred. Local UTF-8 TXT can supply a draft. Keep revenue, size, geography, ownership, and industry codes visible as later review conditions. Do not use them to narrow the first discovery search. Only analyst-approved core-business exclusions may narrow it.
@@ -40,11 +53,11 @@ First review the business criteria. Then enter optional good-fit and bad-fit exa
 
 Search products, services, descriptions, and customer problems in MID. Search ISCC only when its corporate gateway is configured. MID lexical search works locally; semantic and hybrid retrieval need current compatible embeddings. The replaceable Arctic M v2 INT8 adapter specifies 768 dimensions, but real model assets and corpus recall remain unverified. A pluggable reranker has no selected production model. Its contract accepts up to 1,000 results from one source/query group, reranks the first 500, and preserves the remaining tail. These per-query limits do not cap a run's total companies.
 
-ISCC queries use no more than 14 qualitative words, normally 10–12, with at most five distinct variants in an approved plan. Each MID or ISCC query returns at most 1,000 results per call. Page or vary queries to widen coverage. ISCC relevance samples can guide breadth; a score such as 0.45 is not a fit cutoff. Keep MID and ISCC scores, query IDs, rank, and provenance separate. Never average retrieval scores into a screening fit score.
+ISCC queries use no more than 14 qualitative words, normally 10–12, with at most five distinct variants in an approved plan. Legacy MID and ISCC queries return at most 1,000 per call; MID keyword v2 defaults to 5,000 and allows up to 20,000. Page or vary queries to widen coverage. ISCC relevance samples can guide breadth; a score such as 0.45 is not a fit cutoff. Keep MID and ISCC scores, query IDs, rank, and provenance separate. Never average retrieval scores into a screening fit score.
 
 Normalize ECID and CID into a stable company ID. An exact identifier bridge may promote an alias; a similar name or website alone cannot merge companies. Add candidate observations without replacing earlier rows. `get_discovery_summary` counts **considered** candidates by MID-only, ISCC-only, both, and other source. The saved history also reports hidden candidates. A repeat search adds new candidates to the approved run and retains earlier company data and manual hide decisions. The UI pages the complete saved list, including hidden rows, for history.
 
-The local example imports fictional MID data into the criteria run. It does not simulate ISCC or provider research. A larger run can contain more than 1,000 saved candidates; the UI reads the saved shortlist in pages and checks the selection fingerprint between pages.
+The default local example imports fictional MID data and does not simulate ISCC or provider research. Development simulation is enabled only with `SCREENING_SIMULATE=1`. A larger run can contain more than 1,000 saved candidates; the UI reads the saved shortlist in pages and checks the selection fingerprint between pages.
 
 ## 3. Review companies and choose the next step
 

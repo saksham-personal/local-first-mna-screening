@@ -15,10 +15,18 @@ tool("search_companies", "Discover businesses across the canonical imported comp
      "Search core-business descriptions, products, services and concepts. Modes are lexical, semantic and hybrid. Semantic and hybrid modes use the configured local embedder when no caller vector is supplied: Rust prefixes the query with `query: `, validates the selected model identity, and retrieves matching company vectors keyed by model/version/text hash from SQLite. Rebuild the index after changing model identity. Caller-supplied and legacy vectors are explicitly unverified and not Arctic-compatible. Financial, geography, employee-size, ownership and source industry-classification fields are recorded but never filter discovery; only company_ids and approved core_business_exclusions may narrow it. Query tokens NOT, EXCLUDE and minus-prefixed terms are rejected, including when grouped in parentheses; use only approved exclude_keywords. limit defaults to 1,000 and maxes at 1,000; offset is bounded to 1,000,000. A configured Meilisearch projection may supply lexical retrieval; it does not establish verified fit.",
      "A bounded results page with company records, ranks, available lexical/semantic scores, total, query_id, search_scope, and ignored_search_filters. Saves query history and an operation_receipt_id; does not add candidates.",
      {"run_id":R,"query":"insurance AND (claims OR policy)","mode":"lexical","limit":1000,"prefer_meilisearch":False})
-tool("search_mid", "Search only the MID population through the same qualitative search interface.",
-     "Use this as the main MID discovery abstraction. It composes qualitative core-business retrieval, canonical identity and query provenance. Its arguments and limits match search_companies. A configured local embedder prefixes generated query text with `query: `; caller-supplied vectors remain explicitly unverified. Non-core filters never narrow discovery. ISCC-only records are excluded. Requires run_id and approved criteria. MID and ISCC searches can be run independently, then selected IDs added with add_candidates.",
-     "The same result envelope as search_companies, with MID discovery provenance and a successful-operation receipt. Canonical descriptions remain source data rather than verified fit judgments.",
-     {"run_id":R,"query":"policy administration software for insurance carriers","mode":"hybrid","limit":1000,"prefer_meilisearch":False})
+tool("search_mid", "Search the active MID bundle by approved core-business keywords.",
+     "The v2 form requires run_id, a rationale of at most 300 characters and 1–50 keywords with distinct ids, text, optional weight (0.1–10) and stem or exact matching. An optional Boolean expression combines keyword ids with AND, OR, parentheses and AND NOT; omitted expression means OR of all ids. Standalone NOT is rejected and a negative keyword must match an approved core-business exclusion. Non-core review details never narrow discovery. Match % is the matched positive keyword weights divided by all positive keyword weights; negative terms do not count. The active index is required. limit defaults to 5,000 and maxes at 20,000; add_to_run defaults to true. The legacy query/mode form remains available with its prior 1,000-result limit and behavior.",
+     "V2 returns ranked results with matched keywords, hit count, Match %, query_id and a persisted rationale and display query. It can add matches to the run. The legacy form returns its original search envelope. Neither result is a verified fit judgment.",
+     {"run_id":R,"rationale":"Owned insurer workflow software","keywords":[{"id":"policy","text":"policy administration","weight":2,"match":"stem"},{"id":"claims","text":"claims workflow","weight":1,"match":"exact"}],"expression":"policy OR claims","limit":5000})
+tool("score_mid_semantic", "Score current MID candidates against approved criteria.",
+     "Requires an active MID bundle with ready vectors and a configured embedding endpoint. Embeds the approved business definition with `query: `, compares fresh vectors by cosine, and stores a score from 0 to 10 for the current criteria revision. Missing or incompatible vectors are counted. When the index or model is unavailable, returns status skipped with a reason instead of inventing scores.",
+     "Status scored, scored and missing_vector counts, criteria_revision and model when run; otherwise status skipped and reason. Scores are separate from MID keyword, ISCC and provider scores.",
+     {"run_id":R})
+tool("search_mid_semantic", "Add MID companies by semantic score when vectors are ready.",
+     "Requires approved criteria, an active bundle, ready compatible vectors, a rationale up to 300 characters and min_score from 0 to 10. Embeds the criteria with `query: ` and ranks the active MID bundle; limit defaults to 1,000 and maxes at 5,000. add_to_run defaults to true. Without a ready model/index it returns skipped with a reason.",
+     "Status, considered and returned counts, results with 0–10 scores, missing-vector count and query_id when run. Matching scores are saved for the criteria revision; selected companies can be added to the run.",
+     {"run_id":R,"rationale":"Find additional owned insurance software vendors","min_score":7,"limit":1000})
 tool("find_company", "Resolve a known external identifier or locate an analyst-mentioned example.",
      "Provide exactly one selector: company_id, ecid, cid, pbid, name, website, or linkedin_url. ECID/CID/PBId selectors resolve cross-references exactly; company_id also accepts an old key alias or a typed identifier such as CID:101. Name and website searches are bounded text lookups and can return several possibilities. They do not merge entities. This lookup is available during criteria clarification before profile approval. Supply run_id to retain the lookup in that run's history. limit defaults to 10, maximum 100.",
      "results, exact-match flags, total and query_id. An identifier that cannot be resolved is NOT_FOUND. A name match is a lead that needs identity confirmation.",
@@ -39,6 +47,18 @@ tool("get_company_identifiers", "Inspect all exact cross-references for a compan
      "Use this after source deduplication, provisional-key promotion or PitchBook mapping. The identity model stores PK aliases plus normalized ECID, CID and PBID entries. A pair such as 100-101 can still resolve through an earlier X-101 alias. Original spelling and placeholder values remain in source rows. Website/name matching never creates an identifier bridge.",
      "The resolved company_id and registered identifier records, including historical PK aliases. Read-only apart from the common audit record.",
      {"company_id":"CID:101"})
+tool("get_mid_index_status", "Inspect the active MID index and current build.",
+     "Loads and validates the MID index configuration, then reads the active bundle and any queued or running build. It does not start a build or change the active bundle.",
+     "Active bundle metadata or null, running_build or null, and configured search/description/FTS columns, source weights and identifier aliases.",
+     {})
+tool("get_index_build", "Inspect one durable MID index build.",
+     "Supply its build_id. Read the current step, eight step records, progress, log, timestamps, cancellation flag, error and associated bundle. A missing ID returns NOT_FOUND.",
+     "Build and bundle state; read-only.",
+     {"build_id":"BUILD-returned-id"})
+tool("list_index_builds", "List recent MID index builds and bundles.",
+     "Reads newest builds and bundles, each bounded by limit (default 20, maximum 50). Includes completed, failed and superseded history for review.",
+     "builds with progress and log plus compact bundles with status, counts and semantic state; read-only.",
+     {"limit":20})
 tool("get_source_rows", "Inspect a bounded selection of original MID or ISCC observations.",
      "Optionally restrict source to MID or ISCC. limit defaults to 20, maximum 200. This explicit source-inspection tool is global and can show observations from several runs; each row carries its run/query scope. Use Full Export when the selected run's source subset must be enforced. The rows preserve original column names and values and are useful for resolving contradictory descriptions or IDs.",
      "company_id plus original source row records, source, run_scope, query_id, relevance score and import provenance. It does not flatten multiple observations into one value.",
@@ -201,7 +221,7 @@ tool("import_enrichment_files", "Classify and join a mixed analyst upload into c
      "Mapping/PB/ROGO row counts, mapping_unique_companies, pb_unique_companies, rogo_unique_companies, hydration/unmatched counts, quarantined count, Parquet paths and operation_receipt_id. pbid_populated counts newly added IDs, so an identical re-upload returns zero there. Hydrated row counts can exceed unique company coverage. Enrichment is global company data; run-specific claims and scores remain separately scoped.",
      {"run_id":R,"files":["pitchbook-mapping.csv","pitchbook-data.xlsx","rogo.xlsx"],"exclude_unmapped":True})
 tool("export_candidate_set", "Create one of the analyst's three exact workbook formats.",
-     "export_type is PITCHBOOK, LLM or FULL (case-insensitive). Exports considered candidates across their statuses; hidden history stays in the run but outside the workbook. file_name is optional, must end in .xlsx and stay below MNA_EXPORT_DIR. Existing files are never overwritten; the default is a fresh UUID filename. PitchBook and LLM contain one canonical row per considered candidate and prefer MID fields for both-source entities. Full has MID and ISCC sheets with pk first and original source columns; ISCC rows are restricted to this run. Repeated source observations can make Full row counts exceed the considered company count. Formula-like text is escaped for spreadsheet safety.",
+     "export_type is PITCHBOOK, LLM or FULL (case-insensitive). Exports considered candidates across their statuses; hidden history stays in the run but outside the workbook. file_name is optional, must end in .xlsx and stay below MNA_EXPORT_DIR. Existing files are never overwritten; the default is a fresh UUID filename. PitchBook and LLM contain one canonical row per considered candidate and prefer MID fields for both-source entities. Full has MID and ISCC sheets with pk first and original source columns; ISCC rows are restricted to this run. Repeated source observations can make Full row counts exceed the considered company count. Simulated rows make export fail unless allow_simulated=true is passed; that workbook is labelled. Formula-like text is escaped for spreadsheet safety.",
      "Artifact path, export type, company/row counts, relevant source-sheet counts and operation_receipt_id. The frontend owns the popup/download interaction.",
      {"run_id":R,"export_type":"FULL","file_name":"R42-full.xlsx"})
 tool("propose_action_plan", "Turn an interpreted analyst request into a durable dependency graph.",
@@ -285,21 +305,25 @@ tool("get_execution_progress", "Poll approval freshness and durable batch progre
      {"plan_id":"PPLAN-returned-id"})
 
 tool("get_screening_grid", "Page every candidate of a run with the fields the company grid needs.",
-     "One SQL pass per page: identity, preferred name/website/HQ, combined description, source (MID, ISCC or both), considered flag and consideration_reason, current PBId, best MID and ISCC retrieval scores, PB/ROGO/Bing coverage and compact PitchBook fields. include_hidden defaults to true so the grid can show hidden companies on request. Page with after_company_id; limit defaults to 1,000, maximum 2,000.",
-     "rows plus total, considered_count, hidden_count, selection_revision, criteria_revision and next_cursor (null on the last page). Read-only.",
+     "Pages the saved run by company ID, including hidden rows by default. Each row has identity, source, considered state, source coverage, separate MID keyword Match %, MID semantic 0–10 score, ISCC relevancy 0–1, simulation flag and per-round provider results. include_company_payload optionally adds canonical fields, identifiers and source data; a response over 2 MiB is rejected. limit defaults to 1,000, maximum 2,000. This is a read, not a new search or fit verdict.",
+     "Rows, ordered round metadata, has_mid_keyword/has_semantic/has_iscc flags, counts, revisions, source hash and next_cursor. Per-round scores remain separate from retrieval scores.",
      {"run_id":R,"include_hidden":True,"limit":1000})
 tool("get_company_detail", "Read everything known about one candidate for the company drawer.",
-     "Returns the canonical company, identifiers, considered flag and reason, per-source fields (MID, ISCC, PitchBook, ROGO), labelled descriptions for keyword highlighting, and a bounded activity list merging hide/restore history, research observations and model assessments.",
-     "company, identifiers, considered, consideration_reason, sources, descriptions and activity. Read-only.",
+     "Resolves a candidate by canonical or typed identifier within run_id. Reads canonical identity, source fields and lineage, labelled descriptions, keyword match details and saved rationale, MID semantic score, ISCC relevancy, each screening round, simulation marker and a bounded activity history. It does not turn unverified source or model output into an analyst decision.",
+     "company, identifiers, considered state, sources, descriptions, mid_keyword, mid_semantic, iscc, rounds, simulated and activity. Read-only.",
      {"run_id":R,"company_id":A})
+tool("get_screening_rounds", "Read approved scored-screening rounds for a run.",
+     "Each approved LLM Suite or M365 Copilot prepared plan receives an ordered round number. Read round-to-plan/provider links for the current run; a round does not prove provider execution. Use grid or assessment reads for actual saved scores.",
+     "Ordered round records with plan, provider and creation metadata; read-only.",
+     {"run_id":R})
 tool("get_enrichment_report", "Read a saved PitchBook or ROGO import match report.",
      "Every import saves a non-cumulative report measured against the run's current candidates (considered and hidden). PitchBook reports list matched companies with their PBId and not-matched companies with a reason: not_in_mapping, profile_not_company, blank_pbid, no_data_row or conflict. ROGO reports list matched companies, unmatched rows and ambiguous websites. Omit report_id for the latest report. Imports never hide companies; the analyst applies a decision with the apply_enrichment_review administrator operation.",
      "report_id, purpose, summary counts, matched, not_matched (PitchBook) or matched/unmatched_rows/ambiguous (ROGO), and created_at. Read-only.",
      {"run_id":R})
 
 GROUPS = [
-    ("Company discovery and retrieval",["search_mid","search_companies","find_company","find_similar_companies","find_similar_to_examples","search_iscc","get_iscc_score_samples","get_retrieval_config","embed_texts","rerank_candidates"]),
-    ("Identity and source context",["get_company","get_company_identifiers","get_source_rows","get_candidate_source_data","get_run_source_projection","get_source_field_catalog"]),
+    ("Company discovery and retrieval",["search_mid","score_mid_semantic","search_mid_semantic","search_companies","find_company","find_similar_companies","find_similar_to_examples","search_iscc","get_iscc_score_samples","get_retrieval_config","embed_texts","rerank_candidates"]),
+    ("Identity and source context",["get_company","get_company_identifiers","get_mid_index_status","get_index_build","list_index_builds","get_source_rows","get_candidate_source_data","get_run_source_projection","get_source_field_catalog"]),
     ("Scoped context",["get_company_context","get_candidate_context","get_candidate_batch_context","build_context_packet"]),
     ("Screening criteria and profile lineage",["get_run_context","get_original_criteria","get_criteria_history","get_active_screening_profile","get_screening_profile_version","compare_profile_versions","propose_screening_profile","get_search_policy"]),
     ("Analyst examples",["label_company","get_labelled_examples","get_representative_examples"]),
@@ -308,7 +332,7 @@ GROUPS = [
     ("Durable memory",["search_research_memory","get_previous_research","get_recent_agent_events","get_search_history","get_open_questions","add_open_question","resolve_open_question"]),
     ("Candidate funnel",["add_candidates","get_candidate_set","get_shortlist_context","get_screening_grid","get_company_detail","update_candidate_status","get_discovery_summary"]),
     ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","get_enrichment_report","export_candidate_set"]),
-    ("Approved action graphs and screening",["propose_action_plan","get_action_plan","propose_prepared_plan","get_prepared_plan","get_execution_progress","get_execution_job","get_model_assessments","prepare_screening_batch","prepare_bing_queries","save_screening_results","get_screening_results","complete_action_step"]),
+    ("Approved action graphs and screening",["propose_action_plan","get_action_plan","propose_prepared_plan","get_prepared_plan","get_execution_progress","get_execution_job","get_model_assessments","get_screening_rounds","prepare_screening_batch","prepare_bing_queries","save_screening_results","get_screening_results","complete_action_step"]),
     ("Recovery",["save_checkpoint","get_checkpoint"]),
 ]
 
@@ -348,6 +372,11 @@ def typename(s):
     return s.get("type","JSON value")
 
 def table(schema):
+    if "anyOf" in schema and not schema.get("properties"):
+        return "\n\n".join(
+            f"**{part.get('title', 'Form ' + str(index))} arguments**\n\n{table(part)}"
+            for index, part in enumerate(schema["anyOf"], 1)
+        )
     lines=["| Argument | Required by schema | Type | Schema default |","|---|---|---|---|"]
     required=schema.get("required",[])
     for name, prop in schema.get("properties",{}).items():
@@ -458,6 +487,10 @@ These operations are excluded from the model tool catalog. The criteria, shortli
 | `reserve_llmsuite_slot` / `consume_llmsuite_slot` | `/admin/llmsuite-slot`, `/admin/llmsuite-consume` | Shared seven-per-minute LLM Suite budget; consumption tracks actual dispatch, including parser repairs. |
 | `review_evidence_claim` | `/admin/evidence-review` | Record analyst verification or rejection; unreviewed claims remain `UNKNOWN`. |
 | `rebuild_embedding_index` | `/admin/embedding-index` | Generate real local-worker embeddings and persist them keyed by model/version/text hash. |
+| `start_index_build` | `/admin/index-build-start` | Start a durable eight-step build from a staged MID XLSX using `config/mid-index.json`; activate on success by default. The semantic step is marked skipped when `MNA_EMBED_ENDPOINT` is absent. |
+| `cancel_index_build` | `/admin/index-build-cancel` | Request cancellation of a queued or running build by `build_id`; the worker records its final state. |
+| `activate_mid_bundle` | `/admin/mid-bundle-activate` | Activate a ready or superseded bundle by `bundle_id`, retaining the prior bundle for rollback. |
+| `delete_mid_bundle` | `/admin/mid-bundle-delete` | Delete a non-active, non-building bundle and its FTS tables by `bundle_id`. |
 
 For `retry_execution_job`, send `{"job_id":"JOB-returned-id","attempt":1,"reason":"Analyst requested retry of the rejected batch","analyst_requested":true}` with the ordinary bearer credential and `X-MNA-Controller-Key`. The service requires the exact failed attempt, current approval/source snapshot, and a durable definitive rejected-response marker. It preserves accepted results and prior attempts, sends nothing and consumes no slot. A later dispatch uses the shared limit normally. AMBIGUOUS, RUNNING, stale, attempt-mismatched and exhausted parser results are rejected. The response includes previous_attempt, state=READY, executed=false and automatically_redispatched=false.
 
@@ -515,10 +548,10 @@ The free-text `approved_by` is audit metadata; production user authentication be
 
 1. Create a run from Intake Form fields or plain text. Review the core business, then optional good-fit and bad-fit boxes. Save each criteria revision with `save_criteria_revision`; approve the final digest with `approve_criteria_revision`. Keep unclear terms as open questions. The Intake Form opens PDFs and pre-fills fields by label; check each field. Full parsing is deferred.
 2. Read `get_criteria_history` and the approved profile before searching. A later edit creates a new revision and requires another approval. Earlier approved execution plans become stale. A separately proposed structured profile can still use `/admin/profiles/approve`.
-3. Run `search_mid` and `search_iscc` independently. Use `get_iscc_score_samples` to inspect deciles 0.9–0.3 and choose broad relevant rows. Record why a threshold around 0.45 was widened or narrowed. Add selected IDs in chunks with their source/query IDs.
+3. Build or select the MID bundle, then run keyword `search_mid` with approved core-business groups and a saved rationale. It defaults to 5,000 and allows up to 20,000 results; add_to_run defaults to true. Run `search_iscc` independently when connected. Use `get_iscc_score_samples` to inspect deciles 0.9–0.3 and choose broad relevant rows. Record why a threshold around 0.45 was widened or narrowed. Add selected ISCC IDs in chunks with their source/query IDs. Semantic scoring/search returns skipped until compatible embeddings are configured.
 4. Read considered source counts from `get_discovery_summary`, then page `get_shortlist_context` with include_hidden=true to show every saved company and its review flag. Suggest PitchBook/Bing at 0<n<1000, ROGO at 500<n<2000, LLM Suite at n>2000, and M365 at 0<n<250 with PB context. Both enrichment and research accordions remain available; these suggestions do not filter or execute work.
 5. Interpret “Populate PitchBook and ROGO, then screen” into the plan example above. Record the human's explicit request through the controller approval route once. Import all available files; processing mapping before PB data before ROGO can satisfy the sequence in a single import call. Preserve and claim that operation's receipt only for the plan step whose input parameters match; do not reuse one receipt to pretend two separate steps ran.
-6. For retrieval, request up to 1,000 hits per query. An optional local reranker may reorder only the first 500 from one source/query group; preserve the remaining tail. A run may hold more than 1,000 candidates. For scored LLM Suite/Copilot work, propose a version-2 prepared plan with frozen considered rows, global index, columns, prompt, provider, deployment and batch size. An automatic model choice resolves to configured deployment or remains a non-dispatched placeholder. Show a bounded preview and retain the Rust digest. The controller alone may approve, lease and dispatch. A direct LLM Suite/M365 chat question instead uses `dispatch_provider_text`, with no screening setup. Genuine PB LinkedIn pages must be included for Copilot screening when available.
+6. Legacy MID and ISCC retrieval calls request up to 1,000 hits; keyword MID v2 can return more. An optional local reranker may reorder only the first 500 from one source/query group; preserve the remaining tail. A run may hold more than 1,000 candidates. For scored LLM Suite/Copilot work, propose a version-2 prepared plan with frozen considered rows, global index, columns, prompt, provider, deployment and batch size. An automatic model choice resolves to configured deployment or remains a non-dispatched placeholder. Show a bounded preview and retain the Rust digest. The controller alone may approve, lease and dispatch. A direct LLM Suite/M365 chat question instead uses `dispatch_provider_text`, with no screening setup. Genuine PB LinkedIn pages must be included for Copilot screening when available.
 7. For Bing research, approve one to five fit templates such as “Does <company> build policy administration software?” The UI expands them for all considered companies, prepares and sends in bounded pages, and continues through the approved request list. Every saved observation is an unverified research lead until analyst review.
 8. Review fit scores and CHECK rows, then call `review_shortlist` to keep desired IDs and hide others. Select useful RESULTS columns for another pass. Export considered rows only. Save a checkpoint after each loop boundary and check criteria revision, shortlist revision, completed receipts and saved jobs before repeating work.
 
@@ -549,7 +582,7 @@ The tables below cover typed nested objects and enums referenced by the agent ar
 
 """
 
-assert len(TOOLS)==70 and set(META)==set(TOOLS)
+assert len(TOOLS)==76 and set(META)==set(TOOLS)
 grouped=[name for _,names in GROUPS for name in names]
 assert len(grouped)==len(TOOLS) and len(set(grouped))==len(TOOLS) and set(grouped)==set(TOOLS)
 parts=[INTRO]

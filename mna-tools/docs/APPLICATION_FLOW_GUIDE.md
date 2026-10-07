@@ -23,6 +23,8 @@ Your intended lead orchestrator is **LLM Suite**. Its subagents also use LLM Sui
 | Chat/workspace, criteria review, optional examples, shortlist review, source uploads, setup dialogs, background controls, exports | Implemented locally |
 | Rust/SQLite identity, revisions, source projections, prepared plans, parser, execution records, rate gate | Implemented and tested with local fixtures |
 | MID lexical retrieval | Working local path; example uses fictional records |
+| Build Index, keyword Match %, semantic score, score grid and rounds | Implemented locally; 150,000-row throughput and real embedding-model recall unverified |
+| Development simulation | `SCREENING_SIMULATE=1` supplies labelled deterministic ISCC, LLM Suite/M365 and Bing output; it is not a live provider test |
 | Arctic M v2 INT8 ONNX 768D embedding | Replaceable adapter and worker implemented; real weights/runtime assets and population recall unverified |
 | Reranking | Replaceable contract implemented; production model not selected |
 | Live ISCC, LLM Suite, M365, and Bing | Transport boundaries exist; corporate connections are unconfigured and unverified |
@@ -31,6 +33,16 @@ Your intended lead orchestrator is **LLM Suite**. Its subagents also use LLM Sui
 | Python LangGraph | Tested offline scaffold; not wired to the running UI/bridge/Rust service |
 
 The intended flow below describes connected operation. A disconnected operation must remain visibly unexecuted. A prepared or approved job is not a completed model assessment.
+
+### Phase 2 path through this flow
+
+Before MID discovery, the analyst can open **Build Index** and select a staged MID XLSX. `mna-tools/config/mid-index.json` defines searchable, description, FTS and identifier columns plus weights. The build window shows eight durable steps: read workbook, check columns, match company IDs, store rows, build keyword index, semantic embeddings, verify and activate. The embedding step is honestly **skipped** until `MNA_EMBED_ENDPOINT` is configured. A completed bundle can be selected again for rollback. Large 150,000-row timing and real model quality are still unverified.
+
+After criteria approval, build core-business keyword groups with a saved rationale. `search_mid` v2 supports stem/exact terms, positive weights and `AND`, `OR` and approved-exclusion `AND NOT` expressions. Its Match % divides matched positive weights by all positive weights. The legacy query form still works. Aiming for roughly 4,000–5,000 MID companies is a broad-review goal, not a search guarantee. With ready vectors, `score_mid_semantic` gives a separate 0–10 score; otherwise it returns **skipped**. Optional semantic-only search can add candidates.
+
+ISCC Relevancy Score stays on its own 0–1 scale. Merge exact ECID or ECI first, then CID or Crescendo ID (the same identifier). The Companies view has All, MID and ISCC tabs, separate score columns, histograms and bucket filters. Numeric screening filters include `CHECK` by default, with CHECK shown last. Approved scored LLM Suite and M365 plans are R1, R2 and so on; the Overview timeline and grid show saved results by round, without implying that an approved but disconnected plan ran. Keep or hide after review, restore when needed, then hydrate, screen and filter again.
+
+For development only, `SCREENING_SIMULATE=1` supplies labelled deterministic ISCC rows, LLM Suite/M365 tables and Bing leads. The UI marks simulated rows and runs. Standard exports refuse simulated rows; `allow_simulated` on the export tool produces a labelled workbook. This path does not validate corporate provider connections.
 
 ## 2. The full analyst flow
 
@@ -126,7 +138,7 @@ Changing criteria does not erase companies or previous results. It changes which
 
 - MID is the ingested internal population.
 - ISCC is a live source and must add its returned rows to the same identity/source model.
-- Retrieve up to **1,000 per source/query**. This is not a 1,000-company limit for the whole screening.
+- Legacy MID and ISCC queries return up to **1,000 per call**; MID keyword v2 defaults to 5,000 and allows up to 20,000. These are not whole-screening limits.
 - ISCC queries normally use 10–12 qualitative words, at most 14, and at most five distinct variants in an approved plan.
 - The reranker contract reranks the first 500 in a source/query group and preserves the remaining tail. It does not delete the other retrieved companies.
 - Keep approved core-business exclusions separate from deferred conditions.

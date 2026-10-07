@@ -8,10 +8,32 @@
   },
   "search_mid": {
     "run_id": "R42",
-    "query": "policy administration software for insurance carriers",
-    "mode": "hybrid",
-    "limit": 1000,
-    "prefer_meilisearch": false
+    "rationale": "Owned insurer workflow software",
+    "keywords": [
+      {
+        "id": "policy",
+        "text": "policy administration",
+        "weight": 2,
+        "match": "stem"
+      },
+      {
+        "id": "claims",
+        "text": "claims workflow",
+        "weight": 1,
+        "match": "exact"
+      }
+    ],
+    "expression": "policy OR claims",
+    "limit": 5000
+  },
+  "score_mid_semantic": {
+    "run_id": "R42"
+  },
+  "search_mid_semantic": {
+    "run_id": "R42",
+    "rationale": "Find additional owned insurance software vendors",
+    "min_score": 7,
+    "limit": 1000
   },
   "find_company": {
     "run_id": "R42",
@@ -37,6 +59,13 @@
   },
   "get_company_identifiers": {
     "company_id": "CID:101"
+  },
+  "get_mid_index_status": {},
+  "get_index_build": {
+    "build_id": "BUILD-returned-id"
+  },
+  "list_index_builds": {
+    "limit": 20
   },
   "get_source_rows": {
     "company_id": "100-101",
@@ -569,6 +598,9 @@
   "get_company_detail": {
     "run_id": "R42",
     "company_id": "100-101"
+  },
+  "get_screening_rounds": {
+    "run_id": "R42"
   },
   "get_enrichment_report": {
     "run_id": "R42"

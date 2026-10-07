@@ -37,8 +37,8 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Tool index
 
-- [Company discovery and retrieval](#company-discovery-and-retrieval): `search_mid`, `search_companies`, `find_company`, `find_similar_companies`, `find_similar_to_examples`, `search_iscc`, `get_iscc_score_samples`, `get_retrieval_config`, `embed_texts`, `rerank_candidates`
-- [Identity and source context](#identity-and-source-context): `get_company`, `get_company_identifiers`, `get_source_rows`, `get_candidate_source_data`, `get_run_source_projection`, `get_source_field_catalog`
+- [Company discovery and retrieval](#company-discovery-and-retrieval): `search_mid`, `score_mid_semantic`, `search_mid_semantic`, `search_companies`, `find_company`, `find_similar_companies`, `find_similar_to_examples`, `search_iscc`, `get_iscc_score_samples`, `get_retrieval_config`, `embed_texts`, `rerank_candidates`
+- [Identity and source context](#identity-and-source-context): `get_company`, `get_company_identifiers`, `get_mid_index_status`, `get_index_build`, `list_index_builds`, `get_source_rows`, `get_candidate_source_data`, `get_run_source_projection`, `get_source_field_catalog`
 - [Scoped context](#scoped-context): `get_company_context`, `get_candidate_context`, `get_candidate_batch_context`, `build_context_packet`
 - [Screening criteria and profile lineage](#screening-criteria-and-profile-lineage): `get_run_context`, `get_original_criteria`, `get_criteria_history`, `get_active_screening_profile`, `get_screening_profile_version`, `compare_profile_versions`, `propose_screening_profile`, `get_search_policy`
 - [Analyst examples](#analyst-examples): `label_company`, `get_labelled_examples`, `get_representative_examples`
@@ -47,46 +47,111 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 - [Durable memory](#durable-memory): `search_research_memory`, `get_previous_research`, `get_recent_agent_events`, `get_search_history`, `get_open_questions`, `add_open_question`, `resolve_open_question`
 - [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `get_screening_grid`, `get_company_detail`, `update_candidate_status`, `get_discovery_summary`
 - [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `get_enrichment_report`, `export_candidate_set`
-- [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_progress`, `get_execution_job`, `get_model_assessments`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
+- [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_progress`, `get_execution_job`, `get_model_assessments`, `get_screening_rounds`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
 - [Recovery](#recovery): `save_checkpoint`, `get_checkpoint`
 
 ## Company discovery and retrieval
 
 ### 1. `search_mid`
 
-**Purpose:** Search only the MID population through the same qualitative search interface.
+**Purpose:** Search the active MID bundle by approved core-business keywords.
 
-**How it works:** Use this as the main MID discovery abstraction. It composes qualitative core-business retrieval, canonical identity and query provenance. Its arguments and limits match search_companies. A configured local embedder prefixes generated query text with `query: `; caller-supplied vectors remain explicitly unverified. Non-core filters never narrow discovery. ISCC-only records are excluded. Requires run_id and approved criteria. MID and ISCC searches can be run independently, then selected IDs added with add_candidates.
+**How it works:** The v2 form requires run_id, a rationale of at most 300 characters and 1–50 keywords with distinct ids, text, optional weight (0.1–10) and stem or exact matching. An optional Boolean expression combines keyword ids with AND, OR, parentheses and AND NOT; omitted expression means OR of all ids. Standalone NOT is rejected and a negative keyword must match an approved core-business exclusion. Non-core review details never narrow discovery. Match % is the matched positive keyword weights divided by all positive keyword weights; negative terms do not count. The active index is required. limit defaults to 5,000 and maxes at 20,000; add_to_run defaults to true. The legacy query/mode form remains available with its prior 1,000-result limit and behavior.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
+| `add_to_run` | No | boolean | `true` |
+| `columns` | No | array or null | — |
+| `expression` | No | string or null | — |
 | `filters` | No | SearchFilters | — |
+| `keywords` | No | array of Keyword | — |
 | `lexical_weight` | No | number | `0.45` |
-| `limit` | No | integer | `1000` |
+| `limit` | No | integer | `5000` |
 | `mode` | No | SearchMode | — |
 | `offset` | No | integer | `0` |
 | `prefer_meilisearch` | No | boolean | `true` |
 | `query` | No | string | `""` |
 | `query_vector` | No | array or null | `null` |
-| `run_id` | No | string or null | `null` |
+| `rationale` | No | string | — |
+| `run_id` | No | string | — |
 | `semantic_ratio` | No | number or null | `null` |
 | `semantic_weight` | No | number | `0.55` |
 
-**Returned data and effects:** The same result envelope as search_companies, with MID discovery provenance and a successful-operation receipt. Canonical descriptions remain source data rather than verified fit judgments.
+**Returned data and effects:** V2 returns ranked results with matched keywords, hit count, Match %, query_id and a persisted rationale and display query. It can add matches to the run. The legacy form returns its original search envelope. Neither result is a verified fit judgment.
 
 **Example arguments:**
 
 ```json
 {
   "run_id": "R42",
-  "query": "policy administration software for insurance carriers",
-  "mode": "hybrid",
-  "limit": 1000,
-  "prefer_meilisearch": false
+  "rationale": "Owned insurer workflow software",
+  "keywords": [
+    {
+      "id": "policy",
+      "text": "policy administration",
+      "weight": 2,
+      "match": "stem"
+    },
+    {
+      "id": "claims",
+      "text": "claims workflow",
+      "weight": 1,
+      "match": "exact"
+    }
+  ],
+  "expression": "policy OR claims",
+  "limit": 5000
 }
 ```
 
-### 2. `search_companies`
+### 2. `score_mid_semantic`
+
+**Purpose:** Score current MID candidates against approved criteria.
+
+**How it works:** Requires an active MID bundle with ready vectors and a configured embedding endpoint. Embeds the approved business definition with `query: `, compares fresh vectors by cosine, and stores a score from 0 to 10 for the current criteria revision. Missing or incompatible vectors are counted. When the index or model is unavailable, returns status skipped with a reason instead of inventing scores.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** Status scored, scored and missing_vector counts, criteria_revision and model when run; otherwise status skipped and reason. Scores are separate from MID keyword, ISCC and provider scores.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42"
+}
+```
+
+### 3. `search_mid_semantic`
+
+**Purpose:** Add MID companies by semantic score when vectors are ready.
+
+**How it works:** Requires approved criteria, an active bundle, ready compatible vectors, a rationale up to 300 characters and min_score from 0 to 10. Embeds the criteria with `query: ` and ranks the active MID bundle; limit defaults to 1,000 and maxes at 5,000. add_to_run defaults to true. Without a ready model/index it returns skipped with a reason.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `add_to_run` | No | boolean | `true` |
+| `limit` | No | integer | `1000` |
+| `min_score` | Yes | number | — |
+| `rationale` | Yes | string | — |
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** Status, considered and returned counts, results with 0–10 scores, missing-vector count and query_id when run. Matching scores are saved for the criteria revision; selected companies can be added to the run.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42",
+  "rationale": "Find additional owned insurance software vendors",
+  "min_score": 7,
+  "limit": 1000
+}
+```
+
+### 4. `search_companies`
 
 **Purpose:** Discover businesses across the canonical imported company universe.
 
@@ -120,7 +185,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 3. `find_company`
+### 5. `find_company`
 
 **Purpose:** Resolve a known external identifier or locate an analyst-mentioned example.
 
@@ -149,7 +214,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 4. `find_similar_companies`
+### 6. `find_similar_companies`
 
 **Purpose:** Retrieve neighbors of one qualitative seed embedding.
 
@@ -175,7 +240,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 5. `find_similar_to_examples`
+### 7. `find_similar_to_examples`
 
 **Purpose:** Build a broad search from positive and optional negative examples.
 
@@ -208,7 +273,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 6. `search_iscc`
+### 8. `search_iscc`
 
 **Purpose:** Retrieve and ingest one live qualitative ISCC pull.
 
@@ -233,7 +298,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 7. `get_iscc_score_samples`
+### 9. `get_iscc_score_samples`
 
 **Purpose:** Inspect the broad-funnel relevance boundary without repeating ISCC research.
 
@@ -259,7 +324,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 8. `get_retrieval_config`
+### 10. `get_retrieval_config`
 
 **Purpose:** Inspect the selected local embedding and reranking configuration.
 
@@ -276,7 +341,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 {}
 ```
 
-### 9. `embed_texts`
+### 11. `embed_texts`
 
 **Purpose:** Request genuine vectors from the configured local embedding worker.
 
@@ -298,7 +363,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 10. `rerank_candidates`
+### 12. `rerank_candidates`
 
 **Purpose:** Rerank one source/query group while preserving the rest of the broad funnel.
 
@@ -331,7 +396,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Identity and source context
 
-### 11. `get_company`
+### 13. `get_company`
 
 **Purpose:** Read the canonical company and its compact enrichment.
 
@@ -351,7 +416,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 12. `get_company_identifiers`
+### 14. `get_company_identifiers`
 
 **Purpose:** Inspect all exact cross-references for a company.
 
@@ -371,7 +436,64 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 13. `get_source_rows`
+### 15. `get_mid_index_status`
+
+**Purpose:** Inspect the active MID index and current build.
+
+**How it works:** Loads and validates the MID index configuration, then reads the active bundle and any queued or running build. It does not start a build or change the active bundle.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+
+**Returned data and effects:** Active bundle metadata or null, running_build or null, and configured search/description/FTS columns, source weights and identifier aliases.
+
+**Example arguments:**
+
+```json
+{}
+```
+
+### 16. `get_index_build`
+
+**Purpose:** Inspect one durable MID index build.
+
+**How it works:** Supply its build_id. Read the current step, eight step records, progress, log, timestamps, cancellation flag, error and associated bundle. A missing ID returns NOT_FOUND.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `build_id` | Yes | string | — |
+
+**Returned data and effects:** Build and bundle state; read-only.
+
+**Example arguments:**
+
+```json
+{
+  "build_id": "BUILD-returned-id"
+}
+```
+
+### 17. `list_index_builds`
+
+**Purpose:** List recent MID index builds and bundles.
+
+**How it works:** Reads newest builds and bundles, each bounded by limit (default 20, maximum 50). Includes completed, failed and superseded history for review.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `limit` | No | integer | `20` |
+
+**Returned data and effects:** builds with progress and log plus compact bundles with status, counts and semantic state; read-only.
+
+**Example arguments:**
+
+```json
+{
+  "limit": 20
+}
+```
+
+### 18. `get_source_rows`
 
 **Purpose:** Inspect a bounded selection of original MID or ISCC observations.
 
@@ -395,7 +517,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 14. `get_candidate_source_data`
+### 19. `get_candidate_source_data`
 
 **Purpose:** Read all selectable source columns for a paged candidate scope.
 
@@ -419,7 +541,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 15. `get_run_source_projection`
+### 20. `get_run_source_projection`
 
 **Purpose:** Preview selected source fields as a frozen, run-scoped input table.
 
@@ -480,7 +602,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 16. `get_source_field_catalog`
+### 21. `get_source_field_catalog`
 
 **Purpose:** List fields available for a run's source-column picker.
 
@@ -506,7 +628,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Scoped context
 
-### 17. `get_company_context`
+### 22. `get_company_context`
 
 **Purpose:** Request only the company sections needed for the next reasoning step.
 
@@ -539,7 +661,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 18. `get_candidate_context`
+### 23. `get_candidate_context`
 
 **Purpose:** Hydrate one candidate with only its current-run research.
 
@@ -563,7 +685,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 19. `get_candidate_batch_context`
+### 24. `get_candidate_batch_context`
 
 **Purpose:** Prepare selected fields for a bounded group of candidates.
 
@@ -598,7 +720,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 20. `build_context_packet`
+### 25. `build_context_packet`
 
 **Purpose:** Build a compact task packet from authoritative run state.
 
@@ -629,7 +751,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Screening criteria and profile lineage
 
-### 21. `get_run_context`
+### 26. `get_run_context`
 
 **Purpose:** Read the run's objective, approved profile version and progress.
 
@@ -651,7 +773,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 22. `get_original_criteria`
+### 27. `get_original_criteria`
 
 **Purpose:** Recover the original Intake Form fields or plain-text criteria unchanged.
 
@@ -671,7 +793,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 23. `get_criteria_history`
+### 28. `get_criteria_history`
 
 **Purpose:** Read every saved criteria revision and the latest approval state.
 
@@ -691,7 +813,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 24. `get_active_screening_profile`
+### 29. `get_active_screening_profile`
 
 **Purpose:** Read the latest analyst-approved interpretation of the screening criteria.
 
@@ -711,7 +833,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 25. `get_screening_profile_version`
+### 30. `get_screening_profile_version`
 
 **Purpose:** Inspect a specific proposed, approved or historical profile.
 
@@ -733,7 +855,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 26. `compare_profile_versions`
+### 31. `compare_profile_versions`
 
 **Purpose:** Show what changed between two interpretations of the same screening criteria.
 
@@ -757,7 +879,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 27. `propose_screening_profile`
+### 32. `propose_screening_profile`
 
 **Purpose:** Save a revised qualitative interpretation for analyst review.
 
@@ -796,7 +918,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 28. `get_search_policy`
+### 33. `get_search_policy`
 
 **Purpose:** Make the qualitative discovery policy visible to the analyst and agent.
 
@@ -818,7 +940,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Analyst examples
 
-### 29. `label_company`
+### 34. `label_company`
 
 **Purpose:** Record an analyst label explicitly supplied by the caller.
 
@@ -844,7 +966,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 30. `get_labelled_examples`
+### 35. `get_labelled_examples`
 
 **Purpose:** Retrieve the analyst's actual examples for this run.
 
@@ -872,7 +994,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 31. `get_representative_examples`
+### 36. `get_representative_examples`
 
 **Purpose:** Select a small balanced context sample of labelled examples.
 
@@ -901,7 +1023,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Evidence
 
-### 32. `save_evidence`
+### 37. `save_evidence`
 
 **Purpose:** Save a scoped claim or research observation with provenance.
 
@@ -944,7 +1066,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 33. `get_evidence`
+### 38. `get_evidence`
 
 **Purpose:** Read evidence for one company in one run.
 
@@ -974,7 +1096,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 34. `get_missing_evidence`
+### 39. `get_missing_evidence`
 
 **Purpose:** Find qualitative attributes that still need research.
 
@@ -1004,7 +1126,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Research
 
-### 35. `bing_search`
+### 40. `bing_search`
 
 **Purpose:** Execute one approved grounded research query.
 
@@ -1034,7 +1156,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 36. `m365_research`
+### 41. `m365_research`
 
 **Purpose:** Request an approved grounded research answer from a configured M365 gateway.
 
@@ -1070,7 +1192,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 37. `fetch_url`
+### 42. `fetch_url`
 
 **Purpose:** Fetch a public page into a controlled local artifact cache.
 
@@ -1098,7 +1220,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 38. `extract_url_context`
+### 43. `extract_url_context`
 
 **Purpose:** Extract bounded relevant text from a supplied page or fetched artifact.
 
@@ -1134,7 +1256,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Durable memory
 
-### 39. `search_research_memory`
+### 44. `search_research_memory`
 
 **Purpose:** Find saved research before repeating a search or asking an answered question.
 
@@ -1160,7 +1282,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 40. `get_previous_research`
+### 45. `get_previous_research`
 
 **Purpose:** Explicitly retrieve a company's research from earlier or other runs.
 
@@ -1182,7 +1304,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 41. `get_recent_agent_events`
+### 46. `get_recent_agent_events`
 
 **Purpose:** Recover meaningful run events and decisions.
 
@@ -1209,7 +1331,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 42. `get_search_history`
+### 47. `get_search_history`
 
 **Purpose:** Inspect durable query inputs, results and retrieval provenance.
 
@@ -1233,7 +1355,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 43. `get_open_questions`
+### 48. `get_open_questions`
 
 **Purpose:** Read unresolved screening criteria ambiguities or company research gaps.
 
@@ -1259,7 +1381,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 44. `add_open_question`
+### 49. `add_open_question`
 
 **Purpose:** Persist a relevant ambiguity without guessing an answer.
 
@@ -1284,7 +1406,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 45. `resolve_open_question`
+### 50. `resolve_open_question`
 
 **Purpose:** Record an explicit answer and link the evidence that supports it.
 
@@ -1310,7 +1432,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Candidate funnel
 
-### 46. `add_candidates`
+### 51. `add_candidates`
 
 **Purpose:** Form the unique broad funnel while preserving every retrieval path.
 
@@ -1347,7 +1469,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 47. `get_candidate_set`
+### 52. `get_candidate_set`
 
 **Purpose:** Read a bounded page of run candidates and their discovery history.
 
@@ -1376,7 +1498,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 48. `get_shortlist_context`
+### 53. `get_shortlist_context`
 
 **Purpose:** Page the current considered selection or complete saved candidate history.
 
@@ -1401,20 +1523,21 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 49. `get_screening_grid`
+### 54. `get_screening_grid`
 
 **Purpose:** Page every candidate of a run with the fields the company grid needs.
 
-**How it works:** One SQL pass per page: identity, preferred name/website/HQ, combined description, source (MID, ISCC or both), considered flag and consideration_reason, current PBId, best MID and ISCC retrieval scores, PB/ROGO/Bing coverage and compact PitchBook fields. include_hidden defaults to true so the grid can show hidden companies on request. Page with after_company_id; limit defaults to 1,000, maximum 2,000.
+**How it works:** Pages the saved run by company ID, including hidden rows by default. Each row has identity, source, considered state, source coverage, separate MID keyword Match %, MID semantic 0–10 score, ISCC relevancy 0–1, simulation flag and per-round provider results. include_company_payload optionally adds canonical fields, identifiers and source data; a response over 2 MiB is rejected. limit defaults to 1,000, maximum 2,000. This is a read, not a new search or fit verdict.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `after_company_id` | No | string or null | `null` |
+| `include_company_payload` | No | boolean | `false` |
 | `include_hidden` | No | boolean | `true` |
 | `limit` | No | integer or null | `null` |
 | `run_id` | Yes | string | — |
 
-**Returned data and effects:** rows plus total, considered_count, hidden_count, selection_revision, criteria_revision and next_cursor (null on the last page). Read-only.
+**Returned data and effects:** Rows, ordered round metadata, has_mid_keyword/has_semantic/has_iscc flags, counts, revisions, source hash and next_cursor. Per-round scores remain separate from retrieval scores.
 
 **Example arguments:**
 
@@ -1426,18 +1549,18 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 50. `get_company_detail`
+### 55. `get_company_detail`
 
 **Purpose:** Read everything known about one candidate for the company drawer.
 
-**How it works:** Returns the canonical company, identifiers, considered flag and reason, per-source fields (MID, ISCC, PitchBook, ROGO), labelled descriptions for keyword highlighting, and a bounded activity list merging hide/restore history, research observations and model assessments.
+**How it works:** Resolves a candidate by canonical or typed identifier within run_id. Reads canonical identity, source fields and lineage, labelled descriptions, keyword match details and saved rationale, MID semantic score, ISCC relevancy, each screening round, simulation marker and a bounded activity history. It does not turn unverified source or model output into an analyst decision.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `company_id` | Yes | string | — |
 | `run_id` | Yes | string | — |
 
-**Returned data and effects:** company, identifiers, considered, consideration_reason, sources, descriptions and activity. Read-only.
+**Returned data and effects:** company, identifiers, considered state, sources, descriptions, mid_keyword, mid_semantic, iscc, rounds, simulated and activity. Read-only.
 
 **Example arguments:**
 
@@ -1448,7 +1571,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 51. `update_candidate_status`
+### 56. `update_candidate_status`
 
 **Purpose:** Record a considered funnel state and supporting reason.
 
@@ -1474,7 +1597,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 52. `get_discovery_summary`
+### 57. `get_discovery_summary`
 
 **Purpose:** Report the full unique funnel and the next-step default.
 
@@ -1496,7 +1619,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Enrichment and exports
 
-### 53. `inspect_enrichment_files`
+### 58. `inspect_enrichment_files`
 
 **Purpose:** Identify staged spreadsheet roles before hydration or run selection.
 
@@ -1521,7 +1644,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 54. `import_enrichment_files`
+### 59. `import_enrichment_files`
 
 **Purpose:** Classify and join a mixed analyst upload into compact company context.
 
@@ -1551,7 +1674,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 55. `get_enrichment_report`
+### 60. `get_enrichment_report`
 
 **Purpose:** Read a saved PitchBook or ROGO import match report.
 
@@ -1573,14 +1696,15 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 56. `export_candidate_set`
+### 61. `export_candidate_set`
 
 **Purpose:** Create one of the analyst's three exact workbook formats.
 
-**How it works:** export_type is PITCHBOOK, LLM or FULL (case-insensitive). Exports considered candidates across their statuses; hidden history stays in the run but outside the workbook. file_name is optional, must end in .xlsx and stay below MNA_EXPORT_DIR. Existing files are never overwritten; the default is a fresh UUID filename. PitchBook and LLM contain one canonical row per considered candidate and prefer MID fields for both-source entities. Full has MID and ISCC sheets with pk first and original source columns; ISCC rows are restricted to this run. Repeated source observations can make Full row counts exceed the considered company count. Formula-like text is escaped for spreadsheet safety.
+**How it works:** export_type is PITCHBOOK, LLM or FULL (case-insensitive). Exports considered candidates across their statuses; hidden history stays in the run but outside the workbook. file_name is optional, must end in .xlsx and stay below MNA_EXPORT_DIR. Existing files are never overwritten; the default is a fresh UUID filename. PitchBook and LLM contain one canonical row per considered candidate and prefer MID fields for both-source entities. Full has MID and ISCC sheets with pk first and original source columns; ISCC rows are restricted to this run. Repeated source observations can make Full row counts exceed the considered company count. Simulated rows make export fail unless allow_simulated=true is passed; that workbook is labelled. Formula-like text is escaped for spreadsheet safety.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
+| `allow_simulated` | No | boolean | `false` |
 | `export_type` | Yes | string | — |
 | `file_name` | No | string or null | `null` |
 | `run_id` | Yes | string | — |
@@ -1599,7 +1723,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Approved action graphs and screening
 
-### 57. `propose_action_plan`
+### 62. `propose_action_plan`
 
 **Purpose:** Turn an interpreted analyst request into a durable dependency graph.
 
@@ -1646,7 +1770,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 58. `get_action_plan`
+### 63. `get_action_plan`
 
 **Purpose:** Read a plan, its approval metadata and completed dependencies.
 
@@ -1668,7 +1792,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 59. `propose_prepared_plan`
+### 64. `propose_prepared_plan`
 
 **Purpose:** Freeze an immutable version-2 screening or question handoff.
 
@@ -1750,7 +1874,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 60. `get_prepared_plan`
+### 65. `get_prepared_plan`
 
 **Purpose:** Read a frozen handoff, its approval state and durable batch jobs.
 
@@ -1770,7 +1894,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 61. `get_execution_progress`
+### 66. `get_execution_progress`
 
 **Purpose:** Poll approval freshness and durable batch progress without large frozen inputs.
 
@@ -1790,7 +1914,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 62. `get_execution_job`
+### 67. `get_execution_job`
 
 **Purpose:** Inspect a durable provider batch and its parser or dispatch state.
 
@@ -1810,7 +1934,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 63. `get_model_assessments`
+### 68. `get_model_assessments`
 
 **Purpose:** Read accepted provider assessments separately from retrieval and evidence.
 
@@ -1833,7 +1957,27 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 64. `prepare_screening_batch`
+### 69. `get_screening_rounds`
+
+**Purpose:** Read approved scored-screening rounds for a run.
+
+**How it works:** Each approved LLM Suite or M365 Copilot prepared plan receives an ordered round number. Read round-to-plan/provider links for the current run; a round does not prove provider execution. Use grid or assessment reads for actual saved scores.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** Ordered round records with plan, provider and creation metadata; read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42"
+}
+```
+
+### 70. `prepare_screening_batch`
 
 **Purpose:** Legacy compatibility handoff for scored screening batches.
 
@@ -1872,7 +2016,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 65. `prepare_bing_queries`
+### 71. `prepare_bing_queries`
 
 **Purpose:** Expand approved fit questions using the best available company identity.
 
@@ -1901,7 +2045,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 66. `save_screening_results`
+### 72. `save_screening_results`
 
 **Purpose:** Legacy compatibility endpoint for batch scores.
 
@@ -1935,7 +2079,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 67. `get_screening_results`
+### 73. `get_screening_results`
 
 **Purpose:** Read a company's external screening history within the current run.
 
@@ -1959,7 +2103,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 68. `complete_action_step`
+### 74. `complete_action_step`
 
 **Purpose:** Release dependent graph work only after successful operations are proven.
 
@@ -1989,7 +2133,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Recovery
 
-### 69. `save_checkpoint`
+### 75. `save_checkpoint`
 
 **Purpose:** Persist the orchestrator's restart state with optimistic concurrency.
 
@@ -2022,7 +2166,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 70. `get_checkpoint`
+### 76. `get_checkpoint`
 
 **Purpose:** Resume from the latest or a named historical checkpoint.
 
@@ -2105,6 +2249,10 @@ These operations are excluded from the model tool catalog. The criteria, shortli
 | `reserve_llmsuite_slot` / `consume_llmsuite_slot` | `/admin/llmsuite-slot`, `/admin/llmsuite-consume` | Shared seven-per-minute LLM Suite budget; consumption tracks actual dispatch, including parser repairs. |
 | `review_evidence_claim` | `/admin/evidence-review` | Record analyst verification or rejection; unreviewed claims remain `UNKNOWN`. |
 | `rebuild_embedding_index` | `/admin/embedding-index` | Generate real local-worker embeddings and persist them keyed by model/version/text hash. |
+| `start_index_build` | `/admin/index-build-start` | Start a durable eight-step build from a staged MID XLSX using `config/mid-index.json`; activate on success by default. The semantic step is marked skipped when `MNA_EMBED_ENDPOINT` is absent. |
+| `cancel_index_build` | `/admin/index-build-cancel` | Request cancellation of a queued or running build by `build_id`; the worker records its final state. |
+| `activate_mid_bundle` | `/admin/mid-bundle-activate` | Activate a ready or superseded bundle by `bundle_id`, retaining the prior bundle for rollback. |
+| `delete_mid_bundle` | `/admin/mid-bundle-delete` | Delete a non-active, non-building bundle and its FTS tables by `bundle_id`. |
 
 For `retry_execution_job`, send `{"job_id":"JOB-returned-id","attempt":1,"reason":"Analyst requested retry of the rejected batch","analyst_requested":true}` with the ordinary bearer credential and `X-MNA-Controller-Key`. The service requires the exact failed attempt, current approval/source snapshot, and a durable definitive rejected-response marker. It preserves accepted results and prior attempts, sends nothing and consumes no slot. A later dispatch uses the shared limit normally. AMBIGUOUS, RUNNING, stale, attempt-mismatched and exhausted parser results are rejected. The response includes previous_attempt, state=READY, executed=false and automatically_redispatched=false.
 
@@ -2162,10 +2310,10 @@ The free-text `approved_by` is audit metadata; production user authentication be
 
 1. Create a run from Intake Form fields or plain text. Review the core business, then optional good-fit and bad-fit boxes. Save each criteria revision with `save_criteria_revision`; approve the final digest with `approve_criteria_revision`. Keep unclear terms as open questions. The Intake Form opens PDFs and pre-fills fields by label; check each field. Full parsing is deferred.
 2. Read `get_criteria_history` and the approved profile before searching. A later edit creates a new revision and requires another approval. Earlier approved execution plans become stale. A separately proposed structured profile can still use `/admin/profiles/approve`.
-3. Run `search_mid` and `search_iscc` independently. Use `get_iscc_score_samples` to inspect deciles 0.9–0.3 and choose broad relevant rows. Record why a threshold around 0.45 was widened or narrowed. Add selected IDs in chunks with their source/query IDs.
+3. Build or select the MID bundle, then run keyword `search_mid` with approved core-business groups and a saved rationale. It defaults to 5,000 and allows up to 20,000 results; add_to_run defaults to true. Run `search_iscc` independently when connected. Use `get_iscc_score_samples` to inspect deciles 0.9–0.3 and choose broad relevant rows. Record why a threshold around 0.45 was widened or narrowed. Add selected ISCC IDs in chunks with their source/query IDs. Semantic scoring/search returns skipped until compatible embeddings are configured.
 4. Read considered source counts from `get_discovery_summary`, then page `get_shortlist_context` with include_hidden=true to show every saved company and its review flag. Suggest PitchBook/Bing at 0<n<1000, ROGO at 500<n<2000, LLM Suite at n>2000, and M365 at 0<n<250 with PB context. Both enrichment and research accordions remain available; these suggestions do not filter or execute work.
 5. Interpret “Populate PitchBook and ROGO, then screen” into the plan example above. Record the human's explicit request through the controller approval route once. Import all available files; processing mapping before PB data before ROGO can satisfy the sequence in a single import call. Preserve and claim that operation's receipt only for the plan step whose input parameters match; do not reuse one receipt to pretend two separate steps ran.
-6. For retrieval, request up to 1,000 hits per query. An optional local reranker may reorder only the first 500 from one source/query group; preserve the remaining tail. A run may hold more than 1,000 candidates. For scored LLM Suite/Copilot work, propose a version-2 prepared plan with frozen considered rows, global index, columns, prompt, provider, deployment and batch size. An automatic model choice resolves to configured deployment or remains a non-dispatched placeholder. Show a bounded preview and retain the Rust digest. The controller alone may approve, lease and dispatch. A direct LLM Suite/M365 chat question instead uses `dispatch_provider_text`, with no screening setup. Genuine PB LinkedIn pages must be included for Copilot screening when available.
+6. Legacy MID and ISCC retrieval calls request up to 1,000 hits; keyword MID v2 can return more. An optional local reranker may reorder only the first 500 from one source/query group; preserve the remaining tail. A run may hold more than 1,000 candidates. For scored LLM Suite/Copilot work, propose a version-2 prepared plan with frozen considered rows, global index, columns, prompt, provider, deployment and batch size. An automatic model choice resolves to configured deployment or remains a non-dispatched placeholder. Show a bounded preview and retain the Rust digest. The controller alone may approve, lease and dispatch. A direct LLM Suite/M365 chat question instead uses `dispatch_provider_text`, with no screening setup. Genuine PB LinkedIn pages must be included for Copilot screening when available.
 7. For Bing research, approve one to five fit templates such as “Does <company> build policy administration software?” The UI expands them for all considered companies, prepares and sends in bounded pages, and continues through the approved request list. Every saved observation is an unverified research lead until analyst review.
 8. Review fit scores and CHECK rows, then call `review_shortlist` to keep desired IDs and hide others. Select useful RESULTS columns for another pass. Export considered rows only. Save a checkpoint after each loop boundary and check criteria revision, shortlist revision, completed receipts and saved jobs before repeating work.
 
@@ -2312,6 +2460,29 @@ Unknown nested fields are rejected.
 | `website` | Yes | array of string | — |
 
 Unknown nested fields are rejected.
+
+### `Keyword`
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `id` | Yes | string | — |
+| `match` | No | Match | `"stem"` |
+| `text` | Yes | string | — |
+| `weight` | No | number | `1.0` |
+
+Unknown nested fields are rejected.
+
+### `Match`
+
+```json
+{
+  "enum": [
+    "stem",
+    "exact"
+  ],
+  "type": "string"
+}
+```
 
 ### `RerankCandidate`
 

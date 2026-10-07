@@ -37,6 +37,7 @@ no LLM is called. Approved provider plans are saved with `executed:false`.
 - `src/chat/ShortlistReview.tsx`, `FitExamples.tsx`, `EnrichmentUpload.tsx`, `NextStepsCard.tsx`, `DataTable.tsx`, `ScreeningInspector.tsx`, `SessionTiming.tsx`.
 - `src/screening/` — `ScreeningSetup.tsx` (provider setup: column chips, prompt, preview, approve), `SetupController.tsx`, `BackgroundRuns.tsx`, `BingResearchDialog.tsx`, `PrepareMenu.tsx`, `ColumnChips.tsx`.
 - `src/workspace/CompanyGrid.tsx` — AG Grid company table.
+- `src/index/BuildIndexDialog.tsx` — MID Build Index window; `src/workspace/ScoreDistribution.tsx` and `score-cells.tsx` show source and screening scores.
 - `src/files/` — import staging and PDF preview.
 - `src/SessionLog.tsx` — event ledger, timing view, exports.
 - `src/lib/` — non-visual logic. Key files: `chat-driver.ts` (command interpretation, local "assistant"), `chat-store.ts` (per-screening state in localStorage), `chat-jobs.ts` (job → tool-call parts), `session-store.ts` (event ledger), `chat-policy.ts` (recommendation thresholds), `format.ts` (`plural`, `formatTime`/`formatDateTime`), `exports.ts`, `import-pipeline.ts`, `*-client.ts` (bridge API clients), `product-copy.ts` (user-facing strings).
@@ -47,17 +48,17 @@ no LLM is called. Approved provider plans are saved with `executed:false`.
 
 - `src/main.rs` → `runtime.rs` (Axum router, auth, tool dispatch).
 - `store.rs` (SQLite domain store), `search.rs` (MID lexical/hybrid search), `data.rs` (company data/imports), `workflow.rs` (criteria/runs/approvals), `execution.rs` + `providers.rs` + `gateway.rs` (prepared plans, durable jobs, provider dispatch), `review.rs` (shortlist review), `projection.rs` (run source projection), `tabular.rs` (CSV/XLSX), `identity.rs` (ECID/CID normalization), `result_parser.rs` + `protocol.rs` (strict LLMSuite text protocol), `retrieval.rs`, `trust.rs`, `context.rs`, `agent_commands.rs`.
+- `mid_config.rs` reads `config/mid-index.json`; `index_build.rs` owns durable eight-step MID bundle builds, `mid_search.rs` owns keyword and semantic MID search, `grid.rs` projects source scores and rounds, and `simulate.rs` supplies deterministic development provider output. Migration `009_phase2.sql` adds index, score, round and simulation state.
 - `migrations/00N_*.sql` — append new numbered migrations; never edit applied ones.
 - `tool-catalog.json`, `admin-tool-catalog.json`, `TOOL_REFERENCE.md` — generated; refresh after schema changes (see below).
 - `tests/*.rs` — integration tests.
 
 ## Build, run, test
 
-Work only inside `E:\` on this machine (repo at `E:\local-first-mna-screening`).
+Work only inside `E:\` on this machine; use the current worktree for commands.
 Keep toolchains and caches on E: too (e.g. `CARGO_HOME`, `RUSTUP_HOME`,
-pnpm `--store-dir .pnpm-store`). At the time of writing, Node 22 is installed
-but **cargo/rustup and pnpm are not** (use `corepack enable pnpm` or install
-Rust to E:). A MinGW GCC exists under Cygwin for the bundled SQLite build.
+pnpm `--store-dir .pnpm-store`). Use `scripts/dev-env.cmd` for the E: Rust
+toolchain and shared cargo target when building on this machine.
 
 ### Rust service (`mna-tools/`)
 
@@ -71,7 +72,8 @@ cargo clippy --locked --all-targets -- -D warnings
 The UI looks for `mna-tools/target/x86_64-pc-windows-gnu/release/mna-tools.exe`;
 override with `SCREENING_RUST_BINARY=<absolute path>`. After changing tool
 schemas: regenerate with `mna-tools.exe --print-tool-schemas` /
-`--print-admin-schemas` and run `python scripts/build_tool_reference.py`.
+`--print-admin-schemas` using Git Bash redirection (UTF-8 without BOM, LF),
+then run `python mna-tools/scripts/build_tool_reference.py` from the repo root.
 
 ### UI (`mna-ui/`)
 
@@ -107,6 +109,7 @@ py -3 -m unittest discover -s tests -v
 - **Prepared plans bind an exact digest.** Any edit to setup or a relevant upload invalidates the preview and requires re-approval. Disconnected runs record `executed:false` and send nothing.
 - **Discovery is core-business only.** Geography, size, financials, ownership, industry codes are review details, never discovery filters.
 - **MID and ISCC scores stay separate.** Never average retrieval scores, and never merge them with screening/provider scores.
+- **Index and simulation truth:** MID keyword Match %, semantic score (0–10), ISCC Relevancy Score (0–1) and each provider round are separate. Semantic work reports skipped without configured vectors. `SCREENING_SIMULATE=1` is development only; simulated rows must be labelled and ordinary exports refuse them unless `allow_simulated` is explicit.
 - **Hidden ≠ deleted.** Hidden companies stay in saved history and can be restored. Counts, recommendations, screening scopes and exports use **considered** companies only.
 - **Never fabricate** results, scores, provider responses, approvals, or agent activity. Unavailable providers must show as unavailable. Research claims are unverified leads until analyst review.
 - **Identity:** names/websites alone never merge companies; only exact identifier bridges.
