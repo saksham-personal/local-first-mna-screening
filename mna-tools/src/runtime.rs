@@ -282,6 +282,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             "search",
             true,
         ),
+        ("score_mid_semantic", "Score MID candidates against approved criteria using stored embeddings", "search", true),
+        ("search_mid_semantic", "Discover additional MID companies using stored embeddings", "search", true),
         (
             "get_iscc_score_samples",
             "Inspect description samples across saved ISCC relevance bands",
@@ -511,6 +513,8 @@ impl Runtime {
         } else if [
             "search_companies",
             "search_mid",
+            "score_mid_semantic",
+            "search_mid_semantic",
             "search_iscc",
             "find_similar_companies",
             "find_similar_to_examples",
@@ -582,6 +586,7 @@ impl Runtime {
         }
         if [
             "search_mid",
+            "search_mid_semantic",
             "search_companies",
             "search_iscc",
             "import_enrichment_files",

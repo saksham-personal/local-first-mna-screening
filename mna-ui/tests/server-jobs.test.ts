@@ -87,6 +87,8 @@ function response(
   switch (tool) {
     case "create_run":
       return { run_id: "rust-run-1" };
+    case "get_mid_index_status":
+      return { active: null };
     case "import_company_files":
       return { imported: 8 };
     case "approve_screening_profile":
@@ -188,11 +190,12 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
   });
 
   const names = calls.map((call) => call.tool);
-  assert.deepEqual(names.slice(0, 4), [
+  assert.deepEqual(names.slice(0, 5), [
     "create_run",
-    "import_company_files",
     "approve_screening_profile",
     "get_active_screening_profile",
+    "get_mid_index_status",
+    "import_company_files",
   ]);
   assert.equal(names.filter((name) => name === "search_mid").length, 2);
   assert.ok(
@@ -388,7 +391,7 @@ test("cancel aborts the pending call, records it, and prevents later writes", as
   });
   const jobs = registry(async (tool, args, _approved, signal) => {
     calls.push(tool);
-    if (tool === "create_run") return response(tool, args);
+    if (["create_run", "approve_screening_profile", "get_active_screening_profile", "get_mid_index_status"].includes(tool)) return response(tool, args);
     if (tool === "import_company_files") {
       importStarted();
       return new Promise((_, reject) => {
@@ -407,7 +410,7 @@ test("cancel aborts the pending call, records it, and prevents later writes", as
   assert.equal(cancelling?.state, "running");
   const cancelled = await jobs.wait(started.id);
   assert.equal(cancelled?.state, "cancelled");
-  assert.deepEqual(calls, ["create_run", "import_company_files"]);
+  assert.deepEqual(calls, ["create_run", "approve_screening_profile", "get_active_screening_profile", "get_mid_index_status", "import_company_files"]);
   const createEvents =
     cancelled?.events.filter(
       (event: JobEvent) => event.tool === "create_run",
@@ -445,4 +448,30 @@ test("Rust failures remain observable as paired tool errors and terminal job err
   );
   assert.equal(events[0].id, events[1].id);
   assert.deepEqual(events[1].result, { error: "Rust lexical index failed" });
+});
+
+test('active MID bundle uses keyword v2 and semantic scoring without importing the fixture', async () => {
+  const calls: { tool: string; args: Record<string, unknown> }[] = [];
+  const jobs = registry(async (tool, args) => {
+    calls.push({tool, args});
+    if (tool === 'get_mid_index_status') return {active: {bundle_id: 'active-mid'}};
+    if (tool === 'import_company_files' || tool === 'add_candidates') throw new Error('The indexed path adds candidates in Rust.');
+    if (tool === 'search_mid') {
+      assert.equal(args.query, undefined);
+      assert.equal(args.limit, 5000);
+      assert.equal(args.add_to_run, true);
+      assert.ok(Array.isArray(args.keywords));
+      assert.equal(typeof args.expression, 'string');
+      assert.equal(typeof args.rationale, 'string');
+      return {query_id: 'indexed-query', results: [], added_to_run: true};
+    }
+    if (tool === 'score_mid_semantic') return {status: 'skipped', reason: 'Embedding model not configured.'};
+    return response(tool, args);
+  });
+  const completed = await jobs.wait(jobs.create(input).id);
+  assert.equal(completed.state, 'completed');
+  assert.ok(calls.filter(call => call.tool === 'search_mid').length >= 2);
+  assert.ok(calls.some(call => call.tool === 'score_mid_semantic'));
+  assert.ok(!calls.some(call => call.tool === 'import_company_files'));
+  assert.ok(completed.events.some((event: JobEvent) => event.tool === 'score_mid_semantic' && event.result?.reason === 'Embedding model not configured.'));
 });

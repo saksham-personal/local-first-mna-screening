@@ -227,7 +227,27 @@ fn default_task_timeout() -> u64 {
 
 pub fn input_schema(tool: &str) -> Option<Value> {
     let schema = match tool {
-        "search_companies" | "search_mid" => schemars::schema_for!(SearchCompaniesArgs),
+        "search_mid" => {
+            let mut legacy =
+                serde_json::to_value(schemars::schema_for!(SearchCompaniesArgs)).ok()?;
+            let mut keyword = crate::mid_search::input_schema(tool)?;
+            let mut definitions = legacy.as_object_mut()?.remove("$defs").unwrap_or(json!({}));
+            if let Some(extra) = keyword.as_object_mut()?.remove("$defs") {
+                definitions
+                    .as_object_mut()?
+                    .extend(extra.as_object()?.clone());
+            }
+            let mut properties = legacy["properties"].as_object()?.clone();
+            properties.extend(keyword["properties"].as_object()?.clone());
+            return Some(
+                json!({"type":"object","properties":properties,"additionalProperties":false,
+                "$defs":definitions,"anyOf":[legacy,keyword]}),
+            );
+        }
+        "score_mid_semantic" | "search_mid_semantic" => {
+            return crate::mid_search::input_schema(tool)
+        }
+        "search_companies" => schemars::schema_for!(SearchCompaniesArgs),
         "find_company" => schemars::schema_for!(FindCompanyArgs),
         "find_similar_companies" => schemars::schema_for!(FindSimilarArgs),
         "find_similar_to_examples" => schemars::schema_for!(FindSimilarExamplesArgs),
@@ -282,7 +302,14 @@ impl SearchEngine {
         }
         match tool {
             "search_companies" => self.search_companies(arguments, false).await,
+            "search_mid" if arguments.get("keywords").is_some() => {
+                crate::mid_search::search(&self.store, arguments)
+            }
             "search_mid" => self.search_companies(arguments, true).await,
+            "score_mid_semantic" => crate::mid_search::score_run(&self.store, arguments).await,
+            "search_mid_semantic" => {
+                crate::mid_search::search_semantic(&self.store, arguments).await
+            }
             "find_company" => self.find_company(arguments),
             "find_similar_companies" => self.find_similar(arguments),
             "find_similar_to_examples" => self.find_similar_examples(arguments),
