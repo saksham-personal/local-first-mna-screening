@@ -175,7 +175,7 @@ export default function FilterPanel<Row>({
           Select shown
         </button>
         <button type="button" onClick={() => updateChecklist([])}>
-          Clear
+          Select all
         </button>
       </div>
       <div className="dg-filter-values" role="group" aria-label={column.header + " values"}>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { DataGrid, type DataGridColumn, type SidePanelTab } from "./DataGrid";
 
 type DemoCompany = {
@@ -57,6 +57,7 @@ function createDemoRows(): DemoCompany[] {
 export default function GridDemo() {
   const rows = useMemo(createDemoRows, []);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
+  const isRowMuted = useCallback((row: DemoCompany) => hiddenIds.has(row.id), [hiddenIds]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openedCompany, setOpenedCompany] = useState<DemoCompany | null>(null);
 
@@ -219,7 +220,7 @@ export default function GridDemo() {
             Hide selected ({ids.length})
           </button>
         )}
-        isRowMuted={(row) => hiddenIds.has(row.id)}
+        isRowMuted={isRowMuted}
         sidePanelTabs={sidePanelTabs}
         sidePanelDefaultOpen
         storageKey="screening-grid-demo-v1"

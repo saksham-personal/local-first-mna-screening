@@ -75,7 +75,7 @@ export type DataGridProps<Row> = {
   onSelectedIdsChange?: (ids: string[]) => void;
   actionBar?: (selectedIds: string[]) => ReactNode;
   toolbarExtra?: ReactNode;
-  isRowMuted?: (row: Row) => boolean;
+  isRowMuted?: (row: Row) => boolean;                 // memoise it: a new function redraws all rows
   onOpenRow?: (row: Row) => void;
   sidePanelTabs?: SidePanelTab[];
   sidePanelDefaultOpen?: boolean;
@@ -369,11 +369,15 @@ export function DataGrid<Row>({
     }
   }, [selectedIds, displayedRows, selectable]);
 
+  // rowClassRules read isRowMuted through a ref, so re-run them when the caller's rule changes.
+  useEffect(() => {
+    gridRef.current?.api?.redrawRows();
+  }, [isRowMuted]);
+
   const visibleColumns = useMemo(
     () => columns.filter((column) => visibleColumnIds.includes(column.id)),
     [columns, visibleColumnIds],
   );
-  const filteredColumns = useMemo(() => columns, [columns]);
   const chips = useMemo(() => buildFilterChips(columns, filterState), [columns, filterState]);
   const safeHeight: CSSProperties = height === "fill"
     ? { flex: "1 1 auto", minHeight: 420 }
@@ -437,7 +441,7 @@ export function DataGrid<Row>({
         headerComponentParams: {
           gridColumn: column,
           rows,
-          columns: filteredColumns,
+          columns: columns,
           filterState,
           columnFilter: filter,
           sortState: sort,
@@ -468,7 +472,7 @@ export function DataGrid<Row>({
     visibleColumns,
     filterState,
     rows,
-    filteredColumns,
+    columns,
     sort,
     openFilterColumn,
     updateSort,
