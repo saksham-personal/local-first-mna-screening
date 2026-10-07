@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactElement } from "react";
 import {
   ArrowDownToLine,
+  ArrowRight,
   ArrowUpFromLine,
   Check,
   ChevronDown,
@@ -25,10 +26,10 @@ import { formatTime, plural, pluralWord } from "../lib/format";
 import Tooltip from "../Tooltip";
 import Skeleton from "../ui/Skeleton";
 import { useTheme } from "../lib/theme-store";
+import type { DataGridColumn, DataGridProps } from "../grid/DataGrid";
+import { OPEN_WORKSPACE_EVENT } from "../lib/grid-client";
 import { renderDiagram } from "../lib/mermaid-renderer";
 import "./artifacts.css";
-const DataTable = lazy(() => import("./DataTable"));
-const ShortlistReview = lazy(() => import("./ShortlistReview"));
 import FitExamples, { InlineFitExamples } from "./FitExamples";
 import CriteriaVersionMenu from "./CriteriaVersionMenu";
 import "./criteria.css";
@@ -37,11 +38,46 @@ import EnrichmentUpload from "./EnrichmentUpload";
 import StartInBackground from "./StartInBackground";
 import { consideredCompanies } from "../lib/chat-policy";
 
+const ShortlistReview = lazy(() => import("./ShortlistReview"));
+type GenericDataGrid = <Row>(props: DataGridProps<Row>) => ReactElement;
+const DataGrid = lazy(() => import("../grid/DataGrid").then((module) => ({ default: module.DataGrid }))) as unknown as GenericDataGrid;
+
 type Props = {
   artifact: ChatArtifact;
   onAction: (action: ArtifactAction) => void | Promise<void>;
   context?: ChatState;
 };
+
+function artifactGridColumns(
+  rows: Record<string, unknown>[],
+  requestedColumns: string[],
+): DataGridColumn<Record<string, unknown>>[] {
+  const columns = requestedColumns.length
+    ? [...new Set(requestedColumns)]
+    : [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  return columns.map((column) => ({
+    id: column,
+    header: column,
+    group: "Results",
+    kind: rows.some((row) => typeof row[column] === "number") ? "number" : "text",
+    value: (row) => row[column],
+  }));
+}
+
+function artifactGridRows(rows: Record<string, unknown>[]) {
+  const seen = new Map<string, number>();
+  return rows.map((row, index) => {
+    const value = row.pk ?? row.company_id ?? row.companyId ?? row.id;
+    const base = value == null || value === "" ? `row-${index}` : String(value);
+    const occurrence = seen.get(base) ?? 0;
+    seen.set(base, occurrence + 1);
+    return { ...row, __artifactGridId: occurrence ? `${base}:${occurrence}` : base };
+  });
+}
+
+function openWorkspaceCompanies() {
+  window.dispatchEvent(new CustomEvent(OPEN_WORKSPACE_EVENT, { detail: { tab: "companies" } }));
+}
 
 const exportNames: Record<ExportKind, string> = {
   pitchbook: "PitchBook",
@@ -333,8 +369,11 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
         </>
       );
     }
-    case "data-table":
-      return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}<Suspense fallback={<Skeleton variant="table" rows={5} cols={4} label="Opening table" />}>{artifact.reviewable && context ? <ShortlistReview rows={artifact.rows} columns={artifact.columns} context={context} planId={artifact.planId} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} onApply={async (keepCompanyIds, outputColumns) => { await onAction({ type: "review-shortlist", artifactId: artifact.id, keepCompanyIds, outputColumns, planId: artifact.planId }); }} /> : <DataTable rows={artifact.rows} columns={artifact.columns} label={artifact.title} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} />}</Suspense></>;
+    case "data-table": {
+      const rows = artifactGridRows(artifact.rows);
+      const columns = artifactGridColumns(artifact.rows, artifact.columns);
+      return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}{artifact.reviewable && context ? <Suspense fallback={<Skeleton variant="table" rows={5} cols={4} label="Opening table" />}><ShortlistReview rows={artifact.rows} columns={artifact.columns} context={context} planId={artifact.planId} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} onApply={async (keepCompanyIds, outputColumns) => { await onAction({ type: "review-shortlist", artifactId: artifact.id, keepCompanyIds, outputColumns, planId: artifact.planId }); }} /></Suspense> : <Suspense fallback={<Skeleton variant="table" rows={5} cols={4} label="Opening table" />}><DataGrid rows={rows} columns={columns} getRowId={row => String(row.__artifactGridId)} label={artifact.title} height={420} toolbarExtra={<button type="button" className="ca-secondary-action" onClick={openWorkspaceCompanies}>Open in Workspace <ArrowRight size={13} /></button>} /></Suspense>}</>;
+    }
     case "fit-examples":
       return <FitExamples artifact={artifact} />;
     case "research-answer":
