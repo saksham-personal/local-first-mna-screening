@@ -243,7 +243,7 @@ impl DataService {
                 if found.promoted { result.promoted += 1; }
                 let raw = serde_json::to_string(row)?;
                 let hash = hex_hash(raw.as_bytes());
-                let score = get_field(row, &["Relevance Score", "Relevance", "Score"]).and_then(as_score);
+                let score = get_field(row, &["Relevancy Score", "Relevance Score", "Relevancy", "Relevance", "Score"]).and_then(as_score);
                 result.source_rows_added += tx.execute("INSERT OR IGNORE INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at) VALUES(?,?,?,?,?,?,?,?,?)",
                     params![id("SRC"),source,run_scope,query_scope,found.company_id,hash,raw,score,now()])?;
                 if source == "MID" || found.created || !has_source(&tx, &found.company_id, "MID")? {

@@ -975,7 +975,7 @@ fn iscc_score_bands(rows: &[Value]) -> Vec<Value> {
 }
 
 fn iscc_score(row: &Value) -> Option<f64> {
-    get_field(row, &["Relevance Score", "Relevance", "Score"])
+    get_field(row, &["Relevancy Score", "Relevance Score", "Relevancy", "Relevance", "Score"])
         .and_then(|value| {
             value
                 .as_f64()
