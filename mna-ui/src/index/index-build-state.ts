@@ -19,7 +19,9 @@ export function etaText(seconds: number | null | undefined) {
   return `about ${Math.ceil(seconds / 60)} min left`;
 }
 export function buildEtaText(build: IndexBuild) {
-  return isActiveBuild(build) ? etaText(build.steps.find(step => step.status === "running")?.eta_seconds) : "—";
+  const current = build.steps.find(step => step.id === build.current_step && step.status === "running")
+    ?? build.steps.find(step => step.status === "running");
+  return isActiveBuild(build) ? etaText(current?.eta_seconds) : "—";
 }
 export function elapsedText(start: string | null | undefined, end?: string | null, now = Date.now()) {
   if (!start) return "—";

@@ -30,6 +30,7 @@ test("activity is running only for queued/running and ETA uses the running step"
   const build = { status: "running", steps: [{ ...step("store_rows", "running"), eta_seconds: 120 }] } as IndexBuild;
   assert.equal(buildEtaText(build), "about 2 min left");
   assert.equal(buildEtaText({ ...build, status: "succeeded" }), "—");
+  assert.equal(buildEtaText({ ...build, current_step: "store_rows", steps: [step("normalize_identifiers", "running"), ...build.steps] }), "about 2 min left");
   for (const status of ["pending", "running", "done", "skipped", "failed"] as const) assert.ok(stepPresentation(status).label);
   assert.equal(stepPresentation("skipped").icon, "minus");
 });

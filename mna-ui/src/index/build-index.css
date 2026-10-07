@@ -80,9 +80,3 @@
   .index-actions { justify-content: flex-start; }
   .index-step { gap: 8px; grid-template-columns: 18px minmax(0, 1fr) 40px; }
 }
-
-.ct-header { container-name: index-header; container-type: inline-size; }
-@container index-header (max-width: 1180px) {
-  .ct-index-button > span { display: none; }
-  .ct-index-button { width: 32px; padding: 0; justify-content: center; }
-}

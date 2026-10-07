@@ -47,12 +47,13 @@ export default function BuildIndexDialog({ open, onOpenChange, builds, selectedB
     const [summary, history] = await Promise.allSettled([getMidIndexStatus(), listIndexBuilds()]);
     return { summary, history };
   };
-  const refresh = async () => {
+  const refresh = async (buildId = currentId) => {
     const { summary, history } = await overview();
     if (summary.status === "fulfilled") setStatus(summary.value);
     if (history.status === "fulfilled") setRecent(history.value.bundles);
     const runningBuild = summary.status === "fulfilled" ? summary.value.running_build : history.status === "fulfilled" ? history.value.builds.find(isActiveBuild) : undefined;
-    if (runningBuild) { onBuild(runningBuild); setCurrentId(runningBuild.build_id); }
+    const recovered = runningBuild ?? (history.status === "fulfilled" ? history.value.builds.find(item => item.build_id === buildId) : undefined);
+    if (recovered) { onBuild(recovered); setCurrentId(recovered.build_id); }
     if (summary.status === "rejected") throw summary.reason;
     if (history.status === "rejected") throw history.reason;
     setError("");
@@ -60,7 +61,7 @@ export default function BuildIndexDialog({ open, onOpenChange, builds, selectedB
   useEffect(() => {
     if (!open) return;
     const token = ++request.current;
-    setLoading(true); setError("");
+    setLoading(true); setStatus(undefined); setError("");
     void overview().then(({ summary, history }) => {
       if (token !== request.current) return;
       if (summary.status === "fulfilled") setStatus(summary.value);
@@ -97,8 +98,8 @@ export default function BuildIndexDialog({ open, onOpenChange, builds, selectedB
       uploadTask.current = undefined; setUpload(undefined);
       const result = await startIndexBuild(staged.id, name.trim(), activate);
       setCurrentId(result.build_id);
-      const next = await getIndexBuild(result.build_id);
-      onBuild(next);
+      try { onBuild(await getIndexBuild(result.build_id)); }
+      catch { await refresh(result.build_id); }
     } catch (failure) {
       if (!(failure instanceof DOMException && failure.name === "AbortError")) setError(failure instanceof Error ? failure.message : String(failure));
     } finally { uploadTask.current = undefined; setUpload(undefined); setBusy(false); }
@@ -116,7 +117,7 @@ export default function BuildIndexDialog({ open, onOpenChange, builds, selectedB
         <header className="index-dialog-head"><div><Dialog.Title><Database size={20} aria-hidden="true" />Build Index</Dialog.Title><Dialog.Description id="index-description">Build the company index from a MID workbook.</Dialog.Description></div><Dialog.Close className="index-icon-button" aria-label="Close Build Index"><X size={20} /></Dialog.Close></header>
         <div className="index-dialog-body">
           {loading ? <Skeleton variant="card" label="Loading index status" /> : <section className="index-active" aria-label="Active index">
-            {active ? <><strong>Active index: {active.name}</strong><p>{plural(active.row_count, "company", "companies")} · activated {formatDateTime(active.activated_at)}</p><span>Semantic search: {active.semantic_status === "ready" ? "ready" : "not set up"}</span><HelpTip label="About semantic search" size="sm">Set MNA_EMBED_ENDPOINT to connect a local embedding model before building.</HelpTip></> : <><strong>No index yet</strong><p>Choose a MID workbook to build your first company index.</p></>}
+            {!status ? <><strong>Index status unavailable</strong><p>Close and reopen this window to retry.</p></> : active ? <><strong>Active index: {active.name}</strong><p>{plural(active.row_count, "company", "companies")} · activated {formatDateTime(active.activated_at)}</p><span>Semantic search: {active.semantic_status === "ready" ? "ready" : "not set up"}</span><HelpTip label="About semantic search" size="sm">Set MNA_EMBED_ENDPOINT to connect a local embedding model before building.</HelpTip></> : <><strong>No index yet</strong><p>Choose a MID workbook to build your first company index.</p></>}
           </section>}
           {error && <p className="index-error" role="alert">{error}</p>}
           {!build && !loading && <form className="index-start" onSubmit={event => { event.preventDefault(); void start(); }}>
