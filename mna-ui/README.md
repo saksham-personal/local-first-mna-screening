@@ -17,6 +17,10 @@ Open `http://127.0.0.1:4173/`. Use `pnpm dev` for port 5173. `pnpm start` launch
 
 ## Follow a screening
 
+The **Build Index** button opens a window for a MID XLSX workbook. The service uses `../mna-tools/config/mid-index.json` and reports eight steps from reading the file through activation. Semantic embeddings show **skipped** until `MNA_EMBED_ENDPOINT` is configured. MID keyword search can save a rationale and show Match %; ready vectors can add a separate 0–10 semantic score. The company workspace has All, MID and ISCC tabs, separate score columns, score histograms and filters with `CHECK` included by default. Approved scored plans appear as R1, R2 and later rounds; a round does not mean a disconnected provider ran.
+
+For development only, start the bridge with `SCREENING_SIMULATE=1` to get deterministic simulated ISCC rows, LLM Suite/M365 tables and Bing leads. The UI marks simulated results and exports refuse them unless the export tool receives `allow_simulated`, which labels the workbook. Live corporate providers and 150,000-row performance have not been verified.
+
 1. Select **New screening**, describe the core business, or use `/example` for fictional insurance software criteria. A UTF-8 TXT file can supply a draft. Files can be stored and previewed. The Intake Form opens PDFs and pre-fills fields by label; check each field. Full parsing is deferred.
 2. Review the business criteria. Enter optional good-fit and bad-fit examples in separate boxes, or skip. Review and approve the final criteria. Drafts are saved as backend revisions before discovery. Editing criteria later creates a new revision and requires another approval.
 3. Search fictional MID data. The local example uses local search tools and saves candidates in the approved run. It can search again without replacing original company data or prior hidden decisions. ISCC is a configured external gateway, not simulated in this example. `/data` shows saved source columns; tool calls and timing appear in **Session log**.

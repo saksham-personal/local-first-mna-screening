@@ -35,11 +35,12 @@ Every route except `/health` requires `Authorization: Bearer <MNA_API_KEY>`. Ana
 | `POST /admin/companies`, `/admin/company-files`, `/admin/runs`, `/admin/index` | Ingest MID/create run/sync optional Meilisearch |
 | `POST /admin/labels`, `/admin/profiles/approve`, `/admin/actions/approve` | Actual analyst labels and profile/action approval |
 | `POST /admin/embedding-index` | Build a model/version/text-hash embedding index |
+| `POST /admin/index-build-start`, `/admin/index-build-cancel`, `/admin/mid-bundle-activate`, `/admin/mid-bundle-delete` | Build and manage MID index bundles from staged workbooks |
 | `POST /admin/prepared-plan-approve`, `/admin/prepared-plan-cancel` | Approve exact prepared digest or cancel unsent work |
 | `POST /admin/evidence-review` | Verify/reject a claim with analyst reason |
 | Controller execution routes | Leases, dispatch, responses, reconciliation and shared LLMSuite slots; see [execution contract](docs/EXECUTION_CONTRACT.md) |
 
-The service exposes **70 agent tools and 24 privileged operations**. Unknown arguments fail. HTTP bodies are bounded at 1 MiB; at most eight tool calls execute concurrently. Batch calls are not one transaction. Schemas are in [tool-catalog.json](tool-catalog.json) and [admin-tool-catalog.json](admin-tool-catalog.json). Export them without starting a server:
+The service exposes **76 agent tools and 28 privileged operations**. Unknown arguments fail. HTTP bodies are bounded at 1 MiB; at most eight tool calls execute concurrently. Batch calls are not one transaction. Schemas are in [tool-catalog.json](tool-catalog.json) and [admin-tool-catalog.json](admin-tool-catalog.json). Export them without starting a server:
 
 ```powershell
 mna-tools.exe --print-tool-schemas
@@ -48,13 +49,17 @@ mna-tools.exe --print-admin-schemas
 
 ## Discovery and data
 
-Find core products/services/workflows in descriptions. Geography, financials, size, ownership and classification fields are deferred criteria, ignored as discovery filters and reported to the caller. Only approved core-business exclusions may narrow the funnel. MID and ISCC default/max result counts are **1,000 per query**. ISCC normally uses 10–12 qualitative words, at most 14; an action plan allows five variants. Score-band sampling helps judge breadth without a hard 0.45 cutoff. MID and ISCC scores remain separate.
+**Build Index** in the UI starts an eight-step MID workbook build using [config/mid-index.json](config/mid-index.json): read, validate columns, normalize IDs, store rows, build keyword index, embed descriptions, verify and activate. Its progress and bundle history are durable. With no `MNA_EMBED_ENDPOINT`, the embedding step is labelled **skipped**. The new `search_mid` form uses weighted stem/exact keyword groups, a rationale and a Boolean expression; its Match % counts matched positive weights over all positive weights. It defaults to 5,000 results and allows 20,000. The legacy query form and ISCC remain capped at 1,000 per call. `score_mid_semantic` stores a separate 0–10 score when compatible vectors exist, while ISCC Relevancy Score remains 0–1. Exact ECID/ECI links are preferred, then CID/Crescendo ID. The grid and drawer display source scores separately from R1, R2 and later approved screening rounds.
+
+For development, `SCREENING_SIMULATE=1` on the UI bridge enables deterministic simulated ISCC, LLM Suite/M365 and Bing output. It is visibly labelled. Export refuses simulated data unless the caller sets `allow_simulated`, which marks the workbook. This does not validate real corporate providers. Neither 150,000-row throughput nor a real embedding model has been verified.
+
+Find core products/services/workflows in descriptions. Geography, financials, size, ownership and classification fields are deferred criteria, ignored as discovery filters and reported to the caller. Only approved core-business exclusions may narrow the funnel. The legacy MID query form and ISCC default/max result counts are **1,000 per call**. ISCC normally uses 10–12 qualitative words, at most 14; an action plan allows five variants. Score-band sampling helps judge breadth without a hard 0.45 cutoff. MID and ISCC scores remain separate.
 
 MID supports lexical search and configured model-specific hybrid/semantic search. The replaceable local embedder defaults to Arctic M v2 INT8 ONNX 768D. Rebuild its index with the privileged embedding operation. The optional CPU worker and exact setup are in [RETRIEVAL.md](docs/RETRIEVAL.md). Real weights are not bundled. A replaceable reranker scores the first 500 per source/query and keeps the remaining tail; model choice is planned. No local generative model is used.
 
 Normalize ECID/CID into ECID-CID, X-CID or provisional ECID-X. Drop/report rows with neither. Exact cross-references promote aliases; names/websites do not merge companies. Eligible PitchBook mapping adds PBId. Header-based mixed imports process mapping, PB data, then ROGO, retain compact PB fields and wide Parquet payloads, and quarantine ambiguous joins.
 
-The run projection independently prefers PB/MID/ISCC name and website, combines labeled descriptions, includes genuine PB LinkedIn, and binds coverage/selected row hashes. Full preparation retains every selected company up to an explicit 64 MB snapshot cap. Oversize scopes fail without silently losing rows. Recommend PitchBook below 2,000 companies and LLM screening at 2,000 or more. Exact PitchBook/LLM/Full XLSX exports remain available.
+The run projection independently prefers PB/MID/ISCC name and website, combines labeled descriptions, includes genuine PB LinkedIn, and binds coverage/selected row hashes. Full preparation retains every selected company up to an explicit 64 MB snapshot cap. Oversize scopes fail without silently losing rows. The UI recommends PitchBook for 0<n<1000 and LLM Suite for n>2000, using considered count n. Exact PitchBook/LLM/Full XLSX exports remain available.
 
 ## Approvals, execution and trust
 

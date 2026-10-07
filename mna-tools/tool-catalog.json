@@ -2052,6 +2052,38 @@
     "mutates_state": true,
     "input_schema": {
       "$defs": {
+        "Keyword": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "match": {
+              "$ref": "#/$defs/Match",
+              "default": "stem"
+            },
+            "text": {
+              "type": "string"
+            },
+            "weight": {
+              "default": 1.0,
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "text"
+          ],
+          "type": "object"
+        },
+        "Match": {
+          "enum": [
+            "stem",
+            "exact"
+          ],
+          "type": "string"
+        },
         "SearchFilters": {
           "additionalProperties": false,
           "properties": {
@@ -2163,11 +2195,157 @@
           "type": "string"
         }
       },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
+      "anyOf": [
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "filters": {
+              "$ref": "#/$defs/SearchFilters"
+            },
+            "lexical_weight": {
+              "default": 0.45,
+              "format": "double",
+              "type": "number"
+            },
+            "limit": {
+              "default": 1000,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "$ref": "#/$defs/SearchMode"
+            },
+            "offset": {
+              "default": 0,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "prefer_meilisearch": {
+              "default": true,
+              "type": "boolean"
+            },
+            "query": {
+              "default": "",
+              "type": "string"
+            },
+            "query_vector": {
+              "default": null,
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "run_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "semantic_ratio": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "semantic_weight": {
+              "default": 0.55,
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "title": "SearchCompaniesArgs",
+          "type": "object"
+        },
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "add_to_run": {
+              "default": true,
+              "type": "boolean"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "expression": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keywords": {
+              "items": {
+                "$ref": "#/$defs/Keyword"
+              },
+              "type": "array"
+            },
+            "limit": {
+              "default": 5000,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "rationale",
+            "keywords"
+          ],
+          "title": "KeywordArgs",
+          "type": "object"
+        }
+      ],
       "properties": {
+        "add_to_run": {
+          "default": true,
+          "type": "boolean"
+        },
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "expression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "filters": {
           "$ref": "#/$defs/SearchFilters"
+        },
+        "keywords": {
+          "items": {
+            "$ref": "#/$defs/Keyword"
+          },
+          "type": "array"
         },
         "lexical_weight": {
           "default": 0.45,
@@ -2175,7 +2353,7 @@
           "type": "number"
         },
         "limit": {
-          "default": 1000,
+          "default": 5000,
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -2208,12 +2386,11 @@
             "null"
           ]
         },
+        "rationale": {
+          "type": "string"
+        },
         "run_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "semantic_ratio": {
           "default": null,
@@ -2229,7 +2406,65 @@
           "type": "number"
         }
       },
-      "title": "SearchCompaniesArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "score_mid_semantic",
+    "description": "Score MID candidates against approved criteria using stored embeddings",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_mid_semantic",
+    "description": "Discover additional MID companies using stored embeddings",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "add_to_run": {
+          "default": true,
+          "type": "boolean"
+        },
+        "limit": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_score": {
+          "format": "double",
+          "type": "number"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "rationale",
+        "min_score"
+      ],
+      "title": "SemanticArgs",
       "type": "object"
     }
   },
@@ -2414,6 +2649,11 @@
             "null"
           ]
         },
+        "include_company_payload": {
+          "default": false,
+          "description": "Include larger bridge-only fields needed to construct Company records.",
+          "type": "boolean"
+        },
         "include_hidden": {
           "default": true,
           "description": "Include companies hidden by review (default true). Hidden rows carry considered=false.",
@@ -2474,6 +2714,10 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
+        "allow_simulated": {
+          "default": false,
+          "type": "boolean"
+        },
         "export_type": {
           "type": "string"
         },
@@ -2717,6 +2961,60 @@
         "run_id"
       ],
       "title": "ProjectionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_mid_index_status",
+    "description": "Read the active MID index and running build",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "title": "EmptyArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_index_build",
+    "description": "Read durable index build steps and progress",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "build_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "build_id"
+      ],
+      "title": "BuildArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_index_builds",
+    "description": "List recent MID index builds and bundles",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 20,
+          "format": "uint",
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "ListArgs",
       "type": "object"
     }
   },
@@ -3181,6 +3479,26 @@
         "run_id"
       ],
       "title": "AssessmentsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_screening_rounds",
+    "description": "Read approved screening rounds with provider, job progress and per-score distributions",
+    "category": "execution",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "ScreeningRoundsArgs",
       "type": "object"
     }
   },

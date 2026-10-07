@@ -1,8 +1,14 @@
 # Discovery retrieval and local inference
 
-`search_mid` and `search_iscc` default to **1,000** results and accept at most 1,000 per query. Discovery uses core-business descriptions only. Non-core geography, revenue, employee size, ownership, classification, ID filters and additional positive keyword filter fields do not narrow the MID funnel; ignored field names appear in diagnostics. Put the actual qualitative terms in the query. ISCC receives only the qualitative query and limit.
+The legacy `search_mid` query form and `search_iscc` default to **1,000** results and accept at most 1,000 per call. The MID keyword v2 form defaults to 5,000 and accepts at most 20,000. Discovery uses core-business descriptions only. Non-core geography, revenue, employee size, ownership and classifications do not narrow the MID funnel. ISCC receives only the qualitative query and limit.
 
-A MID exclusion narrows discovery only when it matches `content.core_business_exclusions` in the current analyst-approved profile (case/outer whitespace ignored). Query negation tokens, including NOT, EXCLUDE, parenthesized NOT and minus, are rejected before retrieval so they cannot bypass approval. A quoted literal word is not a Boolean negation token. The controller must also explain deferred free-text criteria to the analyst.
+A MID exclusion narrows discovery only when it matches `content.core_business_exclusions` in the current analyst-approved profile (case/outer whitespace ignored). In legacy queries, negation tokens are rejected. In keyword v2, `AND NOT` is allowed only for an approved core-business exclusion; standalone NOT is rejected. The controller must also explain deferred free-text criteria to the analyst.
+
+## MID bundle build and keyword search
+
+The **Build Index** flow reads a staged MID XLSX using `mna-tools/config/mid-index.json`. It reports eight steps: read workbook, check columns, match IDs, store rows, build keyword index, semantic embeddings, verify and activate. The FTS tables use the configured searchable columns and weights. Keyword v2 accepts weighted stem or exact phrases and Boolean `AND`, `OR` and approved-exclusion `AND NOT`. Match % is matched positive weights divided by all positive weights. The saved query includes its rationale and a display string. The active bundle can be replaced atomically; an older bundle remains for rollback.
+
+During the build, description vectors are keyed by company, model/version and the MID description hash. Rows with an unchanged hash can reuse their vector; changed descriptions require embedding again. Without `MNA_EMBED_ENDPOINT`, the step records **skipped** and semantic scoring/search also reports **skipped**. With an endpoint, `score_mid_semantic` compares the approved criteria vector to current candidate vectors and stores a separate 0–10 score. The real model and 150,000-row indexing/search performance have not been verified.
 
 ## Embedder and model-specific index
 
