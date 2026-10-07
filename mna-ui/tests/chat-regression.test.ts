@@ -7,6 +7,7 @@ import {
 import { appendWorkspaceMessages } from "../src/lib/workspace-message-sync";
 import {
   approveCriteria,
+  hiddenActionMetadata,
   createChatAdapter,
   pendingWorkspaceMessages,
   reviseCriteria,
@@ -179,7 +180,7 @@ const user = (id: string, text: string, action?: ArtifactAction) => ({
   role: "user",
   content: [{ type: "text", text }],
   attachments: [],
-  metadata: { custom: action ? { artifactAction: action } : {} },
+  metadata: { custom: action ? hiddenActionMetadata(text, action) : {} },
 });
 async function reply(
   id: string,
@@ -286,6 +287,9 @@ function completed(
 test("unapproved search is rejected before a request and stale criteria approval cannot authorize a revision", async () => {
   const id = session();
   const old = reviseCriteria(id, "Claims software", "Claims software");
+  assert.ok(old.type === "criteria");
+  assert.equal(old.phase, undefined);
+  assert.equal(getChatState(id).artifacts.some(artifact => artifact.type === "fit-examples"), false);
   await assert.rejects(
     startDiscovery(id, "Review", "turn", "answer"),
     /approve/i,

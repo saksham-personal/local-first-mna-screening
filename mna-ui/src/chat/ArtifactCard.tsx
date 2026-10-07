@@ -29,7 +29,9 @@ import { renderDiagram } from "../lib/mermaid-renderer";
 import "./artifacts.css";
 const DataTable = lazy(() => import("./DataTable"));
 const ShortlistReview = lazy(() => import("./ShortlistReview"));
-import FitExamples from "./FitExamples";
+import FitExamples, { InlineFitExamples } from "./FitExamples";
+import CriteriaVersionMenu from "./CriteriaVersionMenu";
+import "./criteria.css";
 import NextStepsCard from "./NextStepsCard";
 import EnrichmentUpload from "./EnrichmentUpload";
 import StartInBackground from "./StartInBackground";
@@ -334,7 +336,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
     case "data-table":
       return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}<Suspense fallback={<Skeleton variant="table" rows={5} cols={4} label="Opening table" />}>{artifact.reviewable && context ? <ShortlistReview rows={artifact.rows} columns={artifact.columns} context={context} planId={artifact.planId} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} onApply={async (keepCompanyIds, outputColumns) => { await onAction({ type: "review-shortlist", artifactId: artifact.id, keepCompanyIds, outputColumns, planId: artifact.planId }); }} /> : <DataTable rows={artifact.rows} columns={artifact.columns} label={artifact.title} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} />}</Suspense></>;
     case "fit-examples":
-      return <FitExamples artifact={artifact} onAction={onAction} />;
+      return <FitExamples artifact={artifact} />;
     case "research-answer":
       return <ResearchAnswer artifact={artifact} onAction={onAction} />;
     case "enrichment-upload":
@@ -388,76 +390,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
       );
     }
     case "criteria":
-      return (
-        <>
-          <div className="ca-criteria-decision" role="status">
-            <span className={`ca-state-dot ca-state-${artifact.decision}`} />
-            {artifact.decision === "approved"
-              ? `${artifact.phase === "business" ? "Business criteria reviewed" : "Approved"} · revision ${artifact.revision}`
-              : artifact.decision === "declined"
-                ? `Declined · revision ${artifact.revision}`
-                : `Awaiting approval · revision ${artifact.revision}`}
-          </div>
-          <p className="ca-criteria-definition">{artifact.definition}</p>
-          {context?.criteriaSaveError && artifact.revision === context.revision && <p className="sf-upload-error" role="alert">The criteria could not be saved: {context.criteriaSaveError}. Edit the criteria or try approval again.</p>}
-          {artifact.lastCriteria && (
-            <details className="ca-criteria-original">
-              <summary>Last criteria</summary>
-              <blockquote className="ca-criteria-text">
-                {artifact.lastCriteria}
-              </blockquote>
-            </details>
-          )}
-          {artifact.ignored.length > 0 && (
-            <div className="ca-notice">
-              <strong>Kept for reference</strong>
-              <p>{artifact.ignored.join(" · ")}</p>
-              <small>These details do not filter company discovery.</small>
-            </div>
-          )}
-          <div className="ca-action-row">
-            {artifact.decision === "pending" && (
-              <>
-                <button
-                  className="ca-primary-action"
-                  type="button"
-                  onClick={() =>
-                    onAction({
-                      type: "approve-criteria",
-                      artifactId: artifact.id,
-                    })
-                  }
-                >
-                  <Check size={14} />
-                  {artifact.phase === "business" ? "Approve business criteria" : "Approve and search"}
-                </button>
-                <button
-                  className="ca-secondary-action"
-                  type="button"
-                  onClick={() =>
-                    onAction({
-                      type: "decline-criteria",
-                      artifactId: artifact.id,
-                    })
-                  }
-                >
-                  <X size={14} />
-                  Decline
-                </button>
-              </>
-            )}
-            <button
-              className="ca-text-action"
-              type="button"
-              onClick={() =>
-                onAction({ type: "edit-criteria", artifactId: artifact.id })
-              }
-            >
-              Edit criteria
-            </button>
-          </div>
-        </>
-      );
+      return <CriteriaContent key={artifact.id} artifact={artifact} context={context} onAction={onAction} />;
     case "companies":
       return <Companies artifact={artifact} onAction={onAction} />;
     case "options":
@@ -703,4 +636,24 @@ export default function ArtifactCard({ artifact, onAction, context }: Props) {
       </div>
     </article>
   );
+}
+
+function CriteriaContent({ artifact, context, onAction }: Props & { artifact: Extract<ChatArtifact, { type: "criteria" }> }) {
+  const [good, setGood] = useState(artifact.goodFitExamples ?? ""), [bad, setBad] = useState(artifact.badFitExamples ?? "");
+  const current = !context || artifact.revision === context.revision && (!artifact.draftToken || artifact.draftToken === context.criteriaSaveToken);
+  const editable = current && artifact.decision === "pending";
+  const saved = !context || !current || context.durableCriteria?.revision === context.revision;
+  return <>
+    <div className="criteria-version-heading"><div className="ca-criteria-decision" role="status"><span className={`ca-state-dot ca-state-${artifact.decision}`} />{artifact.decision === "approved" ? "Approved" : artifact.decision === "declined" ? "Superseded" : "Awaiting approval"} · {saved ? `v${artifact.revision}` : "Saving draft…"}</div>{context && <CriteriaVersionMenu state={context} />}</div>
+    {artifact.intakeForm && <span className="criteria-intake-tag">From Intake Form</span>}
+    <p className="ca-criteria-definition">{artifact.definition}</p>
+    {context?.criteriaSaveError && current && <p className="sf-upload-error" role="alert">The criteria could not be saved: {context.criteriaSaveError}. Try approval again.</p>}
+    <InlineFitExamples good={editable ? good : artifact.goodFitExamples ?? ""} bad={editable ? bad : artifact.badFitExamples ?? ""} readOnly={!editable} onChange={(nextGood, nextBad) => { setGood(nextGood); setBad(nextBad); }} />
+    {artifact.ignored.length > 0 && <div className="ca-notice"><strong>Recorded, not used for search</strong><p>{artifact.ignored.join(" · ")}</p></div>}
+    <div className="ca-action-row">
+      {editable && <button className="ca-primary-action" type="button" disabled={!saved && !context?.criteriaSaveError} onClick={() => onAction({ type: "approve-criteria", artifactId: artifact.id, good, bad })}><Check size={14} />Approve &amp; search</button>}
+      {current && <button className="ca-text-action" type="button" onClick={() => onAction({ type: "edit-criteria", artifactId: artifact.id })}>Edit criteria</button>}
+      {artifact.intakeForm && <button className="ca-text-action" type="button" onClick={() => onAction({ type: "view-intake", artifactId: artifact.id })}>View Intake Form</button>}
+    </div>
+  </>;
 }

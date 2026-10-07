@@ -133,6 +133,8 @@ function validArtifact(value: unknown): boolean {
       return (
         typeof value.criteriaText === "string" &&
         typeof value.definition === "string" &&
+        ["goodFitExamples", "badFitExamples", "draftToken"].every(key => value[key] === undefined || typeof value[key] === "string") &&
+        (value.intakeForm === undefined || record(value.intakeForm)) &&
         strings(value.ignored) &&
         count(value.revision) &&
         ["pending", "approved", "declined"].includes(String(value.decision))
@@ -260,6 +262,8 @@ export function getChatState(id: string): ChatState {
         parsed.sessionId !== id ||
         typeof parsed.criteriaText !== "string" ||
         typeof parsed.definition !== "string" ||
+        (["goodFitExamples", "badFitExamples", "criteriaSaveToken"] as const).some(key => parsed[key] !== undefined && typeof parsed[key] !== "string") ||
+        (parsed.intakeForm !== undefined && !record(parsed.intakeForm)) ||
         !count(parsed.revision) ||
         !Array.isArray(parsed.artifacts) ||
         !parsed.artifacts.every(validArtifact) ||
@@ -293,6 +297,30 @@ export function getChatState(id: string): ChatState {
         approval.definition !== state.definition
       )
         state = { ...state, approvedRevision: undefined };
+      // Older chats used a local display counter. Normalize the current card
+      // to its saved Rust revision. The old approval names the local counter,
+      // so an analyst must approve the authoritative revision again.
+      if (state.durableCriteria?.localRevision === state.revision && state.durableCriteria.revision !== state.revision) {
+        const localRevision = state.revision, revision = state.durableCriteria.revision;
+        state = { ...state, revision, approvedRevision: undefined,
+          durableCriteria: { ...state.durableCriteria, localRevision: revision },
+          artifacts: state.artifacts.map(artifact => artifact.type === "criteria" && artifact.revision === localRevision ? { ...artifact, revision } : artifact),
+        };
+      }
+      state = { ...state, artifacts: state.artifacts.map(artifact => {
+        if (artifact.type !== "criteria") return artifact;
+        const { phase, ...saved } = artifact;
+        const current = artifact.revision === state.revision;
+        return {
+          ...saved,
+          goodFitExamples: artifact.goodFitExamples ?? (current ? state.goodFitExamples : ""),
+          badFitExamples: artifact.badFitExamples ?? (current ? state.badFitExamples : ""),
+          intakeForm: artifact.intakeForm ?? (current ? state.intakeForm : undefined),
+          decision: artifact.decision === "approved" && (phase === "business" || current && state.approvedRevision !== state.revision)
+            ? current ? state.approvedRevision === state.revision ? "approved" : "pending" : "declined"
+            : artifact.decision,
+        };
+      }) };
     }
   } catch {
     sessionStore.addEvent({
@@ -512,7 +540,7 @@ export function syncWorkspaceIntoChat(sessionId: string): void {
         approvedRevision: undefined,
         durableCriteria: undefined,
         lastCriteria: state.revision ? { text: state.criteriaText, definition: state.definition, revision: state.revision } : undefined,
-        examplesCompleteRevision: state.examplesCompleteRevision || state.approvedRevision ? state.revision + 1 : undefined,
+        criteriaSaveToken: crypto.randomUUID(),
         criteriaMessageId: undefined,
       });
       void import("./review-client").then(({ persistCriteriaDraft }) => persistCriteriaDraft(sessionId)).catch(error => updateChatState(sessionId, { criteriaSaveError: String(error.message ?? error) }));

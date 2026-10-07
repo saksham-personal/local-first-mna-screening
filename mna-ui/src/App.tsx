@@ -60,7 +60,7 @@ import {
   saveArtifact,
   useChatState,
 } from "./lib/chat-store";
-import { reviseCriteria, completeFitExamples, addResearchToCriteria } from "./lib/chat-driver";
+import { reviseCriteria, addResearchToCriteria } from "./lib/chat-driver";
 import {
   getJob,
   getJobsSnapshot,
@@ -84,6 +84,11 @@ const SetupController = lazy(() => import("./screening/SetupController"));
 const BingResearchDialog = lazy(() => import("./screening/BingResearchDialog"));
 import BackgroundRuns, { type SearchRunView } from "./screening/BackgroundRuns";
 import ScreeningInspector from "./chat/ScreeningInspector";
+import IntakeFormDialog from "./intake/IntakeForm";
+import { intakeToCriteria, normalizeIntake, type IntakeForm } from "./intake/intake-model";
+import { extractIntake } from "./lib/intake-client";
+import DocumentWindow from "./files/DocumentWindow";
+import { artifactPart } from "./lib/chat-jobs";
 import { stageUploads } from "./lib/tool-client";
 import { reviewShortlist, flushCriteriaDraft } from "./lib/review-client";
 import { generateDraft } from "./lib/conversation-client";
@@ -202,10 +207,12 @@ function CriteriaEditor({
   sessionId,
   close,
   send,
+  fillIntake,
 }: {
   sessionId: string;
   close: () => void;
   send: (text: string) => void;
+  fillIntake: () => void;
 }) {
   const state = useChatState(sessionId);
   const [original, setOriginal] = useState(state.criteriaText),
@@ -214,6 +221,7 @@ function CriteriaEditor({
     [error, setError] = useState("");
   return (
     <Modal title="Edit screening criteria" onClose={close}>
+      <button type="button" className="ct-ghost-button" onClick={fillIntake}>Fill Intake Form</button>
       <form
         className="ct-criteria-editor"
         onSubmit={(event) => {
@@ -494,6 +502,60 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   const dockRail = mode === "workspace" && !compact && dock.state.mode === "rail";
   const dockOpen = dock.open;
   const [preview, setPreview] = useState<{ file: StagedFile; url?: string }>();
+  const [intakeOpen, setIntakeOpen] = useState(false);
+  const [intakeInitial, setIntakeInitial] = useState<IntakeForm>(() => normalizeIntake(undefined));
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakeDocument, setIntakeDocument] = useState<StagedFile>();
+  const intakeInput = useRef<HTMLInputElement>(null);
+  const intakeSessionId = useRef(session.id);
+  const intakeRequest = useRef(0);
+  const openIntake = (initial?: IntakeForm) => {
+    intakeRequest.current += 1;
+    intakeSessionId.current = session.id;
+    setIntakeBusy(false);
+    setIntakeInitial(normalizeIntake(initial));
+    setIntakeOpen(true);
+    setDialog(null);
+  };
+  const uploadIntake = async (files: File[]) => {
+    if (!files.length) return;
+    const sessionId = session.id;
+    const requestId = ++intakeRequest.current;
+    intakeSessionId.current = sessionId;
+    setIntakeBusy(true);
+    try {
+      const [file] = await stageUploads(files.slice(0, 1), { sessionId, purpose: "intake" });
+      if (intakeSessionId.current !== sessionId || intakeRequest.current !== requestId) return;
+      if (file.kind === "pdf") setIntakeDocument(file);
+      const source = { sourceFileId: file.id, sourceFileName: file.name };
+      setIntakeInitial(normalizeIntake(source));
+      try {
+        const extracted = await extractIntake(file.id);
+        if (intakeSessionId.current !== sessionId || intakeRequest.current !== requestId) return;
+        setIntakeInitial(normalizeIntake({ ...extracted.fields, ...source, extracted: extracted.matched.length > 0 }));
+      } catch (error) { if (intakeRequest.current === requestId) setToast(`Extraction unavailable. Fill the Intake Form manually. ${String(error)}`); }
+      if (intakeSessionId.current === sessionId && intakeRequest.current === requestId) setIntakeOpen(true);
+    } catch (error) { if (intakeRequest.current === requestId) setToast(String(error)); }
+    finally { if (intakeRequest.current === requestId) setIntakeBusy(false); }
+  };
+  const submitIntake = async (form: IntakeForm) => {
+    const sessionId = intakeSessionId.current;
+    const requestId = intakeRequest.current;
+    setIntakeBusy(true);
+    try {
+      const job = getJob(getChatState(sessionId).jobId);
+      if (job?.state === "running") await stopJob(job.id);
+      const draft = intakeToCriteria(form);
+      const card = reviseCriteria(sessionId, draft.criteriaText, draft.definition, draft.deferred, undefined, { intakeForm: form });
+      await flushCriteriaDraft(sessionId);
+      const messageId = crypto.randomUUID();
+      updateChatState(sessionId, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
+      sessionStore.addEvent({ sessionId, kind: "system", origin: "workspace", status: "success", title: "Criteria created from Intake Form" });
+      sessionStore.addEvent({ sessionId, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Criteria draft", text: "Review and approve the criteria before searching.", content: [artifactPart(card)] });
+      if (intakeRequest.current === requestId) setIntakeOpen(false);
+    } catch (error) { if (intakeRequest.current === requestId) setToast(String(error)); }
+    finally { if (intakeRequest.current === requestId) setIntakeBusy(false); }
+  };
   const [newName, setNewName] = useState<string>();
   const [rename, setRename] = useState<string>();
   const [screeningSetup, setScreeningSetup] = useState<{
@@ -672,8 +734,10 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
       const current = getChatState(session.id),
         artifact = current.artifacts.find((a) => a.id === action.artifactId);
       try {
-        if (action.type === "save-examples") {
-          await completeFitExamples(session.id, action.artifactId, action.good, action.bad);
+        if (action.type === "upload-intake") {
+          intakeInput.current?.click();
+        } else if (action.type === "view-intake" && artifact?.type === "criteria") {
+          openIntake(artifact.intakeForm);
         } else if (action.type === "upload-source") {
           if (artifact?.type !== "enrichment-upload") throw new Error("Use a company-data upload card.");
           await stageUploads(action.files, { sessionId: session.id, purpose: action.source, uploadArtifactId: artifact.id });
@@ -782,7 +846,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
               ?.click(),
           );
         } else if (action.type === "approve-criteria")
-          send(artifact?.type === "criteria" && artifact.phase === "business" ? "Approve business criteria" : "Approve final criteria and find companies", action);
+          send("Approve & search", action);
         else if (action.type === "choose-option")
           send(
             `Choose ${action.option === "pitchbook" ? "PitchBook data" : action.option === "rogo" ? "ROGO data" : action.option === "bing" ? "Bing research" : action.option === "llm" ? "LLM Suite screening" : "M365 Copilot screening"}`,
@@ -804,6 +868,11 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     setMobileNav(false);
     setPanel(null);
     setPreview(undefined);
+    intakeSessionId.current = "";
+    intakeRequest.current += 1;
+    setIntakeBusy(false);
+    setIntakeOpen(false);
+    setIntakeDocument(undefined);
     setBusy(false);
     setScreeningSetup(undefined);
     setBingSetup(undefined);
@@ -814,6 +883,11 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     setMobileNav(false);
     setPanel(null);
     setPreview(undefined);
+    intakeSessionId.current = "";
+    intakeRequest.current += 1;
+    setIntakeBusy(false);
+    setIntakeOpen(false);
+    setIntakeDocument(undefined);
     setBusy(false);
     setScreeningSetup(undefined);
     setBingSetup(undefined);
@@ -1405,12 +1479,16 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
           </form>
         </Modal>
       )}
+      <input ref={intakeInput} className="intake-upload-input" type="file" accept=".pdf,.docx,.txt" aria-label="Upload Intake Form" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void uploadIntake(files); }} />
+      <IntakeFormDialog open={intakeOpen} initial={intakeInitial} sourceFileName={intakeInitial.sourceFileName} busy={intakeBusy} modal={!intakeDocument} onInteractOutside={event => { if (intakeDocument) event.preventDefault(); }} onPointerDownOutside={event => { if (intakeDocument) event.preventDefault(); }} onCancel={() => setIntakeOpen(false)} onSubmit={form => { void submitIntake(form); }} onViewDocument={intakeInitial.sourceFileId ? () => { const file = state.files.find(item => item.id === intakeInitial.sourceFileId); if (file?.kind === "pdf") setIntakeDocument(file); else if (file) window.open(`/api/files/${encodeURIComponent(file.id)}`, "_blank", "noopener"); } : undefined} />
+      {intakeDocument && <DocumentWindow file={intakeDocument} onClose={() => setIntakeDocument(undefined)} />}
       {dialog === "criteria" && (
         <CriteriaEditor
           key={session.id}
           sessionId={session.id}
           close={closeDialog}
           send={send}
+          fillIntake={() => openIntake(state.intakeForm)}
         />
       )}
       {(dialog === "commands" || dialog === "prompts") && (

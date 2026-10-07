@@ -328,7 +328,7 @@ function Overview({
                 <button
                   type="button"
                   className="ws-primary"
-                  onClick={() => send("/criteria")}
+                  onClick={() => send("/criteria", { type: "command", artifactId: "", label: "Opened criteria" })}
                 >
                   Start in chat <MessageSquare size={14} />
                 </button>
@@ -406,7 +406,7 @@ function Overview({
             type="button"
             className="ws-primary"
             disabled={busy}
-            onClick={() => send("/example")}
+            onClick={() => send("/example", { type: "command", artifactId: "", label: "Tried the example" })}
           >
             Run the example <ArrowRight size={14} />
           </button>

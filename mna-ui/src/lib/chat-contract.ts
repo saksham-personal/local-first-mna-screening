@@ -17,7 +17,7 @@ export type StagedFile = {
   stagingStatus?: "checking" | "waiting" | "importing" | "imported" | "unrecognized" | "error";
   stagingMessage?: string;
   hydratedScope?: string;
-  purpose?: "chat" | "pitchbook" | "rogo" | "company-data";
+  purpose?: "chat" | "pitchbook" | "rogo" | "company-data" | "intake";
   passToProvider?: boolean;
   uploadArtifactId?: string;
 };
@@ -46,6 +46,10 @@ export type ChatArtifact = ArtifactBase &
         decision: "pending" | "approved" | "declined";
         phase?: "business" | "final";
         lastCriteria?: string;
+        goodFitExamples?: string;
+        badFitExamples?: string;
+        intakeForm?: import("../intake/intake-model").IntakeForm;
+        draftToken?: string;
       }
     | {
         type: "companies";
@@ -110,6 +114,10 @@ export type ChatArtifact = ArtifactBase &
       }
   );
 export type ArtifactAction =
+  | { type: "command"; artifactId: string; label?: string }
+  | { type: "upload-intake"; artifactId: string }
+  | { type: "view-intake"; artifactId: string }
+  | { type: "approve-criteria"; artifactId: string; good?: string; bad?: string }
   | {
       type: "configure-screening";
       artifactId: string;
@@ -119,7 +127,6 @@ export type ArtifactAction =
     }
   | {
       type:
-        | "approve-criteria"
         | "edit-criteria"
         | "decline-criteria"
         | "upload"
@@ -164,8 +171,8 @@ export type ChatState = {
   criteriaHistory?: { text: string; definition: string; revision: number; good: string; bad: string }[];
   goodFitExamples?: string;
   badFitExamples?: string;
-  examplesCompleteRevision?: number;
-  businessReviewedRevision?: number;
+  intakeForm?: import("../intake/intake-model").IntakeForm;
+  criteriaSaveToken?: string;
   durableCriteria?: { revision: number; digest: string; localRevision: number };
   criteriaSaveError?: string;
   selectedResults?: Record<string, string[]>;
