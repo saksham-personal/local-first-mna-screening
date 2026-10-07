@@ -318,5 +318,21 @@
       ]
     },
     "error": "bad_value"
+  },
+  {
+    "name": "error: unbalanced section takes precedence over undeclared placeholder",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{y}}` (required) - Y value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{y}} {{#x}}hi\n===@@=== END ===@@===\n",
+    "vars": {
+      "y": "value"
+    },
+    "error": "unbalanced_section"
+  },
+  {
+    "name": "error: unbalanced section takes precedence over unused input",
+    "source": "# T\n\n**ID:** t\n**What it does:** x\n**Inputs:** `{{z}}` (required) - Z value\n**Output:** o\n**Supplied to:** s\n**Version:** 1\n\n===@@=== STARTING ===@@===\n{{#y}}hi\n===@@=== END ===@@===\n",
+    "vars": {
+      "z": "value"
+    },
+    "error": "unbalanced_section"
   }
 ]

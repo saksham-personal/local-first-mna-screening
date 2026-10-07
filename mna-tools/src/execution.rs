@@ -641,6 +641,11 @@ fn unique_columns(columns: &[String], label: &str) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
     for column in columns {
         bounded(label, column, 160)?;
+        if column.trim().is_empty() {
+            return Err(Error::Validation(format!(
+                "{label} must not contain blank names"
+            )));
+        }
         if column != column.trim() || column.chars().any(char::is_control) {
             return Err(Error::Validation(format!(
                 "{label} must be trimmed and contain no control characters"

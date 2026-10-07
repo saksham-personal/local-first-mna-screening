@@ -545,6 +545,7 @@ fn parse_prompt_file(text: &str, file: &str) -> std::result::Result<Prompt, Prom
     let body = lines[starts[0] + 1..ends[0]].join("\n");
     let body_line = starts[0] + 2;
     let written = tokenize(&body, file, body_line)?;
+    let _written_tree = build_tree(written.clone(), file, body_line, &body)?;
     let mut declared = HashSet::new();
     for input in &inputs {
         declared.insert(input.name.as_str());
