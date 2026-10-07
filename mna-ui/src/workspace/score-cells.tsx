@@ -22,7 +22,7 @@ export function SemanticBar({ value }: { value: number | null }) {
 export function KeywordEvidence({ data }: { data: MidKeyword }) {
   return <div className="ws-keyword-evidence">
     <div className="ws-keyword-chips">{data.matched.length ? data.matched.map((item, index) => <span key={`${item.text}-${index}`}>{item.text}</span>) : <span>No matched keywords</span>}</div>
-    {data.queries.map((query, index) => <div className="ws-keyword-query" key={`${query.query_id}-${index}`}><p>{query.rationale}</p><code>{query.display_query}</code></div>)}
+    {data.queries.map((query, index) => <div className="ws-keyword-query" key={`${query.query_id}-${index}`}><p>{query.rationale}</p><code>{query.display_query.startsWith(`${query.rationale} (`) && query.display_query.endsWith(")") ? query.display_query.slice(query.rationale.length + 2, -1) : query.display_query}</code></div>)}
   </div>;
 }
 
