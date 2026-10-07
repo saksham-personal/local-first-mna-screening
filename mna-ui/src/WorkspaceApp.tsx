@@ -67,6 +67,8 @@ type Props = {
   send: (text: string, action?: ArtifactAction) => void;
   openLog: (eventId?: string) => void;
   onIntakeFiles?: (files: File[]) => void | Promise<void>;
+  /** A tab asked for from outside (e.g. "Open in Workspace" on a chat card); `n` makes repeats count. */
+  requestedTab?: { tab: WorkspaceTab; n: number };
 };
 
 function latestArtifact<T extends ChatArtifact["type"]>(
@@ -548,6 +550,10 @@ export default function WorkspaceApp(props: Props) {
   useEffect(() => {
     setTab("overview");
   }, [state.sessionId]);
+  // Runs after the reset above, so a request made before this view mounted still wins.
+  useEffect(() => {
+    if (props.requestedTab) setTab(props.requestedTab.tab);
+  }, [props.requestedTab]);
   return (
     <div className="ws-root">
       <header className="ws-header">

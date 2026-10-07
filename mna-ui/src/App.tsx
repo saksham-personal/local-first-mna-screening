@@ -84,6 +84,7 @@ const SetupController = lazy(() => import("./screening/SetupController"));
 const BingResearchDialog = lazy(() => import("./screening/BingResearchDialog"));
 import BackgroundRuns, { type SearchRunView } from "./screening/BackgroundRuns";
 import ScreeningInspector from "./chat/ScreeningInspector";
+import { ASK_ASSISTANT_EVENT, OPEN_WORKSPACE_EVENT } from "./lib/grid-client";
 import IntakeFormDialog from "./intake/IntakeForm";
 import { intakeToCriteria, normalizeIntake, type IntakeForm } from "./intake/intake-model";
 import { extractIntake } from "./lib/intake-client";
@@ -649,6 +650,26 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     },
     [revealChat],
   );
+  // Chat cards and the company drawer talk to the shell through window events (see grid-client).
+  const [workspaceRequest, setWorkspaceRequest] = useState<{ tab: "overview" | "companies" | "files"; n: number }>();
+  useEffect(() => {
+    const openWorkspace = (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: "overview" | "companies" | "files" }>).detail?.tab ?? "companies";
+      changeMode("workspace");
+      setWorkspaceRequest((current) => ({ tab, n: (current?.n ?? 0) + 1 }));
+    };
+    const askAssistant = (event: Event) => {
+      const detail = (event as CustomEvent<{ companyId?: string; name?: string }>).detail;
+      if (!detail?.companyId) return;
+      setDraft(`Tell me about ${detail.name ?? detail.companyId} (${detail.companyId}): `);
+    };
+    window.addEventListener(OPEN_WORKSPACE_EVENT, openWorkspace);
+    window.addEventListener(ASK_ASSISTANT_EVENT, askAssistant);
+    return () => {
+      window.removeEventListener(OPEN_WORKSPACE_EVENT, openWorkspace);
+      window.removeEventListener(ASK_ASSISTANT_EVENT, askAssistant);
+    };
+  }, [changeMode, setDraft]);
   const addDroppedFiles = useCallback(
     (files: File[]) => {
       if (!files.length) {
@@ -1279,6 +1300,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
                 send={send}
                 openLog={openLog}
                 onIntakeFiles={onIntakeFiles}
+                requestedTab={workspaceRequest}
               />
             </section>
           )}
