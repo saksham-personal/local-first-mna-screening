@@ -103,7 +103,7 @@ export function isFilterActive(filter: ColumnFilter | undefined): boolean {
     case "text":
       return Boolean(filter.contains) || Boolean(filter.values?.length);
     case "category":
-      return filter.values.length > 0;
+      return Boolean(filter.contains) || filter.values.length > 0;
     case "number":
       return Boolean(filter.values?.length) || effectiveNumberOp(filter.op, filter.a, filter.b) !== undefined;
     case "score":
@@ -187,8 +187,11 @@ export function rowPassesColumn<Row>(row: Row, column: GridColumnSpec<Row>, filt
       return (!contains || normalizeValue(value).toLowerCase().includes(contains.toLowerCase()))
         && matchesValues(value, filter.values);
     }
-    case "category":
-      return matchesValues(value, filter.values);
+    case "category": {
+      const contains = filter.contains ?? "";
+      return (!contains || normalizeValue(value).toLowerCase().includes(contains.toLowerCase()))
+        && matchesValues(value, filter.values);
+    }
     case "number":
       return matchesValues(value, filter.values) && matchesNumberOp(value, filter.op, filter.a, filter.b);
     case "score": {
@@ -355,8 +358,12 @@ export function describeFilter<Row>(column: GridColumnSpec<Row>, filter: ColumnF
       if (filter.values?.length) pieces.push(`${column.header}: ${filter.values.map(displayValue).join(", ")}`);
       return pieces.join("; ") || `${column.header}: All values`;
     }
-    case "category":
-      return `${column.header}: ${filter.values.map(displayValue).join(", ") || "All values"}`;
+    case "category": {
+      const pieces: string[] = [];
+      if (filter.contains) pieces.push(`contains "${filter.contains}"`);
+      if (filter.values.length) pieces.push(filter.values.map(displayValue).join(", "));
+      return `${column.header}: ${pieces.join(" + ") || "All values"}`;
+    }
     case "number": {
       const pieces: string[] = [];
       if (filter.values?.length) pieces.push(filter.values.map(displayValue).join(", "));

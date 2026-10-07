@@ -197,6 +197,19 @@ test("text and category filters apply contains and checklist matching", () => {
   assert.equal(rowPassesColumn(row({ source: "ISCC" }), sourceColumn, { kind: "category", values: [] }), true);
 });
 
+test("category contains filters are case-insensitive and intersect checklist values", () => {
+  const rows = ["MID", "ISCC", "both", "MID partner"].map((source) => row({ source }));
+  assert.deepEqual(
+    filterRows(rows, columns, { quick: "", columns: { source: { kind: "category", values: [], contains: "missing" } } }),
+    [],
+  );
+  assert.deepEqual(
+    filterRows(rows, columns, { quick: "", columns: { source: { kind: "category", values: ["MID", "ISCC"], contains: "i" } } }).map((item) => item.source),
+    ["MID", "ISCC"],
+  );
+  assert.equal(isFilterActive({ kind: "category", values: [], contains: "mid" }), true);
+});
+
 test("distinct values put blanks first, sort numeric-aware, count, and search labels", () => {
   const rows = ["10", "2", "Banana", "apple", undefined, "", "2"].map((name) => row({ name }));
   assert.deepEqual(distinctValues(rows, nameColumn), [
@@ -280,6 +293,7 @@ test("filter descriptions match the shared chip wording", () => {
   assert.equal(describeFilter(scoreColumn, { kind: "score", op: "gte", a: 7, includeCheck: true }), "Score: ≥ 7 + CHECK");
   assert.equal(describeFilter(scoreColumn, { kind: "score", buckets: [8, 7, "CHECK"], includeCheck: false }), "Score: 7, 8, CHECK");
   assert.equal(describeFilter(sourceColumn, { kind: "category", values: ["MID", "ISCC"] }), "Source: MID, ISCC");
+  assert.equal(describeFilter(sourceColumn, { kind: "category", values: [], contains: "mid" }), 'Source: contains "mid"');
   assert.equal(describeFilter(nameColumn, { kind: "text", contains: "acme" }), "Name contains acme");
   assert.equal(describeFilter(amountColumn, { kind: "number", op: "between", a: 20, b: 10 }), "Revenue: 10–20");
   assert.equal(describeFilter(dayColumn, { kind: "date", op: "on", a: "2024-04-03" }), "Date: on 2024-04-03");

@@ -11,8 +11,13 @@ import "./ui/controls.css";
 
 initializeTheme();
 
+const GridDemo = React.lazy(() => import("./grid/GridDemo"));
+const showGridDemo = new URLSearchParams(location.search).has("grid-demo");
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <React.Suspense fallback={null}>
+      {showGridDemo ? <GridDemo /> : <App />}
+    </React.Suspense>
   </React.StrictMode>,
 );
