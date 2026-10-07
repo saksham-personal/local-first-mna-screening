@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Check, RotateCcw, SlidersHorizontal } from "lucide-react";
+import { DataGrid, type DataGridColumn } from "../grid/DataGrid";
 import type { ChatState } from "../lib/chat-contract";
-import DataTable from "./DataTable";
+import { OPEN_WORKSPACE_EVENT } from "../lib/grid-client";
 import SelectField from "../ui/SelectField";
 import { meetsScoreRule } from "../lib/shortlist-review";
 import "./shortlist-review.css";
@@ -17,6 +18,9 @@ type Props = {
 
 const metadataColumns = new Set(["index", "pk", "company name", "website", "considered"]);
 const retrievalScore = (column: string) => /^(?:mid|iscc)(?:[_\s-]*(?:score|rank|ranking))$/i.test(column) || /\b(?:mid|iscc)\b.*\b(?:score|rank|ranking)\b/i.test(column);
+function openWorkspaceCompanies() {
+  window.dispatchEvent(new CustomEvent(OPEN_WORKSPACE_EVENT, { detail: { tab: "companies" } }));
+}
 function companyId(row: Record<string, unknown>) {
   const id = row.pk ?? row.company_id ?? row.companyId;
   return id == null || id === "" ? undefined : String(id);
@@ -80,6 +84,29 @@ export default function ShortlistReview({ rows, columns, context, planId, onOpen
     const id = companyId(row);
     return { ...row, pk: id ?? row.pk, "Rule match": scoreColumn ? meetsScoreRule(row[scoreColumn], threshold, keepCheck, !excludeUnscored) : "", Considered: id ? currentSet.has(id) ? "Yes" : "Hidden" : "" };
   }), [currentSet, rows, scoreColumn, threshold, keepCheck, excludeUnscored]);
+  const gridRows = useMemo<Record<string, unknown>[]>(() => {
+    const seen = new Map<string, number>();
+    return scoredRows.map((row, index) => {
+      const base = companyId(row) ?? `row-${index}`;
+      const occurrence = seen.get(base) ?? 0;
+      seen.set(base, occurrence + 1);
+      return { ...row, __reviewGridId: occurrence ? `${base}:${occurrence}` : base };
+    });
+  }, [scoredRows]);
+  const gridColumns = useMemo<DataGridColumn<Record<string, unknown>>[]>(() => {
+    const names = [...new Set([...columns, "Considered", ...(scoreColumn ? ["Rule match"] : [])])];
+    return names.map((column) => ({
+      id: column,
+      header: column,
+      group: "Results",
+      kind: gridRows.some((row) => typeof row[column] === "number") ? "number" : "text",
+      value: (row) => row[column],
+    }));
+  }, [columns, gridRows, scoreColumn]);
+  const openCompany = useCallback((row: Record<string, unknown>) => {
+    const id = companyId(row);
+    if (id) onOpenCompany?.(id);
+  }, [onOpenCompany]);
   const matchCount = useMemo(() => new Set(rows.flatMap((row) => {
     const id = companyId(row);
     if (!id || !currentSet.has(id) || !scoreColumn) return [];
@@ -127,7 +154,7 @@ export default function ShortlistReview({ rows, columns, context, planId, onOpen
     </div>
     {!scoreColumn && <p className="sr-hint" role="status">Choose a requested numeric result column to preview matches. MID and ISCC retrieval scores are available only after you select them below.</p>}
     {previewMatches !== null && <p className="sr-preview-count" role="status"><Check size={13} /> {previewMatches.toLocaleString()} of {currentIds.length.toLocaleString()} currently considered companies meet this rule.</p>}
-    <DataTable rows={scoredRows} columns={[...columns, "Considered", ...(scoreColumn ? ["Rule match"] : [])]} label="Screening result rows" onOpenCompany={onOpenCompany} selectedCompanyIds={selectedRows} onSelectionChange={setSelectedRows} exportCompanyIds={currentIds} />
+    <DataGrid rows={gridRows} columns={gridColumns} getRowId={row => String(row.__reviewGridId)} label="Screening result rows" height={420} selectable selectedIds={selectedRows} onSelectedIdsChange={ids => setSelectedRows(ids.filter(id => resultSet.has(id)))} onOpenRow={openCompany} toolbarExtra={<button type="button" className="sr-secondary" onClick={openWorkspaceCompanies}>Open in Workspace</button>} />
     {planId && <div className="sr-output-columns"><strong>Use results in next screening</strong><small>Choose which requested result fields to carry forward.</small><div>{requestedColumns.map((column) => <label key={column}><input type="checkbox" checked={selectedOutputColumns.includes(column)} onChange={() => toggleOutputColumn(column)} /><span>{column}</span></label>)}</div></div>}
     {error && <p className="sr-error" role="alert"><AlertCircle size={14} />{error}</p>}
     {notice && <p className="sr-success" role="status"><Check size={14} />{notice}</p>}

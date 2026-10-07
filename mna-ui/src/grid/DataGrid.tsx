@@ -77,6 +77,7 @@ export type DataGridProps<Row> = {
   toolbarExtra?: ReactNode;
   isRowMuted?: (row: Row) => boolean;                 // memoise it: a new function redraws all rows
   onOpenRow?: (row: Row) => void;
+  onVisibleRowsChange?: (rows: Row[]) => void;
   sidePanelTabs?: SidePanelTab[];
   sidePanelDefaultOpen?: boolean;
   storageKey?: string;
@@ -213,6 +214,7 @@ export function DataGrid<Row>({
   toolbarExtra,
   isRowMuted,
   onOpenRow,
+  onVisibleRowsChange,
   sidePanelTabs = [],
   sidePanelDefaultOpen = false,
   storageKey,
@@ -244,6 +246,10 @@ export function DataGrid<Row>({
   displayedRowsRef.current = displayedRows;
   const getRowIdRef = useRef(getRowId);
   getRowIdRef.current = getRowId;
+
+  useEffect(() => {
+    onVisibleRowsChange?.(displayedRows);
+  }, [displayedRows, onVisibleRowsChange]);
 
   const updateFilterState = useCallback((next: FilterState) => {
     if (controlledFilterState === undefined) setInternalFilterState(next);

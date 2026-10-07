@@ -486,14 +486,19 @@
 }
 
 .ws-company-layout {
-  display: grid;
-  min-height: 100%;
+  display: flex;
+  min-height: 420px;
+  height: 100%;
 }
 .ws-company-layout.ws-detail-open {
   grid-template-columns: minmax(0, 1fr) minmax(310px, 360px);
 }
 .ws-company-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   min-width: 0;
+  min-height: 420px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -571,6 +576,79 @@
 .ws-table-summary strong {
   color: var(--text);
 }
+
+.ws-company-main > .dg-shell {
+  min-height: 420px;
+  flex: 1 1 auto;
+}
+.ws-company-grid-toolbar,
+.ws-export-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ws-company-grid-toolbar { min-width: 0; }
+.ws-show-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ws-show-hidden input { accent-color: var(--accent); }
+.ws-company-main .ws-export-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.ws-company-main .ws-export-actions button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.ws-grid-company-cell { display: grid; gap: 3px; min-width: 0; line-height: 1.25; }
+.ws-grid-company-cell strong { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; }
+.ws-grid-company-cell small,
+.ws-grid-company-cell a { display: inline-flex; align-items: center; gap: 3px; width: fit-content; max-width: 100%; overflow: hidden; color: var(--text-muted); font-size: 10px; text-decoration: none; text-overflow: ellipsis; }
+.ws-grid-company-cell a:hover { color: var(--accent); text-decoration: underline; }
+.ws-grid-description { display: -webkit-box; overflow: hidden; color: var(--text-muted); font-size: 11px; line-height: 1.35; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.ws-grid-badge { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; padding: 3px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--info); background: var(--info-soft); font-size: 10px; font-weight: 650; line-height: 1.25; white-space: nowrap; }
+.ws-grid-source-iscc { color: var(--violet); background: var(--violet-soft); }
+.ws-grid-source-both { color: var(--success); background: var(--success-soft); }
+.ws-grid-considered { color: var(--success); background: var(--success-soft); }
+.ws-grid-hidden { color: var(--warning); background: var(--warning-soft); }
+.ws-grid-coverage { display: flex; gap: 4px; }
+.ws-grid-coverage span { padding: 2px 4px; border-radius: 4px; color: var(--text-muted); background: var(--surface-muted); font-size: 9px; }
+.ws-grid-coverage span.is-covered { color: var(--success); background: var(--success-soft); }
+.ws-grid-status { display: grid; justify-items: start; gap: 3px; }
+.ws-grid-reason { overflow: hidden; max-width: 150px; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; }
+.ws-grid-action { min-height: 28px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); font-size: 10px; font-weight: 600; white-space: nowrap; }
+.ws-grid-action:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.ws-grid-error,
+.ws-grid-notice { margin: 0; padding: 7px 12px; border-bottom: 1px solid var(--border); font-size: 11px; }
+.ws-grid-error { color: var(--danger); background: var(--danger-soft); }
+.ws-grid-notice { color: var(--success); background: var(--success-soft); }
+.ws-hidden-panel { display: flex; flex-direction: column; gap: 7px; max-height: 100%; overflow: auto; padding: 9px; }
+.ws-grid-restore-all { min-height: 30px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); font-size: 10px; font-weight: 650; cursor: pointer; }
+.ws-hidden-row { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+.ws-hidden-row > div { display: grid; gap: 4px; min-width: 0; }
+.ws-hidden-row strong { overflow-wrap: anywhere; font-size: 11px; }
+.ws-hidden-row button { justify-self: start; min-height: 27px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); background: var(--surface-raised); font-size: 10px; cursor: pointer; }
+.ws-hidden-row button:hover:not(:disabled),
+.ws-grid-restore-all:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.ws-hidden-row button:disabled,
+.ws-grid-restore-all:disabled { cursor: default; opacity: .5; }
+.ws-hidden-empty { margin: 4px; color: var(--text-muted); font-size: 11px; }
 .ws-table-wrap {
   overflow: auto;
 }
