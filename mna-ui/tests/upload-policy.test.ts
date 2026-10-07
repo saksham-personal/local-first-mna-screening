@@ -35,3 +35,19 @@ test("identical concurrent uploads share the manifest lock, which recovers after
   await second;
   assert.deepEqual(order, ["first", "saved", "second"]);
 });
+
+// @ts-expect-error The bridge policy is a native Node module.
+import { indexUploadMaxBytes, validateIndexWorkbookName, validateIndexWorkbookSignature, validateIndexUploadSize } from "../server/upload-policy.mjs";
+test("streaming index uploads validate names and the full ZIP local header", () => {
+  assert.equal(validateIndexWorkbookName("MID.XLSX"), "MID.XLSX");
+  for (const name of [null, "", "mid.csv", "../mid.xlsx", "C:\\mid.xlsx", "bad\n.xlsx", "x".repeat(256) + ".xlsx"]) assert.throws(() => validateIndexWorkbookName(name));
+  validateIndexWorkbookSignature(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  for (const bytes of [[], [0x50, 0x4b], [0x50, 0x4b, 0x05, 0x06], [1, 2, 3, 4]]) assert.throws(() => validateIndexWorkbookSignature(Buffer.from(bytes)), /not an XLSX/);
+  assert.deepEqual(allowedUploadExtensions("mid_index"), allowedExtensions("mid_index"));
+});
+test("index upload cap defaults safely and reports a 413 on overflow", () => {
+  for (const input of [undefined, "", "NaN", "0", "-1", "1.5", "Infinity"]) assert.equal(indexUploadMaxBytes(input), 1024 ** 3);
+  assert.equal(indexUploadMaxBytes("1024"), 1024);
+  validateIndexUploadSize(1024, 1024);
+  assert.throws(() => validateIndexUploadSize(1025, 1024), (error: unknown) => error instanceof Error && (error as Error & { status: number }).status === 413 && /1,024 bytes/.test(error.message));
+});

@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, access, readdir, stat, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, access, readdir, stat, rename, open, unlink } from 'node:fs/promises';
 import { dirname, resolve, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJobRegistry } from './jobs.mjs';
@@ -12,15 +12,15 @@ import { createProviderConversation } from './provider-conversation.mjs';
 import { handlePromptRoute } from './prompt-routes.mjs';
 import { handleIntakeRoute } from './intake-routes.mjs';
 import { ports, allowedOrigins, allowedHosts } from './ports.mjs';
-import { uploadPurposes, validateUploadPurpose, uploadDedupeKey, withUploadLock } from './upload-policy.mjs';
+import { uploadPurposes, validateUploadPurpose, uploadDedupeKey, withUploadLock, validateIndexWorkbookName, validateIndexWorkbookSignature, indexUploadMaxBytes, validateIndexUploadSize } from './upload-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = `http://127.0.0.1:${ports.rust}`;
-const admin = { import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
-const allowed = new Set(['get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
-for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_company_detail', 'get_enrichment_report', 'get_mid_index_status', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
+const admin = { start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
+const allowed = new Set(['get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
+for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_company_detail', 'get_enrichment_report', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
 const simulate = process.env.SCREENING_SIMULATE === '1';
 if (simulate) allowed.add('search_iscc');
 const origins = allowedOrigins;
@@ -101,10 +101,11 @@ async function sendStagedFile(res, record) {
 
 async function rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal) {
   if (typeof tool !== 'string' || (!Object.hasOwn(admin, tool) && !allowed.has(tool))) throw new Error('This tool is not enabled in the local example.');
-  if ((tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'apply_enrichment_review' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
+  if ((['start_index_build', 'cancel_index_build', 'activate_mid_bundle', 'delete_mid_bundle'].includes(tool) || tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'apply_enrichment_review' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
   if (tool === 'import_company_files' || tool === 'import_enrichment_files' || tool === 'inspect_enrichment_files') {
     if (!Array.isArray(args.files) || !args.files.length || !args.files.every(file => typeof file === 'string' && staged.has(file))) throw new Error('Select files through the upload controls.');
   }
+  if (tool === 'start_index_build' && (typeof args.file !== 'string' || !staged.has(args.file))) throw new Error('Select a workbook through the upload controls.');
   const response = await fetch(`${rustAddress}${admin[tool] ?? '/tools/call'}`, {
     method: 'POST', signal,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, ...(Object.hasOwn(admin, tool) ? { 'X-MNA-Analyst-Key': analystKey } : {}), ...(['review_shortlist', 'apply_enrichment_review', 'save_criteria_revision', 'approve_criteria_revision'].includes(tool) ? { 'X-MNA-Controller-Key': controllerKey } : {}) },
@@ -135,8 +136,8 @@ export async function startBridge() {
     if (!/^[0-9a-f-]{36}\.(?:pdf|docx|txt|csv|xlsx)$/i.test(id)) continue;
     const descriptor = fileKinds.get(extname(id).toLowerCase());
     const path = resolve(importRoot, id), info = await stat(path);
-    if (!info.isFile() || !info.size || info.size > MAX_FILE_BYTES || !descriptor) continue;
     const saved = savedFiles.find(file => file?.id === id);
+    if (!info.isFile() || !info.size || info.size > (saved?.purpose === 'mid_index' ? indexUploadMaxBytes(process.env.SCREENING_INDEX_UPLOAD_MAX_BYTES) : MAX_FILE_BYTES) || !descriptor) continue;
     const name = typeof saved?.name === 'string' ? basename(saved.name) : id;
     staged.add(id);
     stagedFiles.set(id, { id, name, bytes: info.size, path, ...(typeof saved?.sessionId === 'string' ? { sessionId: saved.sessionId } : {}), ...(uploadPurposes.includes(saved?.purpose) ? { purpose: saved.purpose } : {}), ...descriptor });
@@ -179,7 +180,14 @@ export async function startBridge() {
     throw new Error(launchError || `The Rust tool server did not start. Check that port ${ports.rust} is free.`);
   }
 
-  const call = (tool, args, analystApproved, signal) => rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal);
+  const call = (tool, args, analystApproved, signal) => {
+    // Index workbooks (up to 1 GiB) are only for Build Index; other uploads never build an index.
+    const purposeOf = id => stagedFiles.get(id)?.purpose;
+    if (['import_company_files', 'import_enrichment_files', 'inspect_enrichment_files'].includes(tool) && Array.isArray(args?.files) && args.files.some(id => purposeOf(id) === 'mid_index'))
+      throw new Error('Use Build Index for MID workbooks.');
+    if (tool === 'start_index_build' && purposeOf(args?.file) !== 'mid_index') throw new Error('Select a workbook through Build Index.');
+    return rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal);
+  };
   const jobs = createJobRegistry({ call, seedFile: seedId });
   const screening = createDurableScreeningPreparation({ call, deployment: provider => providerDeployment(provider) });
   const externalReady = (provider) => {
@@ -234,6 +242,44 @@ export async function startBridge() {
       if (req.method === 'POST' && cancelMatch) {
         const job = jobs.cancel(cancelMatch[1]);
         return job ? respond(res, 200, { job }) : respond(res, 404, { error: 'Screening job not found.' });
+      }
+      if (req.method === 'PUT' && url.pathname === '/api/index-files') {
+        let path, handle, id;
+        try {
+          const name = validateIndexWorkbookName(url.searchParams.get('name'));
+          const limit = indexUploadMaxBytes(process.env.SCREENING_INDEX_UPLOAD_MAX_BYTES);
+          if (req.headers['content-length']) validateIndexUploadSize(Number(req.headers['content-length']), limit);
+          id = `${randomUUID()}.xlsx`; path = resolve(importRoot, id);
+          handle = await open(path, 'wx');
+          let bytes = 0, prefixLength = 0;
+          const prefix = Buffer.alloc(4);
+          // Keep at most one network chunk and four signature bytes in memory.
+          // Do not destroy the socket on early return: it must receive the 413.
+          for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+            bytes += chunk.length; validateIndexUploadSize(bytes, limit);
+            if (prefixLength < 4) {
+              const copied = chunk.copy(prefix, prefixLength, 0, Math.min(chunk.length, 4 - prefixLength));
+              prefixLength += copied;
+              if (prefixLength === 4) validateIndexWorkbookSignature(prefix);
+            }
+            await handle.writeFile(chunk);
+          }
+          validateIndexWorkbookSignature(prefix.subarray(0, prefixLength));
+          await handle.close(); handle = null;
+          stagedFiles.set(id, { id, name, bytes, path, purpose: 'mid_index', ...fileKinds.get('.xlsx') });
+          await saveFiles(); staged.add(id);
+          return respond(res, 200, { id, name, bytes });
+        } catch (error) {
+          if (handle) await handle.close().catch(() => {});
+          if (path) await unlink(path).catch(() => {});
+          if (id) { staged.delete(id); stagedFiles.delete(id); }
+          req.resume();
+          if (!res.destroyed) {
+            res.writeHead(error.status === 413 ? 413 : 400, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', Connection: 'close' });
+            res.end(error.message || 'Workbook upload did not finish.', () => req.destroy());
+          }
+          return;
+        }
       }
       if (req.method !== 'POST' || !req.headers['content-type']?.startsWith('application/json')) return respond(res, 400, { error: 'Use a JSON request.' });
       const input = await body(req);

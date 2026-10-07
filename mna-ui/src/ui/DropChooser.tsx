@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { FileSpreadsheet, FileText, MessageSquare, X } from "lucide-react";
-import { dropTargets, inPlaceDropSelector, routeDrop, type DropPurpose } from "./drop-zones";
+import { Database, FileSpreadsheet, FileText, MessageSquare, X } from "lucide-react";
+import { dropTargets, inPlaceDropSelector, routeDrop, type DropDestination } from "./drop-zones";
 import "./drop-chooser.css";
 
 type Props = {
   onChatFiles: (files: File[]) => void;
   onSourceFiles: (files: File[], purpose: "pitchbook" | "rogo") => void;
+  onIndexFiles?: (files: File[]) => void;
   onIntakeFiles?: (files: File[]) => void;
 };
-export default function DropChooser({ onChatFiles, onSourceFiles, onIntakeFiles }: Props) {
+export default function DropChooser({ onChatFiles, onSourceFiles, onIntakeFiles, onIndexFiles }: Props) {
   const [visible, setVisible] = useState(false);
   const cancelled = useRef(false);
-  const callbacks = useRef({ onChatFiles, onSourceFiles, onIntakeFiles });
-  callbacks.current = { onChatFiles, onSourceFiles, onIntakeFiles };
+  const callbacks = useRef({ onChatFiles, onSourceFiles, onIntakeFiles, onIndexFiles });
+  callbacks.current = { onChatFiles, onSourceFiles, onIntakeFiles, onIndexFiles };
   useEffect(() => {
     let active = false;
     const files = (event: DragEvent) => event.dataTransfer?.types.includes("Files");
@@ -51,6 +52,7 @@ export default function DropChooser({ onChatFiles, onSourceFiles, onIntakeFiles 
       const incoming = Array.from(event.dataTransfer!.files);
       if (purpose === "chat") callbacks.current.onChatFiles(incoming);
       else if (purpose === "intake") (callbacks.current.onIntakeFiles ?? callbacks.current.onChatFiles)(incoming);
+      else if (purpose === "mid_index") callbacks.current.onIndexFiles?.(incoming);
       else callbacks.current.onSourceFiles(incoming, purpose);
     };
     const escape = (event: KeyboardEvent) => {
@@ -70,7 +72,7 @@ export default function DropChooser({ onChatFiles, onSourceFiles, onIntakeFiles 
     };
   }, []);
   if (!visible) return null;
-  const icon = (purpose: DropPurpose) => purpose === "chat" ? <MessageSquare size={24} /> : purpose === "intake" ? <FileText size={24} /> : <FileSpreadsheet size={24} />;
+  const icon = (purpose: DropDestination) => purpose === "mid_index" ? <Database size={24} /> : purpose === "chat" ? <MessageSquare size={24} /> : purpose === "intake" ? <FileText size={24} /> : <FileSpreadsheet size={24} />;
   return <div className="drop-chooser"><section className="drop-chooser-panel" aria-label="File destinations">
     <header><h2>Drop to…</h2><button type="button" aria-label="Cancel file drop" onClick={() => { cancelled.current = true; setVisible(false); }}><X size={18} /></button></header>
     <div className="drop-chooser-targets">{dropTargets.map(target => <div key={target.purpose} className="drop-chooser-tile" data-drop-purpose={target.purpose}>{icon(target.purpose)}<strong>{target.label}</strong><span>{target.hint}</span></div>)}</div>

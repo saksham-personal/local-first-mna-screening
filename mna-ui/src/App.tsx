@@ -19,6 +19,7 @@ import {
   ChevronDown,
   Clock3,
   Command,
+  Database,
   FileText,
   FolderOpen,
   GripVertical,
@@ -42,6 +43,10 @@ import ArtifactCard from "./chat/ArtifactCard";
 import SessionLog from "./SessionLog";
 import Tooltip from "./Tooltip";
 import ThemeMenu from "./theme/ThemeMenu";
+import BuildIndexDialog from "./index/BuildIndexDialog";
+import type { IndexBuild } from "./index/index-build-client";
+import { isActiveBuild } from "./index/index-build-state";
+import { useIndexBuildActivity } from "./index/use-index-build";
 import DropChooser from "./ui/DropChooser";
 import { validateDropFiles } from "./ui/drop-zones";
 import PitchBookReviewDialog from "./enrichment/PitchBookReviewDialog";
@@ -497,6 +502,19 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     [logEventId, setLogEventId] = useState<string>(),
     [busy, setBusy] = useState(false),
     [toast, setToast] = useState("");
+  const [indexOpen, setIndexOpen] = useState(false);
+  const [runningIndexBuildId, setRunningIndexBuildId] = useState<string>();
+  const [indexBuilds, setIndexBuilds] = useState<IndexBuild[]>([]);
+  const [selectedIndexBuildId, setSelectedIndexBuildId] = useState<string>();
+  const [indexFile, setIndexFile] = useState<File>();
+  const onIndexBuild = useCallback((build: IndexBuild) => {
+    setIndexBuilds(previous => [...previous.filter(item => item.build_id !== build.build_id), build]);
+    setRunningIndexBuildId(previous => isActiveBuild(build) ? build.build_id : previous === build.build_id ? undefined : previous);
+  }, []);
+  useIndexBuildActivity(runningIndexBuildId, onIndexBuild);
+  const openIndex = (buildId?: string, file?: File) => {
+    setSelectedIndexBuildId(buildId); setIndexFile(file); setIndexOpen(true);
+  };
   const [activityOpen, setActivityOpen] = useState(false);
   const [dismissedSearches, setDismissedSearches] = useState<ReadonlySet<string>>(new Set());
   const dock = useDock(sidebar && window.innerWidth > 760 ? navigationWidth : 0);
@@ -1030,7 +1048,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   );
   const activityRunning =
     searches.some((search) => search.state === "running") ||
-    isBackgroundActive(backgroundJobs);
+    isBackgroundActive(backgroundJobs) || !!runningIndexBuildId;
   const chatBusy = busy || job?.state === "running";
   const appRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1272,6 +1290,9 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
               <Clock3 size={17} />
               {activityRunning && <span className="ct-control-dot" />}
             </button>
+            <button className="ct-log-button ct-index-button" type="button" onClick={() => openIndex()} aria-label="Build Index" title="Build Index">
+              <Database size={15} /><span>Build Index</span>{runningIndexBuildId && <i className="index-running-dot" />}
+            </button>
             <button
               className="ct-log-button"
               type="button"
@@ -1406,9 +1427,13 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
             </aside>
           )}
         </div>
-        <DropChooser onChatFiles={addDroppedFiles} onSourceFiles={(files, purpose) => { void addSourceFiles(files, purpose); }} onIntakeFiles={onIntakeFiles} />
+        <DropChooser onIndexFiles={files => { try { validateDropFiles(files, "mid_index"); openIndex(undefined, files[0]); } catch (error) { setToast(error instanceof Error ? error.message : String(error)); } }} onChatFiles={addDroppedFiles} onSourceFiles={(files, purpose) => { void addSourceFiles(files, purpose); }} onIntakeFiles={onIntakeFiles} />
         {pitchBookReview && <PitchBookReviewDialog key={pitchBookReview.report.report_id} sessionId={pitchBookReview.sessionId} report={pitchBookReview.report} onClose={() => setPitchBookReview(null)} />}
+        <BuildIndexDialog open={indexOpen} onOpenChange={setIndexOpen} builds={indexBuilds} selectedBuildId={selectedIndexBuildId} initialFile={indexFile} onBuild={onIndexBuild} onDeleteBundle={id => setIndexBuilds(previous => previous.filter(build => build.bundle_id !== id))} />
         <BackgroundRuns
+          indexBuilds={indexBuilds}
+          onOpenIndex={id => openIndex(id)}
+          onDismissIndex={id => setIndexBuilds(previous => previous.filter(build => build.build_id !== id))}
           jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"}` }))}
           searches={searches}
           expanded={activityOpen}
