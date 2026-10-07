@@ -16,7 +16,7 @@ const input = {
   definition,
 };
 
-function shortlistPage(candidates: { company_id: string; name: string; considered: boolean; website?: string }[], args: Record<string, unknown>, sourceHash = "stable-source") {
+function shortlistPage(candidates: { company_id: string; name: string; considered: boolean; website?: string | null }[], args: Record<string, unknown>, sourceHash = "stable-source") {
   const cursor = String(args.after_company_id ?? "");
   const remaining = candidates.filter(candidate => candidate.company_id > cursor);
   const size = Number(args.limit);
@@ -32,32 +32,27 @@ function shortlistPage(candidates: { company_id: string; name: string; considere
   };
 }
 
-type GridCompany = { company_id: string; name: string; considered: boolean; website?: string; [key: string]: unknown };
+type GridCompany = { company_id: string; name: string; considered: boolean; website?: string | null; [key: string]: unknown };
 
 function screeningGridRow(candidate: { company_id: string; name: string; considered: boolean; website?: string }): GridCompany {
   return {
     ...candidate,
+    website: candidate.website ?? null,
     hq_city: "Boston",
     hq_state: "MA",
     description: "Claims workflow software",
     source: "MID",
     mid_score: 0.91,
     iscc_score: null,
-    identifiers: [{ kind: "PK", value: candidate.company_id }],
-    keywords: [],
-    rogo: {},
     pb: {},
-    company_detail: {
-      company_id: candidate.company_id,
-      name: candidate.name,
-      website: candidate.website ?? null,
-      description: "Original company detail",
-      city: "Boston",
-      metadata: { hq_state: "MA" },
+    company_payload: {
       identifiers: [{ kind: "PK", value: candidate.company_id }],
       keywords: [],
+      rogo: {},
+      has_enrichment: false,
+      mid_source_row: { "Company Name": candidate.name, Description: "Raw MID description" },
+      mid_description_fallback: null,
     },
-    mid_source_row: { "Company Name": candidate.name, Description: "Raw MID description" },
   };
 }
 
@@ -166,9 +161,14 @@ test("grid paging preserves every MID Company field from the former detail and s
   const grid = {
     ...screeningGridRow({ company_id: "MID-77", name: "Claims platform", website: "pb.example", considered: true }),
     mid_score: 0.9,
-    identifiers: detail.identifiers,
-    keywords: detail.keywords,
-    rogo: detail.ROGO,
+    company_payload: {
+      identifiers: detail.identifiers,
+      keywords: detail.keywords,
+      rogo: detail.ROGO,
+      has_enrichment: true,
+      mid_source_row: midSource,
+      mid_description_fallback: null,
+    },
     pb: {
       name: detail["PB_Name"],
       website: detail["PB_Website"],
@@ -178,14 +178,13 @@ test("grid paging preserves every MID Company field from the former detail and s
       active_investors: detail["PB_Active Investors"],
       universe: detail["PB_Universe"],
     },
-    company_detail: detail,
-    mid_source_row: midSource,
   };
   const gridEntry = companyEntryFromGridRow(grid);
   const oldEntry = {
     row: {
       company: { company_id: "MID-77", name: "Claims Corp", website: "mid.example" },
       considered: true,
+      // The old path uses the same best MID score now supplied on every grid row.
       score: 0.9,
       rank: 1,
     },
@@ -199,7 +198,10 @@ test("grid paging preserves every MID Company field from the former detail and s
       company.rawMid = source.row as Record<string, string | number>;
     return company;
   };
-  assert.deepEqual(mapCompany(gridEntry as typeof oldEntry), mapCompany(oldEntry));
+  const mappedGridCompany = mapCompany(gridEntry as typeof oldEntry);
+  const mappedOldCompany = mapCompany(oldEntry);
+  assert.deepEqual(mappedGridCompany, mappedOldCompany);
+  assert.equal(mappedGridCompany.midScore, grid.mid_score);
 });
 
 function response(
@@ -252,11 +254,14 @@ function response(
       return screeningGridPage([
         {
           ...screeningGridRow({ company_id: "MID-A", name: "Alpha", considered: true }),
-          mid_source_row: { Description: "Raw MID description" },
-          company_detail: {
-            company_id: "MID-A",
-            name: "Alpha",
-            description: "Original company detail",
+          mid_score: 1.37,
+          company_payload: {
+            identifiers: [{ kind: "PK", value: "MID-A" }],
+            keywords: [],
+            rogo: {},
+            has_enrichment: false,
+            mid_source_row: { "Company Name": "Alpha", Description: "Raw MID description" },
+            mid_description_fallback: null,
           },
         },
       ], args);
@@ -304,10 +309,22 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
     detail: {
       company_id: "MID-A",
       name: "Alpha",
-      description: "Original company detail",
+      website: null,
+      description: "Claims workflow software",
+      city: "Boston",
+      metadata: { hq_state: "MA" },
+      identifiers: [{ kind: "PK", value: "MID-A" }],
+      keywords: [],
+      PB_Website: null,
+      PB_Name: null,
+      PB_Description: null,
+      "PB_LinkedIn URL": null,
+      "PB_HQ Location": null,
+      "PB_Active Investors": null,
+      PB_Universe: null,
     },
     sourceRows: [
-      { source: "MID", row: { Description: "Raw MID description" } },
+      { source: "MID", row: { "Company Name": "Alpha", Description: "Raw MID description" } },
     ],
   });
 
@@ -328,6 +345,7 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
   assert.deepEqual(calls.find((call) => call.tool === "get_screening_grid")?.args, {
     run_id: "rust-run-1",
     include_hidden: true,
+    include_company_payload: true,
     limit: 2000,
   });
   assert.equal(names.at(-1), "save_checkpoint");
@@ -420,13 +438,45 @@ test("discovery reads more than 1,000 saved candidates and keeps late hidden row
   const completed = await jobs.wait(jobs.create({ ...input, backendRunId: "approved-run" }).id);
   assert.equal(completed?.state, "completed");
   assert.equal(completed?.result.companies.length, 2001);
-  assert.equal(completed?.result.companies[0].row.score, 0.9);
+  assert.equal(completed?.result.companies[0].row.score, 0.91);
   assert.equal(completed?.result.companies[2000].row.considered, false);
+  assert.equal(completed?.result.companies[2000].row.score, 0.91);
   assert.equal(completed?.result.companies[2000].detail.name, "Company 2000");
   assert.deepEqual(calls.filter(({ tool, args }) => tool === "get_screening_grid" && args.limit === 2000).map(({ args }) => args.after_company_id), [undefined, "MID-1999"]);
   assert.equal(calls.some(({ tool }) => ["get_company", "get_source_rows", "get_company_context"].includes(tool)), false);
   assert.equal(calls.find(({ tool }) => tool === "get_candidate_set")?.args.limit, 1000);
   assert.equal((calls.find(({ tool }) => tool === "save_checkpoint")?.args.state as { company_ids: string[] }).company_ids.length, 2000);
+});
+
+test("discovery retries oversized grid pages at half size and continues from the same cursor", async () => {
+  const saved = Array.from({ length: 1500 }, (_, index) => screeningGridRow({
+    company_id: `MID-${String(index).padStart(4, "0")}`,
+    name: `Company ${index}`,
+    considered: true,
+  }));
+  const calls: { tool: string; args: Record<string, unknown> }[] = [];
+  const jobs = registry(async (tool, args) => {
+    calls.push({ tool, args });
+    if (tool === "search_mid") return { query_id: "empty", results: [] };
+    if (tool === "get_screening_grid") {
+      if (Number(args.limit) > 1000) throw new Error("Response exceeds byte limit");
+      return screeningGridPage(saved, args);
+    }
+    if (tool === "get_shortlist_context") return shortlistPage(saved, args);
+    if (tool === "get_candidate_set") return { candidates: saved.slice(0, 1000).map((item) => ({
+      company_id: item.company_id,
+      company: { company_id: item.company_id, name: item.name },
+      considered: true,
+      discovery: [],
+    })) };
+    if (tool === "get_discovery_summary") return { mid_only: 1500, iscc_only: 0, both: 0, other: 0, total_unique: 1500 };
+    return response(tool, args);
+  });
+  const completed = await jobs.wait(jobs.create({ ...input, backendRunId: "approved-run" }).id);
+  assert.equal(completed?.state, "completed");
+  assert.equal(completed?.result.companies.length, 1500);
+  assert.deepEqual(calls.filter(({ tool }) => tool === "get_screening_grid").map(({ args }) => args.limit), [2000, 1000, 1000]);
+  assert.deepEqual(calls.filter(({ tool }) => tool === "get_screening_grid").map(({ args }) => args.after_company_id), [undefined, undefined, "MID-0999"]);
 });
 
 test("discovery rejects a shortlist changed between pages", async () => {

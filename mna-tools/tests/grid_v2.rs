@@ -62,7 +62,13 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
     store
         .execute(
             "ingest_companies",
-            &json!({"companies":[{"company_id":"NO-FEATURES","name":"Plain Company","description":"A company without score data"}]}),
+            &json!({"companies":[
+                {"company_id":"NO-FEATURES","name":"Plain Company","description":"A company without score data"},
+                {"company_id":"FALLBACK-SEMANTIC","name":"Fallback Semantic","description":"Older semantic score"},
+                {"company_id":"SIM-ASSESSMENT","name":"Assessment Simulation","description":"Simulated assessment"},
+                {"company_id":"SIM-EVIDENCE","name":"Evidence Simulation","description":"Simulated evidence"},
+                {"company_id":"ISCC-DISCOVERY","name":"Discovery Relevancy","description":"ISCC discovery score only"}
+            ]}),
         )
         .unwrap();
     let data = DataService::new(store.clone());
@@ -81,7 +87,13 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
     store
         .execute(
             "add_candidates",
-            &json!({"run_id":"R","companies":["NO-FEATURES"],"discovery_source":"MID"}),
+            &json!({"run_id":"R","companies":["NO-FEATURES","FALLBACK-SEMANTIC","SIM-ASSESSMENT","SIM-EVIDENCE"],"discovery_source":"MID"}),
+        )
+        .unwrap();
+    store
+        .execute(
+            "add_candidates",
+            &json!({"run_id":"R","companies":[{"company_id":"ISCC-DISCOVERY","retrieval_score":0.42}],"discovery_source":"ISCC"}),
         )
         .unwrap();
     let promoted = data
@@ -93,10 +105,16 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
         .unwrap();
     assert_eq!(promoted["promoted"], 1);
 
+    let older_revision = store
+        .execute(
+            "save_criteria_revision",
+            &json!({"run_id":"R","criteria_text":"Claims screening v1","business_definition":"Claims workflow"}),
+        )
+        .unwrap();
     let revision = store
         .execute(
             "save_criteria_revision",
-            &json!({"run_id":"R","criteria_text":"Claims workflow","business_definition":"Claims workflow platform"}),
+            &json!({"run_id":"R","criteria_text":"Claims screening v2","business_definition":"Claims workflow platform"}),
         )
         .unwrap();
     store
@@ -113,6 +131,8 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
                  VALUES('BUNDLE',1,'fixture','ready','fixture.csv','{}','config-hash','2026-01-01T00:00:00Z')",
                 [],
             )?;
+            // Preserve legacy rows keyed by the promoted PK alias to exercise the read-model joins.
+            conn.pragma_update(None, "foreign_keys", false)?;
             for (query_id, rationale, expression, keywords, match_pct, hit_count, matched, created_at) in [
                 (
                     "Q1",
@@ -142,19 +162,48 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
                 )?;
                 conn.execute(
                     "INSERT INTO mid_keyword_hits(query_id,run_id,company_id,matched_json,match_pct,hit_count,bm25)
-                     VALUES(?, 'R','88-77',?,?,?,NULL)",
+                     VALUES(?, 'R','X-77',?,?,?,NULL)",
                     params![query_id, matched.to_string(), match_pct, hit_count],
+                )?;
+            }
+            for query_no in 3..=12 {
+                let query_id = format!("Q{query_no}");
+                let keywords = json!([
+                    {"id":format!("a{query_no}"),"text":format!("unique-{query_no}-a")},
+                    {"id":format!("b{query_no}"),"text":format!("unique-{query_no}-b")},
+                    {"id":format!("c{query_no}"),"text":format!("unique-{query_no}-c")}
+                ]);
+                conn.execute(
+                    "INSERT INTO mid_keyword_queries(query_id,run_id,bundle_id,rationale,keywords_json,expression,hit_count,created_at)
+                     VALUES(?, 'R','BUNDLE',?,?, 'a AND b AND c',2,?)",
+                    params![query_id, format!("Rationale {query_no}"), keywords.to_string(), format!("2025-12-{query_no:02}T00:00:00Z")],
+                )?;
+                conn.execute(
+                    "INSERT INTO mid_keyword_hits(query_id,run_id,company_id,matched_json,match_pct,hit_count,bm25)
+                     VALUES(?, 'R','X-77',?,50,2,NULL)",
+                    params![query_id, keywords.to_string()],
                 )?;
             }
             conn.execute(
                 "INSERT INTO mid_semantic_scores(run_id,company_id,criteria_revision,score,cosine,model,computed_at)
-                 VALUES('R','88-77',?,?,?,'fixture-model','2026-01-02T00:00:00Z')",
+                 VALUES('R','X-77',?,?,?,'fixture-model','2026-01-02T00:00:00Z')",
                 params![revision["revision"].as_i64().unwrap(), 8.26, 0.826],
             )?;
             conn.execute(
+                "INSERT INTO mid_semantic_scores(run_id,company_id,criteria_revision,score,cosine,model,computed_at)
+                 VALUES('R','FALLBACK-SEMANTIC',?,?,?,'older-model','2025-12-31T00:00:00Z')",
+                params![older_revision["revision"].as_i64().unwrap(), 5.43, 0.543],
+            )?;
+            conn.pragma_update(None, "foreign_keys", true)?;
+            conn.execute(
                 "INSERT INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at,simulated)
-                 VALUES('ISCC-SIM','ISCC','R','Q-SIM','88-77','sim-hash',?,0.83,'2026-01-03T00:00:00Z',1)",
+                 VALUES('ISCC-SIM','ISCC','R','Q-SIM','88-77','sim-hash',?,0.83,'2098-01-03T00:00:00Z',1)",
                 [json!({"ECID":"88","CID":"77","Company Name":"Canonical Claims","Relevancy Score":0.83}).to_string()],
+            )?;
+            conn.execute(
+                "INSERT INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at,simulated)
+                 VALUES('ISCC-LOW','ISCC','R','Q-LOW','88-77','low-hash',?,0.65,'2099-01-03T00:00:00Z',0)",
+                [json!({"ECID":"88","CID":"77","Company Name":"Canonical Claims","Relevancy Score":0.65}).to_string()],
             )?;
             prepared_round(
                 conn,
@@ -180,6 +229,16 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
                     result: json!({"Fit":"CHECK","Rationale":"Review needed"}),
                 },
             )?;
+            conn.execute(
+                "INSERT INTO model_assessments(assessment_id,run_id,plan_id,job_id,company_id,row_index,provider,prompt,result_json,created_at,simulated)
+                 VALUES('ASSESSMENT-SIM','R','P1','JOB-P1','SIM-ASSESSMENT',30,'llm_suite','Score core fit','{\"Fit\":\"7\"}','2026-01-30T00:00:00Z',1)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO evidence(evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash,simulated)
+                 VALUES('EVIDENCE-SIM','R','SIM-EVIDENCE','supporting_fact','{\"fact\":\"fixture\"}','fixture','fixture-reference',NULL,'medium',NULL,'2026-01-30T00:00:00Z','evidence-sim-hash',1)",
+                [],
+            )?;
             Ok(())
         })
         .unwrap();
@@ -200,14 +259,14 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
     assert_eq!(company["mid_keyword"]["hit_count"], 5);
     assert_eq!(
         company["mid_keyword"]["matched"].as_array().unwrap().len(),
-        3
+        20
     );
     assert_eq!(company["mid_keyword"]["matched"][0]["text"], "claims");
     assert_eq!(company["mid_keyword"]["matched"][1]["text"], "automation");
     assert_eq!(company["mid_keyword"]["matched"][2]["text"], "workflow");
     assert_eq!(
         company["mid_keyword"]["queries"].as_array().unwrap().len(),
-        2
+        10
     );
     assert_eq!(company["mid_keyword"]["queries"][0]["query_id"], "Q2");
     assert_eq!(
@@ -225,6 +284,8 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
     );
     assert_eq!(company["rounds"]["R1"]["scores"]["Fit"], 8);
     assert_eq!(company["rounds"]["R2"]["scores"]["Fit"], "CHECK");
+    assert!(company["rounds"]["R1"].get("result").is_none());
+    assert!(company["rounds"]["R1"].get("created_at").is_none());
     assert_eq!(page["rounds"].as_array().unwrap().len(), 2);
     assert_eq!(page["rounds"][0]["key"], "R1");
     assert_eq!(page["has_mid_keyword"], true);
@@ -252,7 +313,7 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
     assert_eq!(detail["company_id"], "88-77");
     assert_eq!(
         detail["mid_keyword"]["queries"].as_array().unwrap().len(),
-        2
+        12
     );
     assert_eq!(
         detail["mid_keyword"]["queries"][0]["matched"][1]["text"],
@@ -264,10 +325,70 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
         revision["revision"]
     );
     assert_eq!(detail["iscc"]["relevancy"], 0.83);
-    assert_eq!(detail["iscc"]["row"]["Relevancy Score"], 0.83);
+    assert_eq!(detail["iscc"]["row"]["Relevancy Score"], 0.65);
     assert_eq!(detail["rounds"]["R1"]["result"]["Fit"], "8");
     assert_eq!(detail["rounds"]["R2"]["created_at"], "2026-01-02T00:00:00Z");
     assert_eq!(detail["simulated"], true);
+    assert_eq!(detail["mid_keyword"]["best_match_pct"], 91.5);
+    assert_eq!(detail["mid_semantic"]["score"], 8.26);
+
+    let fallback = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["company_id"] == "FALLBACK-SEMANTIC")
+        .unwrap();
+    assert_eq!(fallback["mid_semantic_score"], 5.4);
+    let fallback_detail = data
+        .execute(
+            "get_company_detail",
+            &json!({"run_id":"R","company_id":"FALLBACK-SEMANTIC"}),
+        )
+        .unwrap();
+    assert_eq!(
+        fallback_detail["mid_semantic"]["criteria_revision"],
+        older_revision["revision"]
+    );
+
+    let assessment_simulated = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["company_id"] == "SIM-ASSESSMENT")
+        .unwrap();
+    let evidence_simulated = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["company_id"] == "SIM-EVIDENCE")
+        .unwrap();
+    assert_eq!(assessment_simulated["simulated"], true);
+    assert_eq!(evidence_simulated["simulated"], true);
+    for company_id in ["SIM-ASSESSMENT", "SIM-EVIDENCE"] {
+        let simulated_detail = data
+            .execute(
+                "get_company_detail",
+                &json!({"run_id":"R","company_id":company_id}),
+            )
+            .unwrap();
+        assert_eq!(simulated_detail["simulated"], true);
+    }
+
+    let discovery_relevancy = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["company_id"] == "ISCC-DISCOVERY")
+        .unwrap();
+    assert_eq!(discovery_relevancy["iscc_relevancy"], 0.42);
+    let discovery_detail = data
+        .execute(
+            "get_company_detail",
+            &json!({"run_id":"R","company_id":"ISCC-DISCOVERY"}),
+        )
+        .unwrap();
+    assert_eq!(discovery_detail["iscc"]["relevancy"], 0.42);
+    assert!(discovery_detail["iscc"]["row"].is_null());
 
     let plain_detail = data
         .execute(
@@ -280,4 +401,88 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
     assert!(plain_detail["iscc"].is_null());
     assert_eq!(plain_detail["rounds"], json!({}));
     assert_eq!(plain_detail["simulated"], false);
+}
+
+#[test]
+fn grid_company_payload_matches_company_and_mid_source_readers() {
+    let store = Store::open(":memory:").unwrap();
+    store
+        .execute(
+            "create_run",
+            &json!({"run_id":"PAYLOAD","objective":"Claims","original_criteria":{}}),
+        )
+        .unwrap();
+    store
+        .execute(
+            "ingest_companies",
+            &json!({"companies":[{"company_id":"MID-PAYLOAD","name":"Payload Claims","website":"claims.example","city":"Boston","description":"Claims processing software","metadata":{"hq_state":"MA"},"keywords":["claims","workflow"]}]}),
+        )
+        .unwrap();
+    store
+        .execute(
+            "add_candidates",
+            &json!({"run_id":"PAYLOAD","companies":["MID-PAYLOAD"],"discovery_source":"MID"}),
+        )
+        .unwrap();
+    store
+        .with_connection(|conn| {
+            let source = json!({
+                "Company Name":"Payload Claims",
+                "Website":"claims.example",
+                "Description":"Claims processing software",
+                "ECID":"E-PAYLOAD",
+                "CID":"C-PAYLOAD",
+                "HQ City":"Boston",
+                "HQ State":"MA"
+            });
+            conn.execute(
+                "INSERT INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at)
+                 VALUES('MID-PAYLOAD-ROW','MID','','','MID-PAYLOAD','payload-hash',?,NULL,'2026-01-01T00:00:00Z')",
+                [source.to_string()],
+            )?;
+            conn.execute(
+                "INSERT INTO company_identifiers(kind,identifier,company_id,first_seen_at)
+                 VALUES('ECID','E-PAYLOAD','MID-PAYLOAD','2026-01-01T00:00:00Z'),
+                       ('CID','C-PAYLOAD','MID-PAYLOAD','2026-01-01T00:00:00Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let company = store
+        .execute("get_company", &json!({"company_id":"MID-PAYLOAD"}))
+        .unwrap();
+    let source_rows = DataService::new(store.clone())
+        .execute(
+            "get_source_rows",
+            &json!({"company_id":"MID-PAYLOAD","source":"MID","limit":20}),
+        )
+        .unwrap();
+    let grid = DataService::new(store.clone())
+        .execute(
+            "get_screening_grid",
+            &json!({"run_id":"PAYLOAD","include_hidden":true,"include_company_payload":true}),
+        )
+        .unwrap();
+    let row = grid["rows"].as_array().unwrap().first().unwrap();
+    assert_eq!(row["company_id"], company["company_id"]);
+    assert_eq!(row["name"], company["name"]);
+    assert_eq!(row["website"], company["website"]);
+    assert_eq!(row["hq_city"], company["city"]);
+    assert_eq!(row["hq_state"], company["metadata"]["hq_state"]);
+    assert_eq!(
+        row["company_payload"]["identifiers"],
+        company["identifiers"]
+    );
+    assert_eq!(row["company_payload"]["keywords"], company["keywords"]);
+    assert_eq!(
+        row["company_payload"]["mid_source_row"],
+        source_rows["rows"][0]["row"]
+    );
+
+    let default_grid = DataService::new(store)
+        .execute("get_screening_grid", &json!({"run_id":"PAYLOAD"}))
+        .unwrap();
+    assert!(default_grid["rows"][0].get("company_payload").is_none());
 }

@@ -72,6 +72,9 @@ struct GridArgs {
     /// Page size, default 1000, maximum 2000.
     #[serde(default)]
     limit: Option<usize>,
+    /// Include larger bridge-only fields needed to construct Company records.
+    #[serde(default)]
+    include_company_payload: bool,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -161,13 +164,13 @@ fn page_keyword_data(
 ) -> Result<HashMap<String, Value>> {
     let sql = format!(
         "{PAGE_CTE}
-         SELECT h.company_id,q.query_id,q.rationale,q.expression,q.keywords_json,
+         SELECT a.current_id,q.query_id,q.rationale,q.expression,q.keywords_json,
                 h.match_pct,h.hit_count,h.matched_json
          FROM mid_keyword_hits h
          JOIN mid_keyword_queries q ON q.query_id=h.query_id AND q.run_id=h.run_id
-         JOIN page p ON p.company_id=h.company_id
+         JOIN aliases a ON a.alias_id=h.company_id
          WHERE h.run_id=?1
-         ORDER BY h.company_id,q.created_at DESC,q.query_id DESC"
+         ORDER BY a.current_id,q.created_at DESC,q.query_id DESC"
     );
     let mut statement = conn.prepare(&sql)?;
     let mut aggregates = HashMap::<String, KeywordAggregate>::new();
@@ -285,14 +288,15 @@ fn page_semantic_data(
              JOIN criteria_revision_approvals a USING(revision_id)
              WHERE r.run_id=?1 ORDER BY r.revision DESC LIMIT 1
          ), ranked AS (
-             SELECT s.company_id,s.score,
-                    ROW_NUMBER() OVER(PARTITION BY s.company_id ORDER BY
+             SELECT a.current_id,s.score,
+                    ROW_NUMBER() OVER(PARTITION BY a.current_id ORDER BY
                       CASE WHEN s.criteria_revision=(SELECT revision FROM approved) THEN 0 ELSE 1 END,
+                      CASE WHEN s.company_id=a.current_id THEN 0 ELSE 1 END,
                       s.criteria_revision DESC) AS rn
-             FROM mid_semantic_scores s JOIN page p ON p.company_id=s.company_id
+             FROM mid_semantic_scores s JOIN aliases a ON a.alias_id=s.company_id
              WHERE s.run_id=?1
          )
-         SELECT company_id,score FROM ranked WHERE rn=1"
+         SELECT current_id,score FROM ranked WHERE rn=1"
     );
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(
@@ -307,12 +311,15 @@ fn semantic_detail(conn: &Connection, run_id: &str, company_id: &str) -> Result<
     let mut statement = conn.prepare(
         "SELECT s.score,s.cosine,s.model,s.criteria_revision,s.computed_at
          FROM mid_semantic_scores s
-         WHERE s.run_id=?1 AND s.company_id=?2
+         WHERE s.run_id=?1 AND (s.company_id=?2 OR s.company_id IN
+           (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))
          ORDER BY CASE WHEN s.criteria_revision=(
              SELECT r.revision FROM criteria_revisions r
              JOIN criteria_revision_approvals a USING(revision_id)
              WHERE r.run_id=?1 ORDER BY r.revision DESC LIMIT 1
-         ) THEN 0 ELSE 1 END,s.criteria_revision DESC LIMIT 1",
+         ) THEN 0 ELSE 1 END,
+         CASE WHEN s.company_id=?2 THEN 0 ELSE 1 END,
+         s.criteria_revision DESC LIMIT 1",
     )?;
     Ok(statement
         .query_row(params![run_id, company_id], |r| {
@@ -410,7 +417,7 @@ fn page_assessments(
              JOIN model_assessments ma ON ma.company_id=a.alias_id AND ma.run_id=?1
              JOIN screening_rounds sr ON sr.run_id=ma.run_id AND sr.plan_id=ma.plan_id
          )
-         SELECT current_id,round_no,result_json,created_at FROM ranked WHERE rn=1
+         SELECT current_id,round_no,result_json FROM ranked WHERE rn=1
          ORDER BY current_id,round_no"
     );
     let mut statement = conn.prepare(&sql)?;
@@ -424,19 +431,18 @@ fn page_assessments(
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
                 r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
             ))
         },
     )? {
-        let (company_id, round_no, raw_result, created_at) = row?;
+        let (company_id, round_no, raw_result) = row?;
         let Some(round) = by_round.get(&round_no) else {
             continue;
         };
         let result: Value = serde_json::from_str(&raw_result)?;
-        results.entry(company_id).or_default().insert(
-            round.key.clone(),
-            round_payload(round, &result, Some(&created_at)),
-        );
+        results
+            .entry(company_id)
+            .or_default()
+            .insert(round.key.clone(), round_payload(round, &result, None));
     }
     Ok(results
         .into_iter()
@@ -488,8 +494,12 @@ fn company_rounds(
 fn simulated_for_company(conn: &Connection, run_id: &str, company_id: &str) -> Result<bool> {
     Ok(conn.query_row(
         "SELECT
-           EXISTS(SELECT 1 FROM source_rows WHERE run_scope=?1 AND company_id=?2 AND simulated=1)
-           OR EXISTS(SELECT 1 FROM evidence WHERE run_id=?1 AND company_id=?2 AND simulated=1)
+           EXISTS(SELECT 1 FROM source_rows WHERE run_scope=?1 AND simulated=1 AND
+             (company_id=?2 OR company_id IN
+               (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK')))
+           OR EXISTS(SELECT 1 FROM evidence WHERE run_id=?1 AND simulated=1 AND
+             (company_id=?2 OR company_id IN
+               (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK')))
            OR EXISTS(SELECT 1 FROM model_assessments WHERE run_id=?1 AND simulated=1 AND
              (company_id=?2 OR company_id IN
                (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))) ",
@@ -502,21 +512,28 @@ fn company_iscc_data(conn: &Connection, run_id: &str, company_id: &str) -> Resul
     let latest: Option<(Option<f64>, String)> = conn
         .query_row(
             "SELECT relevance_score,row_json FROM source_rows
-             WHERE source='ISCC' AND run_scope=?1 AND company_id=?2
+             WHERE source='ISCC' AND run_scope=?1 AND (company_id=?2 OR company_id IN
+               (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))
              ORDER BY imported_at DESC,source_row_id DESC LIMIT 1",
             params![run_id, company_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    let discovery_relevancy: Option<f64> = conn.query_row(
-        "SELECT MAX(retrieval_score) FROM candidate_discovery
-         WHERE run_id=?1 AND company_id=?2 AND discovery_source='ISCC'",
+    let source_relevancy: Option<f64> = conn.query_row(
+        "SELECT MAX(relevance_score) FROM source_rows
+         WHERE source='ISCC' AND run_scope=?1 AND (company_id=?2 OR company_id IN
+           (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))",
         params![run_id, company_id],
         |r| r.get(0),
     )?;
-    let relevancy = latest
-        .as_ref()
-        .and_then(|(relevance, _)| *relevance)
+    let discovery_relevancy: Option<f64> = conn.query_row(
+        "SELECT MAX(retrieval_score) FROM candidate_discovery
+         WHERE run_id=?1 AND discovery_source='ISCC' AND (company_id=?2 OR company_id IN
+           (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))",
+        params![run_id, company_id],
+        |r| r.get(0),
+    )?;
+    let relevancy = source_relevancy
         .or(discovery_relevancy)
         .filter(|score| score.is_finite())
         .map(|score| (score * 100.0).round() / 100.0);
@@ -579,6 +596,7 @@ pub fn screening_grid(store: &Store, arguments: &Value) -> Result<Value> {
             args.include_hidden,
             args.after_company_id.as_deref(),
             limit,
+            args.include_company_payload,
         )
     })
 }
@@ -591,6 +609,7 @@ pub(crate) fn grid_page(
     include_hidden: bool,
     after_company_id: Option<&str>,
     limit: usize,
+    include_company_payload: bool,
 ) -> Result<Value> {
     require_run(conn, run_id)?;
     let fingerprint = crate::review::selection_fingerprint(conn, run_id)?;
@@ -608,6 +627,12 @@ pub(crate) fn grid_page(
             WHERE run_id=?1 AND (?2 OR considered=1) AND (?3 IS NULL OR company_id>?3)
             ORDER BY company_id LIMIT ?4
         ),
+        aliases AS (
+            SELECT company_id AS current_id,company_id AS alias_id FROM page
+            UNION
+            SELECT p.company_id,ci.identifier FROM page p
+            JOIN company_identifiers ci ON ci.company_id=p.company_id AND ci.kind='PK'
+        ),
         src AS (
             SELECT s.company_id,
                    MAX(s.source='MID') AS has_mid,
@@ -624,6 +649,19 @@ pub(crate) fn grid_page(
                    COUNT(*) AS discoveries
             FROM candidate_discovery d
             WHERE d.run_id=?1 AND d.company_id IN (SELECT company_id FROM page) GROUP BY d.company_id
+        ),
+        simulated AS (
+            SELECT a.current_id FROM aliases a
+            JOIN source_rows s ON s.company_id=a.alias_id
+            WHERE s.run_scope=?1 AND s.simulated=1
+            UNION
+            SELECT a.current_id FROM aliases a
+            JOIN evidence ev ON ev.company_id=a.alias_id
+            WHERE ev.run_id=?1 AND ev.simulated=1
+            UNION
+            SELECT a.current_id FROM aliases a
+            JOIN model_assessments ma ON ma.company_id=a.alias_id
+            WHERE ma.run_id=?1 AND ma.simulated=1
         )
         SELECT p.company_id,p.considered,p.consideration_reason,
                c.name,c.website,c.city,json_extract(c.metadata_json,'$.hq_state'),c.description,
@@ -635,16 +673,13 @@ pub(crate) fn grid_page(
                disc.mid_score,disc.iscc_score,COALESCE(disc.found_mid,0),COALESCE(disc.found_iscc,0),COALESCE(disc.discoveries,0),
                (SELECT json_group_array(json_object('kind',kind,'value',identifier)) FROM company_identifiers WHERE company_id=p.company_id),
                c.keywords_json,COALESCE(e.rogo_json,'{}'),(e.company_id IS NOT NULL),
-               (EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=p.company_id AND s.run_scope=?1 AND s.simulated=1)
-                OR EXISTS(SELECT 1 FROM evidence ev WHERE ev.run_id=?1 AND ev.company_id=p.company_id AND ev.simulated=1)
-                OR EXISTS(SELECT 1 FROM model_assessments ma WHERE ma.run_id=?1 AND ma.simulated=1 AND
-                    (ma.company_id=p.company_id OR ma.company_id IN
-                     (SELECT ci.identifier FROM company_identifiers ci WHERE ci.company_id=p.company_id AND ci.kind='PK'))))
+               sim.current_id IS NOT NULL
         FROM page p
         JOIN companies c ON c.company_id=p.company_id
         LEFT JOIN company_enrichment e ON e.company_id=p.company_id
         LEFT JOIN src ON src.company_id=p.company_id
         LEFT JOIN disc ON disc.company_id=p.company_id
+        LEFT JOIN simulated sim ON sim.current_id=p.company_id
         ORDER BY p.company_id",
     )?;
     struct Fetched {
@@ -797,31 +832,42 @@ pub(crate) fn grid_page(
             .and_then(|records| records.first())
             .cloned()
             .unwrap_or(Value::Null);
-        let identifiers =
-            serde_json::from_str::<Value>(&row.identifiers_json).unwrap_or_else(|_| json!([]));
-        let company_keywords =
-            serde_json::from_str::<Value>(&row.keywords_json).unwrap_or_else(|_| json!([]));
-        let rogo = serde_json::from_str::<Value>(&row.rogo_json).unwrap_or_else(|_| json!({}));
-        let mut company_detail = json!({
-            "company_id": company_id,
-            "name": row.name,
-            "website": row.website,
-            "description": row.description,
-            "city": row.city,
-            "metadata": {"hq_state": row.state},
-            "keywords": company_keywords,
-            "identifiers": identifiers,
-            "PB_Website": row.pb[0],
-            "PB_Name": row.pb[1],
-            "PB_Description": row.pb[2],
-            "PB_LinkedIn URL": row.pb[3],
-            "PB_HQ Location": row.pb[4],
-            "PB_Active Investors": row.pb[5],
-            "PB_Universe": row.pb[6],
-        });
-        if row.has_enrichment {
-            company_detail["ROGO"] = rogo.clone();
-        }
+        let company_payload = if include_company_payload {
+            let mut identifiers =
+                serde_json::from_str::<Value>(&row.identifiers_json).unwrap_or_else(|_| json!([]));
+            if let Some(identifiers) = identifiers.as_array_mut() {
+                identifiers.sort_by(|left, right| {
+                    left["kind"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .cmp(right["kind"].as_str().unwrap_or_default())
+                        .then_with(|| {
+                            left["value"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .cmp(right["value"].as_str().unwrap_or_default())
+                        })
+                });
+            }
+            let company_keywords =
+                serde_json::from_str::<Value>(&row.keywords_json).unwrap_or_else(|_| json!([]));
+            let rogo = serde_json::from_str::<Value>(&row.rogo_json).unwrap_or_else(|_| json!({}));
+            let mid_description_fallback = mid_source_row
+                .get("Description")
+                .is_none_or(Value::is_null)
+                .then(|| row.description.clone())
+                .flatten();
+            Some(json!({
+                "identifiers": identifiers,
+                "keywords": company_keywords,
+                "rogo": rogo,
+                "has_enrichment": row.has_enrichment,
+                "mid_source_row": mid_source_row,
+                "mid_description_fallback": mid_description_fallback,
+            }))
+        } else {
+            None
+        };
         let mid_keyword = keywords.get(&company_id).cloned().unwrap_or(Value::Null);
         let mid_semantic_score = semantic
             .get(&company_id)
@@ -858,7 +904,7 @@ pub(crate) fn grid_page(
             _ => Value::Null,
         };
         let preferred = |pb: &Option<String>| pb.clone().filter(|value| !value.trim().is_empty());
-        rows.push(json!({
+        let mut output = json!({
             "company_id": company_id,
             "name": preferred(&row.pb[1]).unwrap_or(row.name),
             "website": preferred(&row.pb[0]).or(row.website),
@@ -877,13 +923,6 @@ pub(crate) fn grid_page(
             "iscc_relevancy": iscc_relevancy,
             "simulated": row.simulated,
             "rounds": company_rounds,
-            // Identity and raw MID source data let the bridge build the same Company record
-            // without fetching company details and source rows separately per candidate.
-            "identifiers": identifiers,
-            "keywords": company_keywords,
-            "rogo": rogo,
-            "mid_source_row": mid_source_row,
-            "company_detail": company_detail,
             "coverage": {
                 "pb": row.pb[1].is_some() || row.pb[2].is_some(),
                 "rogo": row.has_rogo,
@@ -899,7 +938,11 @@ pub(crate) fn grid_page(
                 "linkedin_url": row.pb[3],
             },
             "discovery_count": row.discoveries,
-        }));
+        });
+        if let Some(payload) = company_payload {
+            output["company_payload"] = payload;
+        }
+        rows.push(output);
     }
     Ok(json!({
         "run_id": run_id,
@@ -909,7 +952,7 @@ pub(crate) fn grid_page(
         "include_hidden": include_hidden,
         "total": total,
         "considered_count": considered_count,
-            "hidden_count": total - considered_count,
+        "hidden_count": total - considered_count,
         "next_cursor": next_cursor,
         "rounds": rounds.iter().map(|round| json!({
             "key": round.key,

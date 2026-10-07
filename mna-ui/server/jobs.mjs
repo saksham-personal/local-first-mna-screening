@@ -158,18 +158,35 @@ function count(summary, key) {
 
 export function companyEntryFromGridRow(candidate) {
   const companyId = candidate.company_id;
-  const details = candidate.company_detail && typeof candidate.company_detail === "object"
-    ? safeClone(candidate.company_detail)
-    : {
-        company_id: companyId,
-        name: candidate.name,
-        website: candidate.website,
-        description: candidate.description,
-        city: candidate.hq_city,
-        metadata: { hq_state: candidate.hq_state },
-        identifiers: candidate.identifiers ?? [],
-        keywords: candidate.keywords ?? [],
-      };
+  const payload = candidate.company_payload && typeof candidate.company_payload === "object"
+    ? candidate.company_payload
+    : {};
+  const midSourceRow = payload.mid_source_row && typeof payload.mid_source_row === "object"
+    ? safeClone(payload.mid_source_row)
+    : undefined;
+  const pb = candidate.pb && typeof candidate.pb === "object" ? candidate.pb : {};
+  const description = midSourceRow?.Description == null && Object.hasOwn(payload, "mid_description_fallback")
+    ? payload.mid_description_fallback
+    : candidate.description;
+  const details = {
+    company_id: companyId,
+    name: midSourceRow?.["Company Name"] ?? candidate.name,
+    website: midSourceRow?.Website ?? candidate.website,
+    description,
+    city: candidate.hq_city,
+    metadata: { hq_state: candidate.hq_state },
+    identifiers: Array.isArray(payload.identifiers) ? payload.identifiers : [],
+    keywords: Array.isArray(payload.keywords) ? payload.keywords : [],
+    "PB_Website": pb.website ?? null,
+    "PB_Name": pb.name ?? null,
+    "PB_Description": pb.description ?? null,
+    "PB_LinkedIn URL": pb.linkedin_url ?? null,
+    "PB_HQ Location": pb.hq_location ?? null,
+    "PB_Active Investors": pb.active_investors ?? null,
+    "PB_Universe": pb.universe ?? null,
+  };
+  if (payload.has_enrichment === true)
+    details.ROGO = payload.rogo && typeof payload.rogo === "object" ? safeClone(payload.rogo) : {};
   return {
     row: {
       company: {
@@ -178,12 +195,13 @@ export function companyEntryFromGridRow(candidate) {
         ...(typeof candidate.website === "string" ? { website: candidate.website } : {}),
       },
       considered: candidate.considered,
+      // The grid's best MID score covers every company, including rows beyond the legacy 1,000-row candidate page.
       ...(typeof candidate.mid_score === "number" ? { score: candidate.mid_score } : {}),
     },
     detail: details,
     sourceRows:
-      candidate.mid_source_row && typeof candidate.mid_source_row === "object"
-        ? [{ source: "MID", row: safeClone(candidate.mid_source_row) }]
+      midSourceRow
+        ? [{ source: "MID", row: midSourceRow }]
         : [],
   };
 }
@@ -347,12 +365,25 @@ export function createJobRegistry(options) {
 
     const savedRows = new Map();
     let cursor, expectedTotal, consideredCount, sourceHash, selectionRevision, criteriaRevision;
-    const pageSize = 2000;
+    let pageSize = 2000;
     do {
-      const page = await tool("get_screening_grid", {
-        run_id: runId, include_hidden: true, limit: pageSize,
-        ...(cursor ? { after_company_id: cursor } : {}),
-      });
+      let page;
+      while (true) {
+        try {
+          page = await tool("get_screening_grid", {
+            run_id: runId,
+            include_hidden: true,
+            include_company_payload: true,
+            limit: pageSize,
+            ...(cursor ? { after_company_id: cursor } : {}),
+          });
+          break;
+        } catch (error) {
+          if (pageSize <= 1 || !/(too large|exceeds|byte limit)/i.test(errorMessage(error)))
+            throw error;
+          pageSize = Math.max(1, Math.floor(pageSize / 2));
+        }
+      }
       if (!Array.isArray(page?.rows) || !Number.isSafeInteger(page.total) || page.total < 0 ||
           !Number.isSafeInteger(page.considered_count) || page.considered_count < 0 ||
           page.rows.length > pageSize || !(page.next_cursor === null || typeof page.next_cursor === "string") ||
@@ -399,7 +430,6 @@ export function createJobRegistry(options) {
       const saved = row && savedRows.get(row.company.company_id);
       if (!saved || row.considered !== saved.row.considered)
         throw new Error("The saved company list changed during discovery. Search again.");
-      if (typeof row.score === "number") saved.row.score = row.score;
       if (Number.isSafeInteger(row.rank)) saved.row.rank = row.rank;
     }
     const current = await tool("get_shortlist_context", { run_id: runId, include_hidden: true, limit: 1 });
