@@ -33,7 +33,7 @@ export function readGridPreferences<Row>(
       return { visibleColumnIds: defaults, sidePanelOpen: defaultSidePanelOpen };
     }
     const record = parsed as Record<string, unknown>;
-    const known = new Set(defaults);
+    const known = new Set(columns.map((column) => column.id));
     const stored = record.visibleColumnIds;
     let visibleColumnIds = defaults;
     if (Array.isArray(stored) && stored.every((id) => typeof id === "string")) {

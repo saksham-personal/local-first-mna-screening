@@ -20,7 +20,7 @@ export type GridColumnSpec<Row> = {
 };
 export type ColumnFilter =
   | { kind: "text"; contains?: string; values?: string[] }
-  | { kind: "category"; values: string[] }
+  | { kind: "category"; values: string[]; contains?: string }
   | { kind: "number"; op?: NumberOp; a?: number; b?: number; values?: string[] }
   | { kind: "score"; op?: NumberOp; a?: number; b?: number; buckets?: BucketKey[]; includeCheck: boolean }
   | { kind: "date"; op?: DateOp; a?: string; b?: string };

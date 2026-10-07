@@ -41,6 +41,10 @@ test("grid preferences sanitize stored columns and preserve an empty selection",
     readGridPreferences(columns, "{broken", true),
     { visibleColumnIds: ["name", "source"], sidePanelOpen: true },
   );
+  assert.deepEqual(
+    readGridPreferences(columns, '{"visibleColumnIds":["internal"],"sidePanelOpen":false}'),
+    { visibleColumnIds: ["internal"], sidePanelOpen: false },
+  );
 });
 
 test("grid preferences serialize the visible columns and side panel state", () => {
@@ -76,5 +80,5 @@ test("filtered selection adds or removes visible rows and preserves other select
   );
   assert.equal(areFilteredRowsSelected(["hidden", "a", "b"], visibleRows, (row) => row.id), true);
   assert.equal(areFilteredRowsSelected(["hidden", "a"], visibleRows, (row) => row.id), false);
-  assert.equal(areFilteredRowsSelected(["hidden"], [], (row) => row.id), false);
+  assert.equal(areFilteredRowsSelected<Row>(["hidden"], [], (row) => row.id), false);
 });

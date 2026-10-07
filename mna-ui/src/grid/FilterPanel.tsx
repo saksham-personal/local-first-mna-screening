@@ -47,6 +47,7 @@ export type FilterPanelProps<Row> = {
   onChange: (filter: ColumnFilter | undefined) => void;
   onSortChange: (sort: SortState) => void;
   onDone?: () => void;
+  hideHeading?: boolean;
 };
 
 function numericInput(value: string): number | undefined {
@@ -73,6 +74,7 @@ export default function FilterPanel<Row>({
   onChange,
   onSortChange,
   onDone,
+  hideHeading = false,
 }: FilterPanelProps<Row>) {
   const [valueSearch, setValueSearch] = useState("");
   const candidateRows = useMemo(
@@ -114,7 +116,8 @@ export default function FilterPanel<Row>({
       const current = filter?.kind === "text" ? filter : { kind: "text" as const };
       onChange({ ...current, values });
     } else if (column.kind === "category") {
-      onChange({ kind: "category", values: values ?? [] });
+      const current = filter?.kind === "category" ? filter : undefined;
+      onChange({ kind: "category", values: values ?? [], contains: current?.contains });
     } else if (column.kind === "number") {
       const current = filter?.kind === "number" ? filter : { kind: "number" as const };
       onChange({ ...current, values });
@@ -224,7 +227,27 @@ export default function FilterPanel<Row>({
       </>
     );
   } else if (column.kind === "category") {
-    body = checklist;
+    const current = filter?.kind === "category" ? filter : undefined;
+    body = (
+      <>
+        <label className="dg-filter-field">
+          <span>Contains</span>
+          <input
+            type="search"
+            value={current?.contains ?? ""}
+            onChange={(event) =>
+              onChange({
+                kind: "category",
+                values: current?.values ?? [],
+                contains: event.target.value || undefined,
+              })
+            }
+            placeholder={"Search " + column.header}
+          />
+        </label>
+        {checklist}
+      </>
+    );
   } else if (column.kind === "number") {
     const current = filter?.kind === "number" ? filter : undefined;
     const op = current?.op;
@@ -384,6 +407,7 @@ export default function FilterPanel<Row>({
     const requiresValue = !isNumberWithoutValue(op);
     body = (
       <>
+        {sortActions}
         <div className="dg-filter-segmented" role="group" aria-label="Score filter mode">
           <button
             type="button"
@@ -418,7 +442,6 @@ export default function FilterPanel<Row>({
           </div>
         ) : (
           <>
-            {sortActions}
             <label className="dg-filter-field">
               <span>Condition</span>
               <select
@@ -497,17 +520,19 @@ export default function FilterPanel<Row>({
 
   return (
     <section className="dg-filter-panel" aria-label={column.header + " filter"}>
-      <div className="dg-filter-panel-heading">
-        <div>
-          <strong>{column.header}</strong>
-          <span>Filter values and conditions</span>
+      {!hideHeading && (
+        <div className="dg-filter-panel-heading">
+          <div>
+            <strong>{column.header}</strong>
+            <span>Filter values and conditions</span>
+          </div>
+          {onDone && (
+            <button type="button" className="dg-filter-done" onClick={onDone}>
+              Done
+            </button>
+          )}
         </div>
-        {onDone && (
-          <button type="button" className="dg-filter-done" onClick={onDone}>
-            Done
-          </button>
-        )}
-      </div>
+      )}
       <div className="dg-filter-panel-body">{body}</div>
       <div className="dg-filter-panel-footer">
         <button type="button" onClick={() => onChange(defaultFilter(column.kind))}>
