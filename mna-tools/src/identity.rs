@@ -32,6 +32,11 @@ pub fn normalized_identifier(value: Option<&Value>) -> Option<String> {
     }
 }
 
+/// Header aliases for the ECID (ISCC calls it ECI) and CID (MID calls it Crescendo ID).
+/// Identity resolution uses ECID first, then CID; "-" and similar placeholders count as blank.
+pub const ECID_KEYS: &[&str] = &["ECID", "ECI", "E C I D"];
+pub const CID_KEYS: &[&str] = &["CID", "Crescendo ID", "C I D"];
+
 pub fn company_key(ecid: Option<&str>, cid: Option<&str>) -> Option<String> {
     match (ecid, cid) {
         (Some(e), Some(c)) => Some(format!("{e}-{c}")),

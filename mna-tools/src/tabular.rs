@@ -437,8 +437,8 @@ fn detect_header(rows: &[Vec<String>]) -> Option<usize> {
     for (index, row) in rows.iter().take(scan).enumerate() {
         let labels = normalized_labels(row);
         let has = |key: &str| labels.iter().any(|label| label == key);
-        let company =
-            (has("ecid") || has("cid")) && (has("companyname") || has("name") || has("companies"));
+        let company = (has("ecid") || has("eci") || has("cid") || has("crescendoid"))
+            && (has("companyname") || has("company") || has("name") || has("companies"));
         let mapping = index < MAPPING_HEADER_SCAN_ROWS
             && has("pk")
             && has_any(&labels, &PB_ID_HEADERS)
@@ -487,15 +487,16 @@ fn classify(sheet: &SheetRows, hint: Option<Purpose>, company_first: bool) -> Op
     if pb_strong || (pb_weak && !(hint == Some(Purpose::Rogo) && rogo_like)) {
         return Some("PB_DATA");
     }
-    let ids = has("ecid") || has("cid");
-    let named = has("companyname") || has("name") || has("companies");
+    let ids = has("ecid") || has("eci") || has("cid") || has("crescendoid");
+    let named = has("companyname") || has("company") || has("name") || has("companies");
     if company_first && ids {
         return Some("COMPANY");
     }
     if hint == Some(Purpose::Rogo) && rogo_like {
         return Some("ROGO");
     }
-    let company_like = (has("ecid") && has("cid")) || (ids && named);
+    let company_like =
+        ((has("ecid") || has("eci")) && (has("cid") || has("crescendoid"))) || (ids && named);
     if company_like {
         return Some("COMPANY");
     }

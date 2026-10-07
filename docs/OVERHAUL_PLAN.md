@@ -25,7 +25,7 @@ The base is `origin/main` @ `02650fe` (includes `APPLICATION_FLOW_GUIDE.md`, whi
 - Intake Form fields have no character limits, only a live character count.
 - Criteria versions: picking a version opens a view with an optional "Restore as new version" (creates a draft that needs approval).
 - MID never has the same ECID with different CIDs, so the current identity rules stay. ISCC's `ECI` is added as an alias of ECID.
-- **Assumption to confirm at Checkpoint 1:** MID's `Crescendo ID` is the CID. This is configurable in the index config.
+- **Confirmed at Checkpoint 1:** MID's `Crescendo ID` is the CID (configurable alias in the index config).
 
 ## Ground rules and setup (Wave 0, done by me)
 - **Worktree on E: (all writes on E:):**
@@ -473,4 +473,4 @@ I orchestrate, merge, review and verify. **Sonnet** subagents implement and **Ha
 - **Migrations:** append-only, using ALTER ADD COLUMN.
 - **150k rows × 768-dim embeddings on CPU:** streaming, hash-skip, honest ETA; skipped until a model is configured.
 - **AG Grid Community has no side bar or set filter:** custom components. A client-side model with about 10k rows is fine.
-- **Crescendo ID ⇒ CID is an assumption:** it's a config alias, to be confirmed at Checkpoint 1.
+- **Crescendo ID ⇒ CID:** confirmed by the analyst at Checkpoint 1; kept as a config alias.

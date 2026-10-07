@@ -23,18 +23,22 @@ const TRUST_MIGRATION: &str = include_str!("../migrations/005_trust.sql");
 const RETRIEVAL_RECOVERY_MIGRATION: &str = include_str!("../migrations/006_retrieval_recovery.sql");
 const SHORTLIST_REVIEW_MIGRATION: &str = include_str!("../migrations/007_shortlist_review.sql");
 const INTAKE_REPORTS_MIGRATION: &str = include_str!("../migrations/008_intake_reports.sql");
-const SCHEMA_VERSION: i64 = 8;
+const PHASE2_MIGRATION: &str = include_str!("../migrations/009_phase2.sql");
+const SCHEMA_VERSION: i64 = 9;
 const MAX_TEXT: usize = 100_000;
 const MAX_LIST: usize = 1_000;
 
 #[derive(Clone)]
 pub struct Store {
     connection: Arc<Mutex<Connection>>,
+    /// Database file, for workers that need their own connection (MID index builds).
+    path: Arc<std::path::PathBuf>,
 }
 
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let mut connection = Connection::open(path)?;
+        let db_path = path.as_ref().to_path_buf();
+        let mut connection = Connection::open(&db_path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
@@ -89,11 +93,26 @@ impl Store {
             transaction.execute_batch(INTAKE_REPORTS_MIGRATION)?;
             backfill_quarantine_hashes(&transaction)?;
         }
+        transaction.execute_batch(PHASE2_MIGRATION)?;
+        // Labelled simulated output (009). One probe per column: older-schema rebuilds above
+        // can recreate model_assessments without it.
+        for table in ["source_rows", "model_assessments", "evidence"] {
+            let present: bool = transaction.query_row(&format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name='simulated')"),[],|r|r.get(0))?;
+            if !present {
+                transaction.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0 CHECK(simulated IN (0,1))"))?;
+            }
+        }
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            path: Arc::new(db_path),
         })
+    }
+
+    /// Path of the database file (":memory:" stores cannot be shared with workers).
+    pub fn db_path(&self) -> &Path {
+        self.path.as_path()
     }
 
     fn conn(&self) -> Result<MutexGuard<'_, Connection>> {

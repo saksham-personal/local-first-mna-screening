@@ -211,8 +211,8 @@ impl DataService {
             }
             for row in rows {
                 result.processed += 1;
-                let ecid = normalized_identifier(get_field(row, &["ECID", "E C I D"]));
-                let cid = normalized_identifier(get_field(row, &["CID", "C I D"]));
+                let ecid = normalized_identifier(get_field(row, crate::identity::ECID_KEYS));
+                let cid = normalized_identifier(get_field(row, crate::identity::CID_KEYS));
                 if ecid.as_deref()==Some("X") || cid.as_deref()==Some("X") {
                     quarantine(&tx, source, "literal X is reserved for a missing identifier component", row)?;
                     result.quarantined+=1;
