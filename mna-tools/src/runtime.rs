@@ -349,6 +349,9 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             false,
         ),
         ("get_run_source_projection", "Build a run-scoped input table with independent PB/MID/ISCC name and website fallbacks, labeled descriptions, coverage and row hashes", "projection", false),
+        ("get_mid_index_status", "Read the active MID index and running build", "data", false),
+        ("get_index_build", "Read durable index build steps and progress", "data", false),
+        ("list_index_builds", "List recent MID index builds and bundles", "data", false),
         ("get_source_field_catalog", "List available MID, ISCC, PitchBook and ROGO fields and missing-data counts for this run", "projection", false),
         ("get_retrieval_config", "Show the selected Arctic 768D INT8 embedder, replaceable reranker, 1000-result retrieval and top-500 reranking policy", "search", false),
         ("embed_texts", "Obtain validated vectors from the configured local embedder; unconfigured inference returns an explicit unavailable state", "search", false),
@@ -431,6 +434,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     .or_else(|| crate::context::input_schema(name))
                     .or_else(|| crate::search::input_schema(name))
                     .or_else(|| crate::data::input_schema(name))
+                    .or_else(|| crate::index_build::input_schema(name))
                     .or_else(|| crate::workflow::input_schema(name))
                     .or_else(|| crate::projection::input_schema(name))
                     .or_else(|| crate::execution::input_schema(name))
@@ -461,6 +465,7 @@ fn canonical_tool(name: &str) -> Result<String> {
 
 impl Runtime {
     pub fn new(store: Store) -> Result<Self> {
+        crate::index_build::recover_interrupted(&store)?;
         Ok(Self {
             search: Arc::new(SearchEngine::new(store.clone())?),
             context: ContextService::new(store.clone()),
@@ -544,7 +549,9 @@ impl Runtime {
             let owned_tool = tool.to_owned();
             let owned_arguments = arguments.clone();
             tokio::task::spawn_blocking(move || {
-                if category == Some("context") {
+                if crate::index_build::input_schema(&owned_tool).is_some() {
+                    crate::index_build::execute(&store, &owned_tool, &owned_arguments)
+                } else if category == Some("context") {
                     context.execute(&owned_tool, &owned_arguments)
                 } else if category == Some("data") || owned_tool == "import_company_files" {
                     data.execute(&owned_tool, &owned_arguments)
@@ -890,6 +897,10 @@ async fn admin(
         "index" => "sync_search_index",
         "labels" => "label_company",
         "company-files" => "import_company_files",
+        "index-build-start" => "start_index_build",
+        "index-build-cancel" => "cancel_index_build",
+        "mid-bundle-activate" => "activate_mid_bundle",
+        "mid-bundle-delete" => "delete_mid_bundle",
         "prepared-plan-approve" => "approve_prepared_plan",
         "prepared-plan-cancel" => "cancel_prepared_plan",
         "execution-lease" => "lease_execution_job",
@@ -982,7 +993,11 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("approve_criteria_revision", "/admin/criteria-approve"),
         ("apply_enrichment_review", "/admin/enrichment-review"),
         ("dispatch_provider_text", "/admin/provider-text"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
+        ("start_index_build", "/admin/index-build-start"),
+        ("cancel_index_build", "/admin/index-build-cancel"),
+        ("activate_mid_bundle", "/admin/mid-bundle-activate"),
+        ("delete_mid_bundle", "/admin/mid-bundle-delete"),
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 
