@@ -303,7 +303,7 @@ async fn batch_preserves_individual_failures_without_negative_business_evidence(
 #[test]
 fn discovery_contains_real_argument_schemas_for_every_tool() {
     let definitions = tool_definitions();
-    assert_eq!(definitions.len(), 70);
+    assert_eq!(definitions.len(), 71);
     for definition in definitions {
         assert!(
             definition.input_schema.get("properties").is_some(),

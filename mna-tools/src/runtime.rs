@@ -358,6 +358,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ("get_execution_progress", "Read lightweight plan and batch progress without resending frozen inputs; includes safe retry eligibility and source freshness", "execution", false),
         ("get_execution_job", "Read durable batch state, immutable index mapping, repair diagnostics and recorded provider status", "execution", false),
         ("get_model_assessments", "Read accepted provider assessments by prompt and batch, independently of retrieval scores and verified evidence", "execution", false),
+        ("get_screening_rounds", "Read approved screening rounds with provider, job progress and per-score distributions", "execution", false),
         (
             "get_search_policy",
             "Show core-business criteria and criteria deliberately unused for discovery",
