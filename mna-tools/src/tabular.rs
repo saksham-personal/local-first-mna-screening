@@ -423,7 +423,7 @@ fn normalized_labels(labels: &[String]) -> Vec<String> {
 fn has_any(labels: &[String], keys: &[&str]) -> bool {
     keys.iter().any(|key| {
         let wanted = normalize_header(key);
-        labels.iter().any(|label| *label == wanted)
+        labels.contains(&wanted)
     })
 }
 
@@ -437,8 +437,8 @@ fn detect_header(rows: &[Vec<String>]) -> Option<usize> {
     for (index, row) in rows.iter().take(scan).enumerate() {
         let labels = normalized_labels(row);
         let has = |key: &str| labels.iter().any(|label| label == key);
-        let company = (has("ecid") || has("cid"))
-            && (has("companyname") || has("name") || has("companies"));
+        let company =
+            (has("ecid") || has("cid")) && (has("companyname") || has("name") || has("companies"));
         let mapping = index < MAPPING_HEADER_SCAN_ROWS
             && has("pk")
             && has_any(&labels, &PB_ID_HEADERS)
@@ -466,23 +466,22 @@ pub fn enrichment_kind(sheet: &SheetRows, hint: Option<Purpose>) -> Option<&'sta
     classify(sheet, hint, false)
 }
 
-fn classify(
-    sheet: &SheetRows,
-    hint: Option<Purpose>,
-    company_first: bool,
-) -> Option<&'static str> {
+fn classify(sheet: &SheetRows, hint: Option<Purpose>, company_first: bool) -> Option<&'static str> {
     let labels = normalized_labels(&sheet.headers);
     let has = |key: &str| labels.iter().any(|value| value == key);
     let website = has_any(&labels, &ROGO_WEBSITE_HEADERS);
     if has("pk") && has_any(&labels, &PB_ID_HEADERS) {
-        return if has_any(&labels, &PB_PROFILE_HEADERS) && sheet.header_row <= MAPPING_HEADER_SCAN_ROWS {
+        return if has_any(&labels, &PB_PROFILE_HEADERS)
+            && sheet.header_row <= MAPPING_HEADER_SCAN_ROWS
+        {
             Some("PB_MAPPING")
         } else {
             None
         };
     }
     let pb_named = has("companyid") && has_any(&labels, &PB_NAME_HEADERS);
-    let pb_strong = has("companyid") && has("companies") && (has("description") || has("hqlocation"));
+    let pb_strong =
+        has("companyid") && has("companies") && (has("description") || has("hqlocation"));
     let pb_weak = pb_named && has_any(&labels, &PB_DATA_COLUMNS);
     let rogo_like = website && !has_any(&labels, &PB_ID_HEADERS);
     if pb_strong || (pb_weak && !(hint == Some(Purpose::Rogo) && rogo_like)) {
@@ -591,7 +590,10 @@ mod tests {
             enrichment_kind(&sheet(&["pk", "PBId", "Company Profile"], 21), None),
             None
         );
-        assert_eq!(enrichment_kind(&sheet(&["pk", "PBId", "Notes"], 1), None), None);
+        assert_eq!(
+            enrichment_kind(&sheet(&["pk", "PBId", "Notes"], 1), None),
+            None
+        );
     }
 
     #[test]

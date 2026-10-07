@@ -179,7 +179,11 @@ const REVISION_COLUMNS: &str = "r.revision_id,r.revision,r.digest,r.criteria_tex
 
 fn json_column(index: usize, text: &str) -> rusqlite::Result<Value> {
     serde_json::from_str(text).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error))
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
     })
 }
 
@@ -373,8 +377,7 @@ fn check_intake_keys(map: &Map<String, Value>, depth: usize) -> Result<()> {
         ));
     }
     for (key, child) in map {
-        if key.trim().is_empty() || key.chars().count() > 100 || key.chars().any(char::is_control)
-        {
+        if key.trim().is_empty() || key.chars().count() > 100 || key.chars().any(char::is_control) {
             return Err(Error::Validation(
                 "intake_form keys must be 1..=100 printable characters".into(),
             ));

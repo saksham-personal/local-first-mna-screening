@@ -34,7 +34,9 @@ const PB_COLUMNS: [&str; 8] = [
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 struct Fixture {
@@ -159,7 +161,8 @@ fn seed_report_scenario(fx: &Fixture) -> Value {
         "other.csv",
         &format!("{MAPPING_HEADER}H,PB9,Eta Holdings,holdings.example,Yes,No,No,No\n"),
     );
-    fx.import(json!({"run_id":"R2","files":["other.csv"]})).unwrap();
+    fx.import(json!({"run_id":"R2","files":["other.csv"]}))
+        .unwrap();
     fx.run(
         "R",
         &[
@@ -308,8 +311,10 @@ fn import_saves_a_match_report_with_reasons_and_never_changes_flags() {
         .unwrap();
     assert_eq!(&by_id, report);
     assert!(matches!(
-        fx.data
-            .execute("get_enrichment_report", &json!({"run_id":"R","purpose":"rogo"})),
+        fx.data.execute(
+            "get_enrichment_report",
+            &json!({"run_id":"R","purpose":"rogo"})
+        ),
         Err(Error::NotFound(_))
     ));
     assert!(matches!(
@@ -347,7 +352,10 @@ fn a_new_pbid_replaces_the_old_one_and_never_steals_another_companys() {
     let fx = fixture();
     fx.run(
         "R",
-        &[("A", "Alpha", "alpha.example"), ("B", "Beta", "beta.example")],
+        &[
+            ("A", "Alpha", "alpha.example"),
+            ("B", "Beta", "beta.example"),
+        ],
     );
     fx.write(
         "map1.csv",
@@ -391,7 +399,9 @@ fn a_new_pbid_replaces_the_old_one_and_never_steals_another_companys() {
         "map2.csv",
         &format!("{MAPPING_HEADER}A,PB2,Alpha,alpha.example,Yes,No,No,No\n"),
     );
-    let replaced = fx.import(json!({"run_id":"R","files":["map2.csv"]})).unwrap();
+    let replaced = fx
+        .import(json!({"run_id":"R","files":["map2.csv"]}))
+        .unwrap();
     assert_eq!(replaced["pbid_populated"], 1);
     let (pbids, enrichment) = identifiers("A");
     assert_eq!(pbids, ["PB2"]);
@@ -405,7 +415,9 @@ fn a_new_pbid_replaces_the_old_one_and_never_steals_another_companys() {
     assert_eq!(current["rows"][0]["provenance"]["PB"], json!([]));
 
     // The old PBID's data no longer hydrates A; the new PBID's data does.
-    let stale = fx.import(json!({"run_id":"R","files":["pb1.xlsx"]})).unwrap();
+    let stale = fx
+        .import(json!({"run_id":"R","files":["pb1.xlsx"]}))
+        .unwrap();
     assert_eq!(stale["pb_hydrated"], 0);
     assert_eq!(stale["pb_unmatched"], 1);
     write_pb_workbook(
@@ -421,7 +433,8 @@ fn a_new_pbid_replaces_the_old_one_and_never_steals_another_companys() {
             "",
         ]],
     );
-    fx.import(json!({"run_id":"R","files":["pb2.xlsx"]})).unwrap();
+    fx.import(json!({"run_id":"R","files":["pb2.xlsx"]}))
+        .unwrap();
     let (_, enrichment) = identifiers("A");
     assert_eq!(enrichment["pb_name"], "New Name");
     assert_eq!(enrichment["pb_website"], "new.example");
@@ -441,7 +454,8 @@ fn a_new_pbid_replaces_the_old_one_and_never_steals_another_companys() {
             "",
         ]],
     );
-    fx.import(json!({"run_id":"R","files":["pb2b.xlsx"]})).unwrap();
+    fx.import(json!({"run_id":"R","files":["pb2b.xlsx"]}))
+        .unwrap();
     let (_, enrichment) = identifiers("A");
     assert_eq!(enrichment["pb_name"], "Newest Name");
     assert!(enrichment["pb_website"].is_null());
@@ -452,7 +466,9 @@ fn a_new_pbid_replaces_the_old_one_and_never_steals_another_companys() {
         "map3.csv",
         &format!("{MAPPING_HEADER}B,PB2,Beta,beta.example,Yes,No,No,No\n"),
     );
-    let conflict = fx.import(json!({"run_id":"R","files":["map3.csv"]})).unwrap();
+    let conflict = fx
+        .import(json!({"run_id":"R","files":["map3.csv"]}))
+        .unwrap();
     assert_eq!(conflict["pbid_populated"], 0);
     assert_eq!(conflict["quarantined"], 1);
     assert_eq!(identifiers("A").0, ["PB2"]);
@@ -460,7 +476,9 @@ fn a_new_pbid_replaces_the_old_one_and_never_steals_another_companys() {
     assert_eq!(reasons(&conflict["reports"][0])["B"], "conflict");
 
     // Repeating the same mapping changes nothing.
-    let repeated = fx.import(json!({"run_id":"R","files":["map2.csv"]})).unwrap();
+    let repeated = fx
+        .import(json!({"run_id":"R","files":["map2.csv"]}))
+        .unwrap();
     assert_eq!(repeated["pbid_populated"], 0);
 }
 
@@ -492,9 +510,12 @@ fn identical_reimports_leave_plan_hashes_and_review_history_untouched() {
         )
         .unwrap();
     let hashes = |fx: &Fixture| {
-        let projected =
-            projection::execute(&fx.store, "get_run_source_projection", &json!({"run_id":"R"}))
-                .unwrap();
+        let projected = projection::execute(
+            &fx.store,
+            "get_run_source_projection",
+            &json!({"run_id":"R"}),
+        )
+        .unwrap();
         let context = fx
             .store
             .execute("get_shortlist_context", &json!({"run_id":"R"}))
@@ -602,7 +623,9 @@ fn rogo_ambiguity_needs_two_distinct_considered_companies() {
 
     // Website aliases are accepted and the key column is not stored as data.
     fx.write("domains.csv", "Domain,Signal\nalias.example,Via domain\n");
-    let aliased = fx.import(json!({"run_id":"R","files":["domains.csv"]})).unwrap();
+    let aliased = fx
+        .import(json!({"run_id":"R","files":["domains.csv"]}))
+        .unwrap();
     assert_eq!(aliased["rogo_hydrated"], 1);
     let victor = rogo("V");
     assert_eq!(victor["rogo"]["Signal"], "Via domain");
@@ -642,9 +665,18 @@ fn tolerant_headers_per_sheet_errors_and_zone_hints() {
     for (column, heading) in PB_COLUMNS.iter().enumerate() {
         data.write_string(0, column as u16, *heading).unwrap();
     }
-    for (column, value) in ["PB1", "PB Firm", "pb.example", "", "PB text", "Boston", "", ""]
-        .iter()
-        .enumerate()
+    for (column, value) in [
+        "PB1",
+        "PB Firm",
+        "pb.example",
+        "",
+        "PB text",
+        "Boston",
+        "",
+        "",
+    ]
+    .iter()
+    .enumerate()
     {
         if !value.is_empty() {
             data.write_string(1, column as u16, *value).unwrap();
@@ -792,7 +824,9 @@ fn apply_enrichment_review_hides_restores_and_audits_only_real_changes() {
 
     // Optimistic concurrency, scoping and validation.
     assert!(matches!(
-        review(json!({"run_id":"R","report_id":report_id,"hide_company_ids":["A"],"expected_selection_revision":1})),
+        review(
+            json!({"run_id":"R","report_id":report_id,"hide_company_ids":["A"],"expected_selection_revision":1})
+        ),
         Err(Error::Conflict(_))
     ));
     assert!(matches!(
@@ -804,7 +838,9 @@ fn apply_enrichment_review_hides_restores_and_audits_only_real_changes() {
         Err(Error::NotFound(_))
     ));
     assert!(matches!(
-        review(json!({"run_id":"R","report_id":report_id,"hide_company_ids":["A"],"keep_company_ids":["A"]})),
+        review(
+            json!({"run_id":"R","report_id":report_id,"hide_company_ids":["A"],"keep_company_ids":["A"]})
+        ),
         Err(Error::Validation(_))
     ));
     assert!(matches!(

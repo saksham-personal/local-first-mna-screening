@@ -203,38 +203,41 @@ pub(crate) fn grid_page(
         discoveries: i64,
     }
     let mut fetched = statement
-        .query_map(params![run_id, include_hidden, after_company_id, fetch], |r| {
-            Ok(Fetched {
-                company_id: r.get(0)?,
-                considered: r.get::<_, i64>(1)? != 0,
-                reason: r.get(2)?,
-                name: r.get(3)?,
-                website: r.get(4)?,
-                city: r.get(5)?,
-                state: r.get(6)?,
-                description: r.get(7)?,
-                pbid: r.get(8)?,
-                pb: [
-                    r.get(9)?,
-                    r.get(10)?,
-                    r.get(11)?,
-                    r.get(12)?,
-                    r.get(13)?,
-                    r.get(14)?,
-                    r.get(15)?,
-                ],
-                has_rogo: r.get::<_, i64>(16)? != 0,
-                has_bing: r.get::<_, i64>(17)? != 0,
-                has_mid: r.get::<_, i64>(18)? != 0,
-                has_iscc: r.get::<_, i64>(19)? != 0,
-                iscc_relevance: r.get(20)?,
-                mid_score: r.get(21)?,
-                iscc_score: r.get(22)?,
-                found_mid: r.get::<_, i64>(23)? != 0,
-                found_iscc: r.get::<_, i64>(24)? != 0,
-                discoveries: r.get(25)?,
-            })
-        })?
+        .query_map(
+            params![run_id, include_hidden, after_company_id, fetch],
+            |r| {
+                Ok(Fetched {
+                    company_id: r.get(0)?,
+                    considered: r.get::<_, i64>(1)? != 0,
+                    reason: r.get(2)?,
+                    name: r.get(3)?,
+                    website: r.get(4)?,
+                    city: r.get(5)?,
+                    state: r.get(6)?,
+                    description: r.get(7)?,
+                    pbid: r.get(8)?,
+                    pb: [
+                        r.get(9)?,
+                        r.get(10)?,
+                        r.get(11)?,
+                        r.get(12)?,
+                        r.get(13)?,
+                        r.get(14)?,
+                        r.get(15)?,
+                    ],
+                    has_rogo: r.get::<_, i64>(16)? != 0,
+                    has_bing: r.get::<_, i64>(17)? != 0,
+                    has_mid: r.get::<_, i64>(18)? != 0,
+                    has_iscc: r.get::<_, i64>(19)? != 0,
+                    iscc_relevance: r.get(20)?,
+                    mid_score: r.get(21)?,
+                    iscc_score: r.get(22)?,
+                    found_mid: r.get::<_, i64>(23)? != 0,
+                    found_iscc: r.get::<_, i64>(24)? != 0,
+                    discoveries: r.get(25)?,
+                })
+            },
+        )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(statement);
     let has_more = fetched.len() > limit;
@@ -262,7 +265,13 @@ pub(crate) fn grid_page(
     )?;
     let mut source_rows: HashMap<(String, String), Vec<Value>> = HashMap::new();
     for row in rows_statement.query_map(
-        params![run_id, include_hidden, after_company_id, fetch, ROWS_PER_SOURCE],
+        params![
+            run_id,
+            include_hidden,
+            after_company_id,
+            fetch,
+            ROWS_PER_SOURCE
+        ],
         |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -514,7 +523,9 @@ fn activity(conn: &Connection, run_id: &str, company_id: &str) -> Result<Vec<Val
         let (source, score, rank, at) = row?;
         let mut summary = format!("Found by {source} search");
         match (score, rank) {
-            (Some(score), Some(rank)) => summary.push_str(&format!(" (score {score:.2}, rank {rank})")),
+            (Some(score), Some(rank)) => {
+                summary.push_str(&format!(" (score {score:.2}, rank {rank})"))
+            }
             (Some(score), None) => summary.push_str(&format!(" (score {score:.2})")),
             _ => {}
         }
@@ -545,7 +556,10 @@ fn activity(conn: &Connection, run_id: &str, company_id: &str) -> Result<Vec<Val
                 at,
                 summary: format!(
                     "Bing: {} {}",
-                    clip(value["question"].as_str().unwrap_or("research question"), 120),
+                    clip(
+                        value["question"].as_str().unwrap_or("research question"),
+                        120
+                    ),
                     clip(value["answer"].as_str().unwrap_or(""), 160)
                 )
                 .trim()

@@ -176,8 +176,7 @@ fn explicit_pb_hide_never_restores_manual_review() {
     let store = seeded();
     store
         .with_connection(|conn| {
-            mna_tools::review::hide_for_pitchbook(conn, "R", "A", "pitchbook_unmatched")
-                .map(|_| ())
+            mna_tools::review::hide_for_pitchbook(conn, "R", "A", "pitchbook_unmatched").map(|_| ())
         })
         .unwrap();
     assert_eq!(
@@ -194,8 +193,7 @@ fn explicit_pb_hide_never_restores_manual_review() {
         .unwrap();
     store
         .with_connection(|conn| {
-            mna_tools::review::hide_for_pitchbook(conn, "R", "A", "pitchbook_unmatched")
-                .map(|_| ())
+            mna_tools::review::hide_for_pitchbook(conn, "R", "A", "pitchbook_unmatched").map(|_| ())
         })
         .unwrap();
     assert_eq!(
@@ -392,7 +390,10 @@ fn pitchbook_import_never_changes_considered_flags_or_manual_hides() {
     assert_eq!(context["candidates"][0]["consideration_reason"], "manual");
     assert_eq!(context["candidates"][0]["PBId"], "PB1");
     // Imports never add a review row, so the selection revision is the analyst's own.
-    assert_eq!(corrected["selection_revision"], context["selection_revision"]);
+    assert_eq!(
+        corrected["selection_revision"],
+        context["selection_revision"]
+    );
 }
 
 #[test]

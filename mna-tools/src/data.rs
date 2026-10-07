@@ -572,7 +572,10 @@ impl DataService {
                     entry["error"] = json!(message);
                     problems.push(message);
                 } else if total_rows + rows > 250_000 {
-                    let message = format!("{display} (sheet {}): enrichment import exceeds 250000 total rows", sheet.sheet_name);
+                    let message = format!(
+                        "{display} (sheet {}): enrichment import exceeds 250000 total rows",
+                        sheet.sheet_name
+                    );
                     entry["status"] = json!("error");
                     entry["error"] = json!(message);
                     problems.push(message);
@@ -597,7 +600,8 @@ impl DataService {
             } else {
                 "rejected"
             };
-            let mut entry = json!({"file":file,"display_name":display,"status":status,"sheets":sheet_entries});
+            let mut entry =
+                json!({"file":file,"display_name":display,"status":status,"sheets":sheet_entries});
             if status == "skipped" {
                 entry["error"] = json!(format!("{display}: no populated sheets"));
             }
@@ -1361,15 +1365,7 @@ fn update_canonical(
     ) = tx.query_row(
         "SELECT name,website,city,description,metadata_json FROM companies WHERE company_id=?",
         [company_id],
-        |r| {
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-            ))
-        },
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
     let new_name = name.unwrap_or_else(|| old_name.clone());
     let new_website = website.or_else(|| old_website.clone());
@@ -2204,10 +2200,13 @@ pub(crate) fn hydrate_source_rows(
             provenance[source] = Value::Array(lineage);
         }
         // A company has at most one current PBID (enforced by a unique index).
-        let pbid: Option<String> = connection.query_row(
-                    "SELECT identifier FROM company_identifiers WHERE company_id=? AND kind='PBID'",
-                    [company_id], |row| row.get(0),
-                ).optional()?;
+        let pbid: Option<String> = connection
+            .query_row(
+                "SELECT identifier FROM company_identifiers WHERE company_id=? AND kind='PBID'",
+                [company_id],
+                |row| row.get(0),
+            )
+            .optional()?;
         let enrichment = connection.query_row(
                     "SELECT pb_website,pb_name,pb_description,pb_linkedin_url,pb_hq_location,pb_active_investors,pb_universe,rogo_json,updated_at FROM company_enrichment WHERE company_id=?",
                     [company_id], |row| Ok((row.get::<_, Option<String>>(0)?,row.get::<_, Option<String>>(1)?,row.get::<_, Option<String>>(2)?,row.get::<_, Option<String>>(3)?,row.get::<_, Option<String>>(4)?,row.get::<_, Option<String>>(5)?,row.get::<_, Option<String>>(6)?,row.get::<_, String>(7)?,row.get::<_, String>(8)?)),

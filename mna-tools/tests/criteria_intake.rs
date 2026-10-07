@@ -41,7 +41,10 @@ fn intake_form_and_exclusions_are_stored_on_the_revision_and_listed_in_history()
         first["last_criteria"]["core_business_exclusions"],
         json!(["consulting", "Staffing"])
     );
-    assert_eq!(first["last_criteria"]["intake_form"]["submitter"]["name"], "Sam");
+    assert_eq!(
+        first["last_criteria"]["intake_form"]["submitter"]["name"],
+        "Sam"
+    );
 
     // Saving identical content again is idempotent; changing only the exclusions is a new,
     // differently digested revision.
@@ -63,9 +66,16 @@ fn intake_form_and_exclusions_are_stored_on_the_revision_and_listed_in_history()
     assert_eq!(second["revision"], 2);
     assert_ne!(second["digest"], first["digest"]);
     // A revision without the optional fields keeps its original digest recipe.
-    let plain = save(&store, json!({"business_definition":"Different definition"})).unwrap();
+    let plain = save(
+        &store,
+        json!({"business_definition":"Different definition"}),
+    )
+    .unwrap();
     assert_eq!(plain["revision"], 3);
-    assert_eq!(plain["last_criteria"]["core_business_exclusions"], json!([]));
+    assert_eq!(
+        plain["last_criteria"]["core_business_exclusions"],
+        json!([])
+    );
     assert!(plain["last_criteria"]["intake_form"].is_null());
 
     let history = store
@@ -106,10 +116,17 @@ fn intake_form_and_exclusions_are_validated() {
         Err(Error::Validation(_))
     ));
     assert!(matches!(
-        save(&store, json!({"core_business_exclusions":["x".repeat(501)]})),
+        save(
+            &store,
+            json!({"core_business_exclusions":["x".repeat(501)]})
+        ),
         Err(Error::Validation(_))
     ));
-    assert!(save(&store, json!({"core_business_exclusions":["x".repeat(500)]})).is_ok());
+    assert!(save(
+        &store,
+        json!({"core_business_exclusions":["x".repeat(500)]})
+    )
+    .is_ok());
     assert!(matches!(
         save(&store, json!({"intake_form":"not an object"})),
         Err(Error::Validation(_))
@@ -119,7 +136,10 @@ fn intake_form_and_exclusions_are_validated() {
         Err(Error::Validation(_))
     ));
     assert!(matches!(
-        save(&store, json!({"intake_form":{"notes":"x".repeat(100 * 1024)}})),
+        save(
+            &store,
+            json!({"intake_form":{"notes":"x".repeat(100 * 1024)}})
+        ),
         Err(Error::Validation(_))
     ));
     let mut deep = json!("leaf");
@@ -132,10 +152,18 @@ fn intake_form_and_exclusions_are_validated() {
     ));
     assert!(save(&store, json!({"surprise":true})).is_err());
     // An explicit null is no intake form.
-    let none = save(&store, json!({"intake_form":null,"business_definition":"Another"})).unwrap();
+    let none = save(
+        &store,
+        json!({"intake_form":null,"business_definition":"Another"}),
+    )
+    .unwrap();
     assert!(none["last_criteria"]["intake_form"].is_null());
     // 100 KB is accepted.
-    assert!(save(&store, json!({"intake_form":{"notes":"y".repeat(100 * 1024 - 20)}})).is_ok());
+    assert!(save(
+        &store,
+        json!({"intake_form":{"notes":"y".repeat(100 * 1024 - 20)}})
+    )
+    .is_ok());
 }
 
 #[tokio::test]
@@ -165,7 +193,10 @@ async fn approval_copies_exclusions_into_the_profile_so_exclude_keywords_keeps_w
     let profile = store
         .execute("get_active_screening_profile", &json!({"run_id":"R"}))
         .unwrap();
-    assert_eq!(profile["content"]["core_business_exclusions"], json!(["Consulting"]));
+    assert_eq!(
+        profile["content"]["core_business_exclusions"],
+        json!(["Consulting"])
+    );
     assert_eq!(
         profile["content"]["core_business_query"],
         "Builds claims workflow software"
@@ -175,7 +206,13 @@ async fn approval_copies_exclusions_into_the_profile_so_exclude_keywords_keeps_w
     let request = json!({"run_id":"R","query":"claims software","mode":"lexical","prefer_meilisearch":false,"filters":{"exclude_keywords":["consulting"]}});
     let result = engine.execute("search_mid", &request).await.unwrap();
     assert_eq!(result["total"], 2);
-    assert_eq!(result["applied_core_business_exclusions"], json!(["Consulting"]).as_array().map(|_| json!(["consulting"])).unwrap());
+    assert_eq!(
+        result["applied_core_business_exclusions"],
+        json!(["Consulting"])
+            .as_array()
+            .map(|_| json!(["consulting"]))
+            .unwrap()
+    );
     assert!(!result["ignored_search_filters"]
         .as_array()
         .unwrap()
