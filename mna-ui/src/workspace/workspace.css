@@ -584,6 +584,7 @@
 .ws-company-grid-toolbar,
 .ws-export-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }

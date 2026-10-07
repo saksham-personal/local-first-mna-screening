@@ -12,9 +12,10 @@
 
 .dg-toolbar {
   display: flex;
+  flex-wrap: wrap; /* the grid often sits in a column narrower than the window */
   min-height: 56px;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -33,7 +34,9 @@
 }
 
 .dg-global-search {
-  width: min(340px, 42%);
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 340px;
   padding: 0 10px;
 }
 
@@ -69,6 +72,7 @@
 
 .dg-toolbar-extra {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: center;
   justify-content: flex-end;
@@ -243,6 +247,11 @@
 .dg-grid-host .ag-row.dg-row-muted .ag-cell {
   background: var(--surface-muted);
   color: var(--text-muted);
+}
+
+/* Hidden companies: fade the cell content (cell renderers set their own colours). */
+.dg-grid-host .ag-row.dg-row-muted .ag-cell:not([col-id="__dg_select"]) > * {
+  opacity: 0.5;
 }
 
 .dg-cell-content {
@@ -617,6 +626,7 @@
 
 .dg-side-panel-wrap {
   z-index: 3;
+  order: 2; /* right of the grid, with the tab strip on the outer edge */
   display: flex;
   width: 316px;
   min-width: 280px;

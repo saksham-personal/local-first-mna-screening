@@ -34,7 +34,7 @@ export default function CriteriaVersionWindow({ version, sessionId, onClose }: {
     finally { setBusy(false); }
   };
   const details = [
-    ["Status", version.status], ["Started", formatDateTime(version.createdAt)], ["Ended", version.endedAt ? formatDateTime(version.endedAt) : "current"],
+    ["Status", version.status], ["Started", formatDateTime(version.createdAt)], ["Ended", version.endedAt ? formatDateTime(version.endedAt) : "Still current"],
     ["Approved by", version.approvedBy ?? "—"], ["Approved at", version.approvedAt ? formatDateTime(version.approvedAt) : "—"], ["Digest", version.digest],
   ];
   const copyText = [version.criteriaText, `Core business\n${version.definition}`, `Good fits\n${version.good.join("\n")}`, `Bad fits\n${version.bad.join("\n")}`, `Core-business exclusions\n${version.exclusions.join("\n")}`, `Recorded, not used for search\n${version.deferred.join("\n")}`, ...details.map(([label, value]) => `${label}: ${value}`), ...(version.intakeForm ? Object.entries(version.intakeForm).map(([key, value]) => `${intakeFieldLabels[key as keyof typeof intakeFieldLabels]}: ${Array.isArray(value) ? value.join(", ") : String(value)}`) : [])].join("\n\n");

@@ -520,7 +520,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
           />
         </Suspense>
       </section>
-      {selected && <Suspense fallback={<Skeleton variant="drawer" label={`Opening ${selected.name}`} />}>
+      {selected && <Suspense fallback={null}>
         <CompanyDrawer
           open
           sessionId={state.sessionId}

@@ -30,7 +30,7 @@ export default function CriteriaVersionMenu({ state }: { state: ChatState }) {
         {loading ? <Skeleton variant="list" label="Loading criteria versions" /> : error ? <p role="alert">{error}</p> : versions.length === 0 ? <p>No saved versions yet.</p> : <Tooltip.Provider delayDuration={250}>{versions.map(version => <Tooltip.Root key={version.revision}>
           <Tooltip.Trigger asChild><DropdownMenu.Item className="cv-item" onSelect={() => { setOpen(false); setSelected(version); }}>
             <span className="cv-item-title"><strong>v{version.revision}</strong><span className={`cv-status cv-status-${version.status.toLowerCase()}`}>{version.status}</span></span>
-            <small>Started {formatDateTime(version.createdAt)}</small><small>Ended {version.endedAt ? formatDateTime(version.endedAt) : "current"}</small>
+            <small>Started {formatDateTime(version.createdAt)}</small><small>{version.endedAt ? `Ended ${formatDateTime(version.endedAt)}` : "Still current"}</small>
             {version.approvedAt && <small>{version.approvedBy} · Approved {formatDateTime(version.approvedAt)}</small>}
           </DropdownMenu.Item></Tooltip.Trigger>
           <Tooltip.Portal><Tooltip.Content className="cv-preview" side="right" sideOffset={8} collisionPadding={12}><strong>Criteria v{version.revision} · {version.status}</strong><p>{version.criteriaText}</p><Tooltip.Arrow /></Tooltip.Content></Tooltip.Portal>
