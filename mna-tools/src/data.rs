@@ -206,51 +206,40 @@ impl DataService {
                 require_run(&tx, run_scope)?;
             }
             if !query_scope.is_empty() {
-                let found:Option<Option<String>>=tx.query_row("SELECT run_id FROM search_queries WHERE query_id=?",[query_scope],|r|r.get(0)).optional()?;
-                match found {Some(Some(id)) if id==run_scope=>{},Some(None) if run_scope.is_empty()=>{},Some(_)=>return Err(Error::Validation("query_id does not belong to run".into())),None=>return Err(Error::NotFound(format!("query not found: {query_scope}")))}
+                let found: Option<Option<String>> = tx
+                    .query_row(
+                        "SELECT run_id FROM search_queries WHERE query_id=?",
+                        [query_scope],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                match found {
+                    Some(Some(id)) if id == run_scope => {}
+                    Some(None) if run_scope.is_empty() => {}
+                    Some(_) => {
+                        return Err(Error::Validation("query_id does not belong to run".into()))
+                    }
+                    None => return Err(Error::NotFound(format!("query not found: {query_scope}"))),
+                }
             }
             for row in rows {
-                result.processed += 1;
-                let ecid = normalized_identifier(get_field(row, crate::identity::ECID_KEYS));
-                let cid = normalized_identifier(get_field(row, crate::identity::CID_KEYS));
-                if ecid.as_deref()==Some("X") || cid.as_deref()==Some("X") {
-                    quarantine(&tx, source, "literal X is reserved for a missing identifier component", row)?;
-                    result.quarantined+=1;
-                    continue;
-                }
-                let Some(key) = company_key(ecid.as_deref(), cid.as_deref()) else {
-                    quarantine(&tx, source, "missing both ECID and CID", row)?;
-                    result.quarantined += 1;
-                    continue;
-                };
-                let Some(name) = field_text(row, &["Company Name", "Company", "Name", "Companies", "Firm Name"]) else {
-                    quarantine(&tx, source, "missing company name", row)?;
-                    result.quarantined += 1;
-                    continue;
-                };
-                tx.execute_batch("SAVEPOINT identity_row")?;
-                let found = match resolve_or_create_company(&tx, &key, ecid.as_deref(), cid.as_deref(), &name, source, row) {
-                    Ok(found) => {tx.execute_batch("RELEASE identity_row")?;found},
-                    Err(Error::Conflict(reason)) => {
-                        tx.execute_batch("ROLLBACK TO identity_row; RELEASE identity_row")?;
-                        quarantine(&tx, source, &reason, row)?;
-                        result.quarantined += 1;
-                        continue;
+                if let Some(company_id) =
+                    ingest_source_row(&tx, source, run_scope, query_scope, row, &mut result)?
+                {
+                    if source == "ISCC" {
+                        let score = get_field(
+                            row,
+                            &[
+                                "Relevancy Score",
+                                "Relevance Score",
+                                "Relevancy",
+                                "Relevance",
+                                "Score",
+                            ],
+                        )
+                        .and_then(as_score);
+                        retain_best_score(&mut observed_scores, company_id, score);
                     }
-                    Err(error) => return Err(error),
-                };
-                if found.created { result.inserted += 1; } else { result.matched += 1; }
-                if found.promoted { result.promoted += 1; }
-                let raw = serde_json::to_string(row)?;
-                let hash = hex_hash(raw.as_bytes());
-                let score = get_field(row, &["Relevancy Score", "Relevance Score", "Relevancy", "Relevance", "Score"]).and_then(as_score);
-                result.source_rows_added += tx.execute("INSERT OR IGNORE INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                    params![id("SRC"),source,run_scope,query_scope,found.company_id,hash,raw,score,now()])?;
-                if source == "MID" || found.created || !has_source(&tx, &found.company_id, "MID")? {
-                    update_canonical(&tx, &found.company_id, source, row)?;
-                }
-                if source == "ISCC" {
-                    retain_best_score(&mut observed_scores,found.company_id,score);
                 }
             }
             tx.commit()?;
@@ -1063,13 +1052,99 @@ fn hydrate_pb_parquet(
     Ok(())
 }
 
+pub(crate) fn ingest_source_row(
+    tx: &Transaction<'_>,
+    source: &str,
+    run_scope: &str,
+    query_scope: &str,
+    row: &Value,
+    result: &mut IngestCounters,
+) -> Result<Option<String>> {
+    result.processed += 1;
+    let ecid = normalized_identifier(get_field(row, crate::identity::ECID_KEYS));
+    let cid = normalized_identifier(get_field(row, crate::identity::CID_KEYS));
+    if ecid.as_deref() == Some("X") || cid.as_deref() == Some("X") {
+        quarantine(
+            tx,
+            source,
+            "literal X is reserved for a missing identifier component",
+            row,
+        )?;
+        result.quarantined += 1;
+        return Ok(None);
+    }
+    let Some(key) = company_key(ecid.as_deref(), cid.as_deref()) else {
+        quarantine(tx, source, "missing both ECID and CID", row)?;
+        result.quarantined += 1;
+        return Ok(None);
+    };
+    let Some(name) = field_text(
+        row,
+        &["Company Name", "Company", "Name", "Companies", "Firm Name"],
+    ) else {
+        quarantine(tx, source, "missing company name", row)?;
+        result.quarantined += 1;
+        return Ok(None);
+    };
+    tx.execute_batch("SAVEPOINT identity_row")?;
+    let found = match resolve_or_create_company(
+        tx,
+        &key,
+        ecid.as_deref(),
+        cid.as_deref(),
+        &name,
+        source,
+        row,
+    ) {
+        Ok(found) => {
+            tx.execute_batch("RELEASE identity_row")?;
+            found
+        }
+        Err(Error::Conflict(reason)) => {
+            tx.execute_batch("ROLLBACK TO identity_row; RELEASE identity_row")?;
+            quarantine(tx, source, &reason, row)?;
+            result.quarantined += 1;
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    if found.created {
+        result.inserted += 1;
+    } else {
+        result.matched += 1;
+    }
+    if found.promoted {
+        result.promoted += 1;
+    }
+    let raw = serde_json::to_string(row)?;
+    let hash = hex_hash(raw.as_bytes());
+    let score = get_field(
+        row,
+        &[
+            "Relevancy Score",
+            "Relevance Score",
+            "Relevancy",
+            "Relevance",
+            "Score",
+        ],
+    )
+    .and_then(as_score);
+    result.source_rows_added += tx.execute("INSERT OR IGNORE INTO source_rows(source_row_id,source,run_scope,query_scope,company_id,row_hash,row_json,relevance_score,imported_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    params![id("SRC"),source,run_scope,query_scope,found.company_id,hash,raw,score,now()])?;
+    if source == "MID" || found.created || !has_source(tx, &found.company_id, "MID")? {
+        update_canonical(tx, &found.company_id, source, row)?;
+    }
+
+    Ok(Some(found.company_id))
+}
+
 #[derive(Default)]
-struct IngestCounters {
+pub(crate) struct IngestCounters {
     processed: usize,
     inserted: usize,
     matched: usize,
     promoted: usize,
-    quarantined: usize,
+    pub(crate) quarantined: usize,
     source_rows_added: usize,
 }
 #[derive(Default)]
