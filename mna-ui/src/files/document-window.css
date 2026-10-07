@@ -1,0 +1,75 @@
+.document-window {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.document-window.is-maximized { border-radius: 0; }
+.document-window__titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.document-window__titlebar:active { cursor: grabbing; }
+.document-window__title { min-width: 0; overflow: hidden; color: var(--text); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.document-window__actions { display: flex; flex: none; gap: 2px; }
+.document-window__actions button {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.document-window__actions button:hover { color: var(--text); background: var(--surface-muted); }
+.document-window__preview { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.document-window__preview > .pdf-preview { min-height: 0; }
+.document-window__loading { flex: 1; min-height: 0; overflow: auto; padding: 22px; background: var(--surface); }
+.document-window__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.document-window__resize::after {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--text-faint);
+  border-bottom: 2px solid var(--text-faint);
+  content: "";
+}
+.document-window :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+@media (max-width: 560px) {
+  .document-window { border-radius: 8px; }
+  .document-window__resize { width: 30px; height: 30px; }
+}
