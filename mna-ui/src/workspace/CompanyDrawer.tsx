@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Tabs } from "radix-ui";
 import { ArrowLeft, ArrowRight, ExternalLink, MessageSquare, RotateCcw, X } from "lucide-react";
 import Skeleton from "../ui/Skeleton";
@@ -66,14 +66,20 @@ export default function CompanyDrawer({
   const [error, setError] = useState("");
   const [tab, setTab] = useState("overview");
   const companyId = company?.company_id;
+  const shownCompanyId = useRef<string | undefined>(undefined);
+  const lastIndex = useRef(-1);
 
   useEffect(() => {
     if (!open || !companyId) return;
     let current = true;
-    setLoading(true);
+    // A new company starts fresh; a refresh of the same company keeps the tab and current details.
+    if (shownCompanyId.current !== companyId) {
+      shownCompanyId.current = companyId;
+      setLoading(true);
+      setDetail(null);
+      setTab("overview");
+    }
     setError("");
-    setDetail(null);
-    setTab("overview");
     void fetchCompanyDetail(sessionId, runId, companyId)
       .then((value) => { if (current) setDetail(value); })
       .catch((caught) => { if (current) setError(caught instanceof Error ? caught.message : "Company details could not be loaded."); })
@@ -85,8 +91,10 @@ export default function CompanyDrawer({
     () => companyId ? visibleRows.findIndex((row) => row.company_id === companyId) : -1,
     [companyId, visibleRows],
   );
-  const previous = currentIndex > 0 ? visibleRows[currentIndex - 1] : undefined;
-  const next = currentIndex >= 0 ? visibleRows[currentIndex + 1] : undefined;
+  // A company hidden from the drawer drops out of the visible list; navigate from where it was.
+  if (currentIndex >= 0) lastIndex.current = currentIndex;
+  const previous = currentIndex >= 0 ? visibleRows[currentIndex - 1] : lastIndex.current > 0 ? visibleRows[lastIndex.current - 1] : undefined;
+  const next = currentIndex >= 0 ? visibleRows[currentIndex + 1] : lastIndex.current >= 0 ? visibleRows[lastIndex.current] : undefined;
   const href = websiteUrl(company?.website ?? null);
   const descriptions = detail?.descriptions.length
     ? detail.descriptions
@@ -95,10 +103,10 @@ export default function CompanyDrawer({
       : [];
 
   return (
-    <Dialog.Root open={open && Boolean(company)} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+    <Dialog.Root modal={false} open={open && Boolean(company)} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="company-drawer-overlay" />
-        <Dialog.Content className="company-drawer" aria-label="Company details">
+        {/* Non-blocking: the grid stays usable, and clicking another row switches the drawer. */}
+        <Dialog.Content className="company-drawer" aria-label="Company details" onInteractOutside={(event) => event.preventDefault()}>
           {company && (
             <>
               <header className="company-drawer-header">

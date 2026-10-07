@@ -369,6 +369,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
   const [gridData, setGridData] = useState<ScreeningGrid | null>(null);
   const [loading, setLoading] = useState(Boolean(state.backendRunId));
   const [gridError, setGridError] = useState("");
+  const [writeError, setWriteError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
@@ -429,15 +430,15 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
   const runReview = useCallback(async (keepCompanyIds: string[], reason: string) => {
     if (!state.backendRunId || !gridData) return;
     setBusy(true);
-    setGridError("");
+    setWriteError("");
     setNotice("");
     try {
+      // The new selection revision triggers the grid reload effect.
       await applyGridReview(state.sessionId, state.backendRunId, keepCompanyIds, gridData.selectionRevision, reason);
       setSelectedIds([]);
-      await loadGrid();
       setNotice("Company review saved.");
     } catch (caught) {
-      setGridError(caught instanceof Error ? caught.message : "The shortlist could not be updated.");
+      setWriteError(caught instanceof Error ? caught.message : "The shortlist could not be updated.");
       await loadGrid().catch(() => {});
     } finally {
       setBusy(false);
@@ -480,6 +481,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
           </span>
         </div>
         {gridError && <p className="ws-grid-error" role="alert">{gridError}</p>}
+        {writeError && <p className="ws-grid-error" role="alert">{writeError}</p>}
         {notice && <p className="ws-grid-notice" role="status">{notice}</p>}
         <Suspense fallback={<div className="ws-grid-loading"><Skeleton variant="table" rows={8} cols={6} label="Opening companies" /></div>}>
           <DataGrid
