@@ -59,6 +59,7 @@ import {
 import { appendWorkspaceMessages } from "../lib/workspace-message-sync";
 import {
   createChatAdapter,
+  hiddenActionMetadata,
   createFileAdapter,
   pendingWorkspaceMessages,
   transcriptFor,
@@ -343,6 +344,21 @@ function AssistantMessage() {
 }
 function UserMessage() {
   const editing = useAuiState((s) => s.message.composer.isEditing);
+  const custom = useAuiState((s) => s.message.metadata.custom);
+  const scope = useContext(ChatScope);
+  const state = useChatState(scope.sessionId);
+  const snapshot = useSessionSnapshot();
+  if (custom.hidden === true) {
+    const action = custom.artifactAction as ArtifactAction | undefined;
+    let label = String(custom.label ?? "Screening action");
+    if (action?.type === "approve-criteria") {
+      const approval = snapshot.sessions.find(session => session.id === scope.sessionId)?.events.find(event => event.kind === "approval" && event.title === "Discovery criteria approved" && ((event.result as Record<string, unknown> | undefined)?.sourceArtifactId === action.artifactId || (event.result as Record<string, unknown> | undefined)?.artifactId === action.artifactId));
+      label = approval ? `Approved criteria v${(approval.result as Record<string, unknown>)?.revision}` : "Reviewing criteria approval";
+    } else if (action?.type === "inspect-company") {
+      label = `Opened ${state.companies.find(company => company.pk === action.companyId)?.name ?? action.companyId}`;
+    }
+    return <MessagePrimitive.Root className="ct-system-chip"><Check size={12} /><span>{label}</span><span>·</span><Timestamp /></MessagePrimitive.Root>;
+  }
   return (
     <MessagePrimitive.Root className="ct-message ct-user">
       <div className="ct-message-meta">
@@ -627,7 +643,7 @@ function Conversation({
       aui.thread().append({
         role: "user",
         content: [{ type: "text", text }],
-        metadata: { custom: action ? { artifactAction: action } : {} },
+        metadata: { custom: hiddenActionMetadata(text, action) },
       }),
     );
   }, [aui, captureSend]);
@@ -675,30 +691,17 @@ function Conversation({
                 onClick={() => aui.composer().setText("Find companies that ")}
               >
                 <span>
-                  <strong>Write your criteria</strong>
+                  <strong>Write criteria</strong>
                   <small>Products, services, and customers</small>
                 </span>
                 <ArrowRight size={16} />
               </button>
-              <button
-                type="button"
-                onClick={() =>
-                  aui.thread().append({
-                    role: "user",
-                    content: [{ type: "text", text: "/example" }],
-                  })
-                }
-              >
-                <span>
-                  <strong>Run the example</strong>
-                  <small>Fictional companies · working tools</small>
-                </span>
-                <ArrowRight size={16} />
-              </button>
+              <button type="button" onClick={() => scope.onAction({ type: "upload-intake", artifactId: "" })}><span><strong>Upload Intake Form</strong><small>PDF, DOCX, or TXT</small></span><ArrowRight size={16} /></button>
             </div>
+            <button className="ca-text-action" type="button" onClick={() => aui.thread().append({ role: "user", content: [{ type: "text", text: "/example" }], metadata: { custom: hiddenActionMetadata("/example") } })}>Try the example</button>
             <div className="ct-welcome-hint">
               <Paperclip size={14} />
-              Drop a DDI, mapping file, or company data here, or attach below.
+              Attach supporting files below.
             </div>
           </div>
         )}
@@ -778,7 +781,7 @@ function Conversation({
               <ComposerPrimitive.AddAttachment
                 className="ct-icon-button"
                 aria-label="Attach files"
-                title="Attach DDI, PitchBook, or ROGO files"
+                title="Attach Intake Form, PitchBook, or ROGO files"
               >
                 <Paperclip size={17} />
               </ComposerPrimitive.AddAttachment>

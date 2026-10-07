@@ -8,6 +8,7 @@ import type {
   ArtifactAction,
   ChatArtifact,
   ResearchStep,
+  ChatState,
 } from "./chat-contract";
 import {
   approved,
@@ -59,13 +60,14 @@ export function transcriptFor(sessionId: string): ThreadMessageLike[] {
     sessionStore.getSnapshot().sessions.find((s) => s.id === sessionId)
       ?.events ?? [];
   const messages = new Map<string, ThreadMessageLike>();
-  for (const event of events.filter((e) => e.kind === "message" && e.role)) {
+  for (const event of events.filter((e) => (e.kind === "message" || (e.kind === "system" && (e.result as Record<string, unknown> | undefined)?.chatAction === true)) && e.role)) {
     const id = event.messageId ?? event.id;
     if (state.branchMessageIds.length && !state.branchMessageIds.includes(id))
       continue;
     messages.set(id, {
       id,
       role: event.role!,
+      ...((event.result as Record<string, unknown> | undefined)?.chatAction === true ? { metadata: { custom: (event.result as Record<string, unknown>).custom as Record<string, unknown> } } : {}),
       createdAt: new Date(event.startedAt),
       content: Array.isArray(event.content)
         ? (event.content as ThreadMessageLike["content"])
@@ -121,8 +123,10 @@ export function criteriaArtifact(
         definition: state.definition,
         ignored: state.ignored,
         revision: state.revision,
-        phase: state.examplesCompleteRevision === state.revision ? "final" : "business",
-        lastCriteria: state.lastCriteria?.definition,
+        goodFitExamples: state.goodFitExamples,
+        badFitExamples: state.badFitExamples,
+        intakeForm: state.intakeForm,
+        draftToken: state.criteriaSaveToken,
         decision: approved(state) ? "approved" : "pending",
       },
       turnId,
@@ -135,8 +139,13 @@ export function reviseCriteria(
   definition: string,
   ignored = draftCriteria(criteriaText).ignored,
   criteriaMessageId?: string,
+  revisionData?: Pick<ChatState, "intakeForm" | "goodFitExamples" | "badFitExamples">,
 ): ChatArtifact {
   const old = getChatState(sessionId);
+  if (!approved(old) && old.revision && old.criteriaText === criteriaText.trim() && old.definition === definition.trim() && JSON.stringify(old.ignored) === JSON.stringify(ignored) && (!revisionData || (JSON.stringify(old.intakeForm) === JSON.stringify(revisionData.intakeForm) && (old.goodFitExamples ?? "") === (revisionData.goodFitExamples ?? old.goodFitExamples ?? "") && (old.badFitExamples ?? "") === (revisionData.badFitExamples ?? old.badFitExamples ?? "")))) {
+    if (criteriaMessageId) updateChatState(sessionId, { criteriaMessageId });
+    return criteriaArtifact(sessionId);
+  }
   const next = updateChatState(sessionId, {
     criteriaText: criteriaText.trim(),
     definition: definition.trim(),
@@ -147,7 +156,12 @@ export function reviseCriteria(
     criteriaHistory: [...(old.criteriaHistory ?? []), ...(old.revision ? [{ text: old.criteriaText, definition: old.definition, revision: old.revision, good: old.goodFitExamples ?? "", bad: old.badFitExamples ?? "" }] : [])],
     durableCriteria: undefined,
     criteriaSaveError: undefined,
-    examplesCompleteRevision: old.examplesCompleteRevision || old.approvedRevision ? old.revision + 1 : undefined,
+    criteriaSaveToken: crypto.randomUUID(),
+    intakeForm: revisionData ? revisionData.intakeForm : old.intakeForm,
+    goodFitExamples: revisionData?.goodFitExamples ?? old.goodFitExamples,
+    badFitExamples: revisionData?.badFitExamples ?? old.badFitExamples,
+    companies: [],
+    counts: { midOnly: 0, isccOnly: 0, both: 0 },
     criteriaMessageId,
   });
   for (const artifact of old.artifacts)
@@ -155,34 +169,35 @@ export function reviseCriteria(
       patchArtifact(sessionId, artifact.id, { decision: "declined" });
   mirrorWorkspace(next);
   void persistCriteriaDraft(sessionId).catch(error => {
-    if (getChatState(sessionId).revision === next.revision) updateChatState(sessionId, { criteriaSaveError: String(error.message ?? error) });
+    if (getChatState(sessionId).criteriaSaveToken === next.criteriaSaveToken) updateChatState(sessionId, { criteriaSaveError: String(error.message ?? error) });
     sessionStore.addEvent({ sessionId, kind: "system", status: "error", origin: "workspace", title: "Criteria draft could not be saved", text: String(error.message ?? error) });
   });
   return criteriaArtifact(sessionId);
 }
 
-export async function completeFitExamples(sessionId: string, artifactId: string, good: string, bad: string) {
-  const state = getChatState(sessionId), artifact = state.artifacts.find(item => item.id === artifactId);
-  if (artifact?.type !== "fit-examples" || artifact.revision !== state.revision || artifact.completed) throw new Error("Use the latest examples card.");
-  const originalRevision = state.revision;
-  good = good.trim(); bad = bad.trim();
-  updateChatState(sessionId, { goodFitExamples: good, badFitExamples: bad });
-  let definition = state.definition, note = "Review the final criteria, then approve the search.";
-  if (good || bad) {
-    const result = await generateDraft(sessionId, "criteria", { request: "Adjust only the core-business criteria using the analyst's good-fit and bad-fit references. Preserve deferred financial, geography, ownership and size conditions as analyst review notes." });
-    if (getChatState(sessionId).revision !== originalRevision) throw new Error("Criteria changed while examples were being reviewed. Use the current criteria.");
-    if (result.executed && result.text) definition = result.text;
-    else note = "Examples are saved with the criteria. LLM Suite is not connected to interpret them yet; edit the definition if needed, then approve.";
-  }
-  patchArtifact(sessionId, artifactId, { completed: true, good, bad });
-  updateChatState(sessionId, { examplesCompleteRevision: originalRevision });
-  const next = reviseCriteria(sessionId, state.criteriaText, definition, state.ignored);
+/** Save edited inline examples before approving the exact resulting revision. */
+export async function approveCriteriaWithExamples(sessionId: string, artifactId: string, good?: string, bad?: string) {
   await flushCriteriaDraft(sessionId);
-  updateChatState(sessionId, { businessReviewedRevision: getChatState(sessionId).revision });
-  const messageId = crypto.randomUUID();
-  updateChatState(sessionId, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
-  sessionStore.addEvent({ sessionId, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Final criteria", text: note, content: [{ type: "text", text: note }, artifactPart(next)] });
+  const state = getChatState(sessionId);
+  const card = state.artifacts.find(item => item.id === artifactId);
+  if (card?.type !== "criteria" || card.revision !== state.revision || card.decision !== "pending" || (card.draftToken && card.draftToken !== state.criteriaSaveToken)) throw new Error("Review the latest criteria card.");
+  good = (good ?? state.goodFitExamples ?? "").trim();
+  bad = (bad ?? state.badFitExamples ?? "").trim();
+  let targetId = card.id;
+  let targetToken = state.criteriaSaveToken;
+  if (good !== (state.goodFitExamples ?? "").trim() || bad !== (state.badFitExamples ?? "").trim()) {
+    targetId = reviseCriteria(sessionId, state.criteriaText, state.definition, state.ignored, state.criteriaMessageId, { intakeForm: state.intakeForm, goodFitExamples: good, badFitExamples: bad }).id;
+    targetToken = getChatState(sessionId).criteriaSaveToken;
+    await flushCriteriaDraft(sessionId);
+    if (getChatState(sessionId).criteriaSaveToken !== targetToken) throw new Error("The criteria changed. Review the latest draft again.");
+    sessionStore.addEvent({ sessionId, kind: "system", origin: "workspace", status: "success", title: "Criteria examples revised", result: { revision: getChatState(sessionId).revision } });
+  }
+  if (getChatState(sessionId).criteriaSaveToken !== targetToken) throw new Error("The criteria changed. Review the latest draft again.");
+  await approveDurableCriteria(sessionId);
+  approveCriteria(sessionId, targetId, artifactId);
+  return getChatState(sessionId).artifacts.find(item => item.id === targetId)!;
 }
+
 export async function addResearchToCriteria(sessionId: string, answer: string, question: string) {
   const state = getChatState(sessionId);
   if (!answer.trim()) throw new Error("There is no research result to add.");
@@ -195,7 +210,7 @@ export async function addResearchToCriteria(sessionId: string, answer: string, q
   updateChatState(sessionId, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, messageId] }));
   sessionStore.addEvent({ sessionId, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Criteria draft updated", text: "The research is in a new criteria draft. Review and approve it before the next search or screening.", content: [{ type: "text", text: "Review the updated criteria before continuing." }, artifactPart(next)] });
 }
-export function approveCriteria(sessionId: string, artifactId?: string): void {
+export function approveCriteria(sessionId: string, artifactId?: string, sourceArtifactId?: string): void {
   const state = getChatState(sessionId);
   const artifact = artifactId
     ? state.artifacts.find((a) => a.id === artifactId)
@@ -223,6 +238,7 @@ export function approveCriteria(sessionId: string, artifactId?: string): void {
       example: "",
       clarification: "",
       artifactId: artifact.id,
+      sourceArtifactId: sourceArtifactId ?? artifact.id,
     },
   });
   patchArtifact(sessionId, artifact.id, { decision: "approved" });
@@ -359,11 +375,12 @@ export function createChatAdapter(
         sessionId,
         turnId,
         messageId: user.id,
-        kind: "message",
+        kind: user.metadata.custom.hidden === true ? "system" : "message",
         role: "user",
+        ...(user.metadata.custom.hidden === true ? { result: { chatAction: true, custom: user.metadata.custom } } : {}),
         origin: "assistant",
         status: "success",
-        title: "Your message",
+        title: user.metadata.custom.hidden === true ? "Screening action" : "Your message",
         text,
         content: [...user.content, ...attachmentParts],
       });
@@ -439,25 +456,15 @@ export function createChatAdapter(
           )
           .map((a) => a.file), ...attachmentParts.flatMap(part => part.type === "data" && ["staged-chat-file", "staged-company-file"].includes(part.name) ? state.files.filter(file => file.id === (part.data as { fileId: string }).fileId) : [])];
         const tabular = submittedFiles.filter((f) => f.importable);
-        if (
-          action?.type === "approve-criteria" ||
-          /^(?:approve(?: the)? criteria(?: and (?:find companies|search))?|approve and search)$/i.test(
-            text,
-          )
-        ) {
-          const card = action?.artifactId ? state.artifacts.find(item => item.id === action.artifactId) : criteriaArtifact(sessionId);
-          if (card?.type !== "criteria" || card.revision !== state.revision) throw new Error("Review the latest criteria card.");
-          if (card.phase === "business" && state.examplesCompleteRevision !== state.revision) {
-            updateChatState(sessionId, { businessReviewedRevision: state.revision });
-            patchArtifact(sessionId, card.id, { decision: "approved" });
-            add(saveArtifact(sessionId, { ...artifactBase("Examples · optional"), type: "fit-examples", revision: state.revision, good: state.goodFitExamples ?? "", bad: state.badFitExamples ?? "" }, turnId));
-            content.push({ type: "text", text: "Add a few good-fit or bad-fit examples, or skip this step. You’ll approve the final criteria before discovery." });
-          } else {
-            await approveDurableCriteria(sessionId);
-            approveCriteria(sessionId, action?.artifactId);
-            state = getChatState(sessionId);
-            jobId = (await startDiscovery(sessionId, callbacks.title(), turnId, messageId)).id;
+        if (action?.type === "approve-criteria") {
+          const card = await approveCriteriaWithExamples(sessionId, action.artifactId, action.good, action.bad);
+          if (card.id !== action.artifactId) {
+            const criteriaMessageId = crypto.randomUUID();
+            updateChatState(sessionId, current => ({ ...current, branchMessageIds: [...current.branchMessageIds, criteriaMessageId] }));
+            sessionStore.addEvent({ sessionId, messageId: criteriaMessageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Approved criteria", content: [artifactPart(card)] });
           }
+          state = getChatState(sessionId);
+          jobId = (await startDiscovery(sessionId, callbacks.title(), turnId, messageId)).id;
         } else if (
           /^\/example$|^(?:start|run)(?: the)? (?:local |screening )?example$/i.test(
             text,
@@ -962,4 +969,12 @@ export function createChatAdapter(
       }
     },
   };
+}
+
+/** Used only for programmatic sends; the analyst's typed messages bypass it. */
+export function hiddenActionMetadata(text: string, action?: ArtifactAction) {
+  const artifactAction = action ?? { type: "command" as const, artifactId: "" };
+  const commands: Record<string, string> = { "/criteria": "Opened criteria", "/plan": "Opened next steps", "/review": "Opened company review", "/example": "Tried the example", "/checkpoint": "Opened checkpoint", "/bing": "Opened Bing research" };
+  const label = artifactAction.type === "command" && artifactAction.label ? artifactAction.label : commands[text] ?? text.replace(/^Choose /, "Chose ");
+  return { hidden: true, artifactAction, label };
 }

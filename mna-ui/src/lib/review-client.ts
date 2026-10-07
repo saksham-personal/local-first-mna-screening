@@ -1,6 +1,7 @@
 import { callTool, type ToolResult } from "./tool-client";
 import { getChatState, mirrorWorkspace, updateChatState } from "./chat-store";
 import { sessionStore } from "./session-store";
+import { discoveryDefinition } from "./discovery-query.mjs";
 import { refreshCompanyContext } from "./company-data-client";
 
 const criteriaQueues = new Map<string, Promise<void>>();
@@ -21,25 +22,40 @@ export function persistCriteriaDraft(sessionId: string): Promise<void> {
       runId = result.run_id;
       updateChatState(sessionId, { backendRunId: runId });
     }
-    const result = await traced(sessionId, "save_criteria_revision", { run_id: runId, criteria_text: snapshot.criteriaText, business_definition: snapshot.definition, good_fit_examples: snapshot.goodFitExamples?.trim() ? [snapshot.goodFitExamples.trim()] : [], bad_fit_examples: snapshot.badFitExamples?.trim() ? [snapshot.badFitExamples.trim()] : [] }, true);
+    const result = await traced(sessionId, "save_criteria_revision", { run_id: runId, criteria_text: snapshot.criteriaText, business_definition: snapshot.definition, good_fit_examples: snapshot.goodFitExamples?.trim() ? [snapshot.goodFitExamples.trim()] : [], bad_fit_examples: snapshot.badFitExamples?.trim() ? [snapshot.badFitExamples.trim()] : [], core_business_exclusions: discoveryDefinition(snapshot.definition).exclusions, ...(snapshot.intakeForm ? { intake_form: snapshot.intakeForm } : {}) }, true);
     state = getChatState(sessionId);
-    if (state.revision === snapshot.revision && state.definition === snapshot.definition)
-      updateChatState(sessionId, { durableCriteria: { revision: Number(result.revision), digest: String(result.digest), localRevision: snapshot.revision } });
+    invalidateCriteriaHistory(runId);
+    const revision = Number(result.revision);
+    if (!Number.isSafeInteger(revision) || revision < 1 || typeof result.digest !== "string") throw new Error("The saved criteria revision was invalid.");
+    const artifacts = state.artifacts.map(artifact => artifact.type === "criteria" && (snapshot.criteriaSaveToken ? artifact.draftToken === snapshot.criteriaSaveToken : artifact.revision === snapshot.revision) ? { ...artifact, revision } : artifact);
+    if (state.criteriaSaveToken === snapshot.criteriaSaveToken && state.criteriaText === snapshot.criteriaText && state.definition === snapshot.definition) {
+      const next = updateChatState(sessionId, {
+        revision,
+        criteriaSaveError: undefined,
+        durableCriteria: { revision, digest: result.digest, localRevision: revision },
+        artifacts,
+      });
+      mirrorWorkspace(next);
+    } else updateChatState(sessionId, { artifacts });
   });
   criteriaQueues.set(sessionId, next);
   void next.finally(() => { if (criteriaQueues.get(sessionId) === next) criteriaQueues.delete(sessionId); }).catch(() => {});
   return next;
 }
 export function flushCriteriaDraft(sessionId: string) {
-  return criteriaQueues.get(sessionId) ?? persistCriteriaDraft(sessionId);
+  const state = getChatState(sessionId);
+  return criteriaQueues.get(sessionId) ?? (state.durableCriteria?.revision === state.revision && !state.criteriaSaveError ? Promise.resolve() : persistCriteriaDraft(sessionId));
 }
 export async function approveDurableCriteria(sessionId: string) {
+  const expectedToken = getChatState(sessionId).criteriaSaveToken;
   await criteriaQueues.get(sessionId);
-  if (getChatState(sessionId).durableCriteria?.localRevision !== getChatState(sessionId).revision) await persistCriteriaDraft(sessionId);
+  if (getChatState(sessionId).criteriaSaveToken !== expectedToken) throw new Error("The criteria changed. Review the current draft again.");
+  if (getChatState(sessionId).durableCriteria?.revision !== getChatState(sessionId).revision) await persistCriteriaDraft(sessionId);
   const state = getChatState(sessionId), revision = state.durableCriteria;
-  if (!state.backendRunId || !revision || revision.localRevision !== state.revision) throw new Error("The criteria changed. Review the current draft again.");
+  if (!state.backendRunId || !revision || revision.revision !== state.revision || state.criteriaSaveToken !== expectedToken) throw new Error("The criteria changed. Review the current draft again.");
   await traced(sessionId, "approve_criteria_revision", { run_id: state.backendRunId, revision: revision.revision, digest: revision.digest, approved_by: "Analyst approval in Screening" }, true);
-  if (getChatState(sessionId).revision !== state.revision) throw new Error("The criteria changed during approval. Review the latest draft.");
+  invalidateCriteriaHistory(state.backendRunId);
+  if (getChatState(sessionId).revision !== state.revision || getChatState(sessionId).criteriaSaveToken !== expectedToken) throw new Error("The criteria changed during approval. Review the latest draft.");
 }
 
 export async function readShortlist(sessionId: string, runId: string, includeHidden = true): Promise<ToolResult & { candidates: Record<string, unknown>[] }> {
@@ -77,4 +93,16 @@ export async function reviewShortlist(sessionId: string, keepCompanyIds: string[
   await traced(sessionId, "review_shortlist", { run_id: state.backendRunId, keep_company_ids: keepCompanyIds, review_columns: columns, ...(state.selectionRevision !== undefined ? { expected_selection_revision: state.selectionRevision } : {}), reason: "Analyst shortlist review" }, true);
   await refreshShortlist(sessionId, state.backendRunId);
   await refreshCompanyContext(sessionId, state.backendRunId);
+}
+
+const historyCache = new Map<string, Promise<ToolResult>>();
+export function invalidateCriteriaHistory(runId: string) { historyCache.delete(runId); }
+export function readCriteriaHistory(sessionId: string, runId: string) {
+  let pending = historyCache.get(runId);
+  if (!pending) {
+    pending = traced(sessionId, "get_criteria_history", { run_id: runId });
+    historyCache.set(runId, pending);
+    void pending.catch(() => { if (historyCache.get(runId) === pending) historyCache.delete(runId); });
+  }
+  return pending;
 }

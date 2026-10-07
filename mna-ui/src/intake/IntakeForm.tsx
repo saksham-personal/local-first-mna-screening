@@ -1,5 +1,5 @@
 import { useId, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent } from "react";
+import type { ComponentProps, FormEvent, KeyboardEvent } from "react";
 import { Dialog } from "radix-ui";
 import { Plus, X } from "lucide-react";
 import { GEOGRAPHY_OPTIONS, INDUSTRY_SECTORS, OWNERSHIP_OPTIONS, REQUEST_TYPES, SIZE_OPTIONS } from "./intake-options";
@@ -16,6 +16,9 @@ type Props = {
   onCancel: () => void;
   onSubmit: (form: IntakeFormData) => void;
   busy?: boolean;
+  modal?: boolean;
+  onInteractOutside?: ComponentProps<typeof Dialog.Content>["onInteractOutside"];
+  onPointerDownOutside?: ComponentProps<typeof Dialog.Content>["onPointerDownOutside"];
 };
 
 const EMPTY_OPTION = "__intake_empty__";
@@ -94,7 +97,7 @@ function ChipMultiSelect({
   </fieldset>;
 }
 
-export default function IntakeForm({ open, initial, sourceFileName, onViewDocument, onCancel, onSubmit, busy = false }: Props) {
+export default function IntakeForm({ open, initial, sourceFileName, onViewDocument, onCancel, onSubmit, busy = false, modal = true, onInteractOutside, onPointerDownOutside }: Props) {
   const headingId = useId();
   const descriptionId = useId();
   const [form, setForm] = useState<IntakeFormData>(() => normalizeIntake(initial));
@@ -121,10 +124,10 @@ export default function IntakeForm({ open, initial, sourceFileName, onViewDocume
     if (!busy && hasSearchDefinition) onSubmit(normalizeIntake(form));
   };
 
-  return <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onCancel(); }}>
+  return <Dialog.Root modal={modal} open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onCancel(); }}>
     {open && <Dialog.Portal>
       <Dialog.Overlay className="if-overlay" />
-      <Dialog.Content className="if-dialog" aria-labelledby={headingId} aria-describedby={descriptionId} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}>
+      <Dialog.Content onInteractOutside={onInteractOutside} onPointerDownOutside={onPointerDownOutside} className="if-dialog" aria-labelledby={headingId} aria-describedby={descriptionId} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}>
         <header className="if-header">
           <div>
             <span className="if-eyebrow">Screening request</span>

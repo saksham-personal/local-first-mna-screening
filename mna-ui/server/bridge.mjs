@@ -136,7 +136,7 @@ export async function startBridge() {
     const saved = savedFiles.find(file => file?.id === id);
     const name = typeof saved?.name === 'string' ? basename(saved.name) : id;
     staged.add(id);
-    stagedFiles.set(id, { id, name, bytes: info.size, path, ...(typeof saved?.sessionId === 'string' ? { sessionId: saved.sessionId } : {}), ...(['chat', 'pitchbook', 'rogo', 'company-data'].includes(saved?.purpose) ? { purpose: saved.purpose } : {}), ...descriptor });
+    stagedFiles.set(id, { id, name, bytes: info.size, path, ...(typeof saved?.sessionId === 'string' ? { sessionId: saved.sessionId } : {}), ...(['chat', 'pitchbook', 'rogo', 'company-data', 'intake'].includes(saved?.purpose) ? { purpose: saved.purpose } : {}), ...descriptor });
   }
   let manifestQueue = Promise.resolve();
   const saveFiles = () => {
@@ -247,7 +247,7 @@ export async function startBridge() {
       if (url.pathname === '/api/files') {
         if (!Array.isArray(input.files) || !input.files.length || input.files.length > 32) throw new Error('Select between 1 and 32 files.');
         if (input.sessionId != null && (typeof input.sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(input.sessionId))) throw new Error('Use a valid chat session ID.');
-        if (input.purpose != null && !['chat', 'pitchbook', 'rogo', 'company-data'].includes(input.purpose)) throw new Error('Choose a valid file destination.');
+        if (input.purpose != null && !['chat', 'pitchbook', 'rogo', 'company-data', 'intake'].includes(input.purpose)) throw new Error('Choose a valid file destination.');
         const files = [];
         for (const file of input.files) {
           const name = typeof file?.name === 'string' ? basename(file.name.trim()) : '';
