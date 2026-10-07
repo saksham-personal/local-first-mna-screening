@@ -55,11 +55,11 @@ Three prompts state the same score rule word for word: `screening-scored.md`, `s
 | `screening-scored` | Scored screening prompt: criteria, examples, deferred conditions, input glossary, request, score rule, output format | LLM Suite and M365 Copilot screening setup, rendered by the bridge |
 | `screening-question` | Question prompt, optionally answered per company | LLM Suite and M365 Copilot screening setup (question mode), rendered by the bridge |
 | `screening-prompt-writer` | Asks LLM Suite to draft a screening prompt | LLM Suite, `POST /api/conversation/generate` (purpose `screening-prompt`) |
-| `output-contract` | Strict Markdown table contract appended to every approved screening prompt | Rust prepared plan (Rust loader added in a later step) |
-| `batch-repair` | Retry instruction after a batch response fails parsing | Rust execution (Rust loader added in a later step) |
-| `format-repair` | Retry prompt after a generated draft has the wrong block format | Rust gateway (Rust loader added in a later step) |
-| `tool-command-repair` | Retry instruction after a rejected tool command | Rust protocol (Rust loader added in a later step) |
-| `controller-tools` | Standing instructions and command grammar for the screening controller | Rust agent commands (Rust loader added in a later step) |
+| `output-contract` | Strict Markdown table contract appended to every approved screening prompt | Rust prepared plan (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
+| `batch-repair` | Retry instruction after a batch response fails parsing | Rust execution (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
+| `format-repair` | Retry prompt after a generated draft has the wrong block format | Rust gateway (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
+| `tool-command-repair` | Retry instruction after a rejected tool command | Rust protocol (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
+| `controller-tools` | Standing instructions and command grammar for the screening controller | Rust agent commands (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
 | `direct-question` | Wrapper for a free-form analyst question | LLM Suite or M365 Copilot, `POST /api/conversation/ask` |
 | `bing-query-writer` | Asks LLM Suite for Bing query templates | LLM Suite, `POST /api/conversation/generate` (purpose `bing-templates`) |
 | `criteria-from-examples` | Revises the criteria using good-fit and bad-fit examples | LLM Suite, `POST /api/conversation/generate` (purposes `criteria-from-examples` and the older `criteria`) |
