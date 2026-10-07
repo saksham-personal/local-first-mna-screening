@@ -33,21 +33,28 @@ import type {
   JobSnapshot,
 } from "./lib/chat-contract";
 import type { ExportKind } from "./lib/contracts";
+import { callTool } from "./lib/tool-client";
 import { approved } from "./lib/chat-store";
 import { consideredCompanies } from "./lib/chat-policy";
 import {
   applyGridReview,
   fetchScreeningGrid,
+  fetchScreeningRounds,
   hideIds,
   hiddenReasonLabel,
   keepOnlyIds,
   restoreIds,
   type GridCompany,
   type ScreeningGrid,
+  type ScreeningRound,
 } from "./lib/grid-client";
 import type { DataGridProps } from "./grid/DataGrid";
-import { companyColumns } from "./workspace/company-columns";
-import { plural } from "./lib/format";
+import { buildCompanyColumns } from "./workspace/company-columns";
+import { formatTime, plural } from "./lib/format";
+import { emptyFilterState } from "./grid/grid-filter";
+import type { FilterState } from "./grid/grid-types";
+import ScoreDistribution from "./workspace/ScoreDistribution";
+import { belongsToTab, type CompanyTab } from "./workspace/score-distribution-state";
 import "./workspace/workspace.css";
 import FilesTab from "./workspace/FilesTab";
 import { processStagedUploads } from "./lib/import-pipeline";
@@ -206,6 +213,39 @@ function Overview({
   onOpenCompanies: () => void;
   onOpenFiles: () => void;
 }) {
+  const [rounds, setRounds] = useState<ScreeningRound[]>([]);
+  const [roundsLoading, setRoundsLoading] = useState(false);
+  const [roundsError, setRoundsError] = useState("");
+  // Light reads only: the Overview needs counts and flags, not every grid row.
+  const [simulatedMode, setSimulatedMode] = useState(false);
+  const [summary, setSummary] = useState<{ total: number; mid: number; iscc: number; both: number } | null>(null);
+  const shownRun = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    void fetch("/api/health").then((response) => response.json()).then((data) => setSimulatedMode(data?.simulated === true)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    let current = true;
+    // Keep the previous numbers while refreshing the same run; clear them only for another run.
+    if (shownRun.current !== state.backendRunId) {
+      shownRun.current = state.backendRunId;
+      setRounds([]);
+      setSummary(null);
+    }
+    if (!state.backendRunId) return;
+    const runId = state.backendRunId;
+    setRoundsError("");
+    void callTool("get_discovery_summary", { run_id: runId }).then((result) => {
+      const count = (key: string) => (typeof result[key] === "number" ? (result[key] as number) : 0);
+      if (current) setSummary({ total: count("total_unique"), mid: count("mid_only"), iscc: count("iscc_only"), both: count("both") });
+    }).catch(() => {});
+    const load = () => fetchScreeningRounds(state.sessionId, runId).then((result) => {
+      if (current) { setRounds(result); setRoundsError(""); }
+    }).catch((error) => { if (current) setRoundsError(error instanceof Error ? error.message : "Screening rounds could not be loaded."); }).finally(() => { if (current) setRoundsLoading(false); });
+    setRoundsLoading(true);
+    void load();
+    const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 15000);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [state.backendRunId, state.sessionId, state.selectionRevision]);
   const criteria = latestArtifact(state.artifacts, "criteria");
   const options =
     approved(state) && state.companies.length
@@ -220,9 +260,25 @@ function Overview({
             (artifact) => artifact.type === "job" && artifact.jobId === job.id,
           )
       : undefined;
-  const total = consideredCompanies(state).length;
+  const total = summary?.total ?? consideredCompanies(state).length;
+  const sourceCount = (source: GridCompany["source"], fallback: number) => summary ? (source === "MID" ? summary.mid : source === "ISCC" ? summary.iscc : summary.both) : fallback;
   return (
     <div className="ws-overview">
+      {(simulatedMode || rounds.some((round) => round.simulated)) && <SimulatedBanner />}
+      {roundsLoading && !rounds.length && <Skeleton variant="card" rows={2} label="Loading screening rounds" />}
+      {roundsError && <p className="ws-grid-error" role="alert">{roundsError}</p>}
+      {rounds.length > 0 && <section className="ws-card ws-rounds-card">
+        <div className="ws-section-head"><h2>Screening rounds</h2><HelpTip label="About screening rounds">Each round keeps its own provider scores and outputs. Counts describe the saved round results, including companies later hidden.</HelpTip></div>
+        <ol className="ws-rounds-timeline">{[...rounds].sort((a, b) => b.round_no - a.round_no).map((round) => {
+          const distribution = round.score_distribution[round.score_columns[0]];
+          const high = distribution ? [7, 8, 9, 10].reduce((sum, score) => sum + (distribution[String(score)] ?? 0), 0) : undefined;
+          return <li key={round.plan_id}>
+            <div><strong>R{round.round_no} {round.provider_label}</strong>{round.simulated && <span className="ws-simulated-badge">Simulated</span>}</div>
+            <p>{round.assessed_companies.toLocaleString()} companies · 7–10: {high?.toLocaleString() ?? "—"} · CHECK: {distribution?.CHECK?.toLocaleString() ?? "—"} · started <time dateTime={round.created_at}>{formatTime(round.created_at)}</time></p>
+            <span className="ws-round-progress">{round.jobs.running || round.jobs.ready ? "In progress" : round.jobs.failed || round.jobs.other ? "Needs review" : round.jobs.total && round.jobs.done === round.jobs.total ? "Complete" : "Approved"} · {round.jobs.done.toLocaleString()}/{round.jobs.total.toLocaleString()} jobs complete{round.jobs.failed ? ` · ${round.jobs.failed} failed` : ""}</span>
+          </li>;
+        })}</ol>
+      </section>}
       <section className="ws-summary-grid">
         <StatCard
           label="Shortlist"
@@ -233,19 +289,19 @@ function Overview({
         />
         <StatCard
           label="MID only"
-          value={state.counts.midOnly}
+          value={sourceCount("MID", state.counts.midOnly)}
           tone="info"
           detail="Found in the internal company set"
         />
         <StatCard
           label="ISCC only"
-          value={state.counts.isccOnly}
+          value={sourceCount("ISCC", state.counts.isccOnly)}
           tone="warning"
-          detail="ISCC is not connected"
+          detail="Found in the ISCC company set"
         />
         <StatCard
           label="Both sources"
-          value={state.counts.both}
+          value={sourceCount("both", state.counts.both)}
           tone="success"
           detail="Matched across MID and ISCC"
         />
@@ -364,6 +420,11 @@ function Overview({
 }
 
 const emptyGridRows: GridCompany[] = [];
+const emptyRounds: ScreeningGrid["rounds"] = [];
+
+function SimulatedBanner() {
+  return <p className="ws-simulated-banner" role="status">Simulated data — for development only. Exports are blocked unless allowed.</p>;
+}
 
 function Companies({ state, onAction }: { state: ChatState; onAction: Props["onAction"] }) {
   const [gridData, setGridData] = useState<ScreeningGrid | null>(null);
@@ -376,7 +437,34 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [visibleRows, setVisibleRows] = useState<GridCompany[]>(emptyGridRows);
+  const [sourceTab, setSourceTab] = useState<CompanyTab>("All");
+  const [filtersByTab, setFiltersByTab] = useState<Record<CompanyTab, FilterState>>(() => ({ All: emptyFilterState(), MID: emptyFilterState(), ISCC: emptyFilterState() }));
+  const rounds = gridData?.rounds ?? emptyRounds;
+  const columns = useMemo(() => buildCompanyColumns(rounds), [rounds]);
+  const filterState = filtersByTab[sourceTab];
+  const changeFilters = useCallback((next: FilterState) => setFiltersByTab((current) => ({ ...current, [sourceTab]: next })), [sourceTab]);
+  const [columnPreferences, setColumnPreferences] = useState<Partial<Record<CompanyTab, { visible: string[]; known: string[] }>>>(() => {
+    const saved: Partial<Record<CompanyTab, { visible: string[]; known: string[] }>> = {};
+    for (const tab of ["All", "MID", "ISCC"] as const) {
+      try {
+        const value = JSON.parse(localStorage.getItem(`ws-company-columns:${tab}`) ?? "null");
+        if (value && Array.isArray(value.visible) && Array.isArray(value.known) && [...value.visible, ...value.known].every((id) => typeof id === "string")) saved[tab] = value;
+      } catch { /* use default visibility */ }
+    }
+    return saved;
+  });
+  const visibleColumnIds = useMemo(() => {
+    const saved = columnPreferences[sourceTab];
+    return saved ? columns.filter((column) => saved.visible.includes(column.id) || (!saved.known.includes(column.id) && !column.hidden)).map((column) => column.id) : columns.filter((column) => !column.hidden).map((column) => column.id);
+  }, [columns, columnPreferences, sourceTab]);
+  const changeVisibleColumns = useCallback((visible: string[]) => {
+    const next = { visible, known: columns.map((column) => column.id) };
+    setColumnPreferences((current) => ({ ...current, [sourceTab]: next }));
+    try { localStorage.setItem(`ws-company-columns:${sourceTab}`, JSON.stringify(next)); } catch { /* storage may be disabled */ }
+  }, [columns, sourceTab]);
   const gridRequest = useRef(0);
+  const hasGridData = useRef(false);
+  const gridRun = useRef<string | undefined>(undefined);
   const result = state.artifacts
     .slice()
     .reverse()
@@ -392,10 +480,18 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
   const allRows = gridData?.rows ?? emptyGridRows;
   const hiddenRows = useMemo(() => allRows.filter((row) => !row.considered), [allRows]);
   const rows = useMemo(
-    () => showHidden ? allRows : allRows.filter((row) => row.considered),
-    [allRows, showHidden],
+    () => allRows.filter((row) => belongsToTab(row.source, sourceTab) && (showHidden || row.considered)),
+    [allRows, showHidden, sourceTab],
   );
   const selected = allRows.find((row) => row.company_id === drawerId) ?? null;
+  // Refetch when screening/enrichment jobs change state, not on every chat artifact update.
+  const resultsKey = useMemo(
+    () => state.artifacts
+      .filter((artifact) => artifact.type === "job" || artifact.type === "enrichment-upload")
+      .map((artifact) => `${artifact.id}:${JSON.stringify((artifact as { state?: unknown; status?: unknown }).state ?? (artifact as { status?: unknown }).status ?? "")}`)
+      .join("|"),
+    [state.artifacts],
+  );
   const loadGrid = useCallback(async () => {
     const request = ++gridRequest.current;
     const runId = state.backendRunId;
@@ -405,10 +501,17 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
       setLoading(false);
       return null;
     }
-    setLoading(true);
+    // Refreshes keep the current rows on screen; a first load (or another run) shows the skeleton.
+    if (gridRun.current !== runId) {
+      gridRun.current = runId;
+      hasGridData.current = false;
+      setGridData(null);
+    }
+    if (!hasGridData.current) setLoading(true);
     setGridError("");
     try {
       const data = await fetchScreeningGrid(state.sessionId, runId);
+      if (request === gridRequest.current) hasGridData.current = true;
       if (request === gridRequest.current) setGridData(data);
       return data;
     } catch (caught) {
@@ -420,7 +523,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
   }, [state.backendRunId, state.sessionId]);
   useEffect(() => {
     void loadGrid().catch(() => {});
-  }, [loadGrid, state.selectionRevision]);
+  }, [loadGrid, state.selectionRevision, resultsKey]);
   useEffect(() => {
     const visibleIds = new Set(rows.map((row) => row.company_id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
@@ -472,6 +575,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
   return (
     <div className="ws-company-layout">
       <section className="ws-company-main">
+        {allRows.some((row) => row.simulated) && <SimulatedBanner />}
         <div className="ws-table-summary">
           <span>
             {loading && !gridData ? "Loading companies…" : <><strong>{(gridData?.consideredCount ?? 0).toLocaleString()}</strong> considered · <strong>{(gridData?.hiddenCount ?? 0).toLocaleString()}</strong> hidden</>}
@@ -483,15 +587,26 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
         {gridError && <p className="ws-grid-error" role="alert">{gridError}</p>}
         {writeError && <p className="ws-grid-error" role="alert">{writeError}</p>}
         {notice && <p className="ws-grid-notice" role="status">{notice}</p>}
+        <div className="ws-source-tabs" role="group" aria-label="Company sources">
+          {(["All", "MID", "ISCC"] as const).map((tab) => <button type="button" key={tab} aria-pressed={sourceTab === tab} className={sourceTab === tab ? "is-active" : ""} onClick={() => { setSourceTab(tab); setSelectedIds([]); }}>
+            {tab} <span>{allRows.filter((row) => belongsToTab(row.source, tab) && (showHidden || row.considered)).length.toLocaleString()}</span>
+          </button>)}
+        </div>
+        <ScoreDistribution key={sourceTab} rows={rows} columns={columns} rounds={rounds} tab={sourceTab} filterState={filterState} onFilterStateChange={changeFilters} loading={loading} />
         <Suspense fallback={<div className="ws-grid-loading"><Skeleton variant="table" rows={8} cols={6} label="Opening companies" /></div>}>
           <DataGrid
+            key={sourceTab}
             rows={rows}
-            columns={companyColumns}
+            columns={columns}
+            filterState={filterState}
+            onFilterStateChange={changeFilters}
+            visibleColumnIds={visibleColumnIds}
+            onVisibleColumnIdsChange={changeVisibleColumns}
             getRowId={(row) => row.company_id}
             label="Companies in the current screening"
             loading={loading}
             emptyText={state.backendRunId ? "No companies match the current filters." : "Approve criteria and run discovery to load companies."}
-            storageKey="ws-companies-v1"
+            storageKey={`ws-companies-v2:${sourceTab}`}
             rowHeight={62}
             selectable
             selectedIds={selectedIds}

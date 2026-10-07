@@ -10,6 +10,7 @@ import {
   type GridCompany,
 } from "../lib/grid-client";
 import "./company-drawer.css";
+import { KeywordEvidence, ScorePill, SemanticBar } from "./score-cells";
 
 type Props = {
   open: boolean;
@@ -116,6 +117,7 @@ export default function CompanyDrawer({
                   <Dialog.Description className="company-drawer-visually-hidden">Detailed information for {company.name}.</Dialog.Description>
                   {href ? <a href={href} target="_blank" rel="noreferrer">{company.website} <ExternalLink size={12} aria-hidden="true" /></a> : <p>{company.website || "No website"}</p>}
                   <div className="company-drawer-identifiers">
+                    {(detail?.simulated || company.simulated) && <span className="ws-simulated-badge">Simulated</span>}
                     <span>{company.company_id}</span>
                     {company.pbid && <span>PBId {company.pbid}</span>}
                     <span className={`company-drawer-status ${company.considered ? "is-considered" : "is-hidden"}`}>
@@ -146,9 +148,22 @@ export default function CompanyDrawer({
                     <>
                       <Tabs.Content value="overview" className="company-drawer-tab-content">
                         <div className="company-drawer-scores">
-                          <Score label="MID score" value={company.mid_score} />
-                          <Score label="ISCC score" value={company.iscc_score} />
+                          <Score label="MID retrieval score" value={company.mid_score} />
+                          <Score label="ISCC retrieval score" value={company.iscc_score} />
                         </div>
+                        <section className="company-drawer-section">
+                          <h3>Discovery scores</h3>
+                          <div className="company-drawer-phase-scores"><span>MID semantic score</span><SemanticBar value={detail ? detail.mid_semantic?.score ?? null : company.mid_semantic_score} /><span>ISCC relevancy</span><strong>{(detail ? detail.iscc?.relevancy : company.iscc_relevancy)?.toFixed(2) ?? "—"}</strong></div>
+                        </section>
+                        <section className="company-drawer-section">
+                          <h3>MID keyword match · {(detail?.mid_keyword ?? company.mid_keyword)?.best_match_pct == null ? "—" : `${(detail?.mid_keyword ?? company.mid_keyword)!.best_match_pct!.toFixed(0)}%`}</h3>
+                          {(detail?.mid_keyword ?? company.mid_keyword) ? <KeywordEvidence data={(detail?.mid_keyword ?? company.mid_keyword)!} /> : <p className="company-drawer-muted">No keyword matches are available.</p>}
+                        </section>
+                        {Object.entries(detail?.rounds ?? company.rounds).sort(([a], [b]) => Number(b.slice(1)) - Number(a.slice(1))).map(([key, round]) => <section className="company-drawer-section" key={key}>
+                          <h3>{key} {round.provider_label}</h3>
+                          <div className="company-drawer-round-scores">{round.score_columns.map((column) => <div key={column}><span>{column}</span><ScorePill value={round.scores[column]} /></div>)}</div>
+                          {Object.entries(round.values).filter(([column]) => !round.score_columns.includes(column)).map(([column, value]) => <p className="company-drawer-round-output" key={column}><strong>{column}</strong> {displayValue(value)}</p>)}
+                        </section>)}
                         <section className="company-drawer-section">
                           <h3>Coverage</h3>
                           <div className="company-drawer-coverage">

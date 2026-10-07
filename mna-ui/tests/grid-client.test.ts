@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   fetchScreeningGrid,
+  fetchScreeningRounds,
+  fetchCompanyDetail,
   hiddenReasonLabel,
   hideIds,
   keepOnlyIds,
@@ -23,6 +25,11 @@ function company(company_id: string, considered: boolean): GridCompany {
     pbid: null,
     mid_score: null,
     iscc_score: null,
+    mid_keyword: null,
+    mid_semantic_score: null,
+    iscc_relevancy: null,
+    simulated: false,
+    rounds: {},
     coverage: { pb: false, rogo: false, bing: false },
     pb: { name: null, website: null, description: null, hq_location: null, active_investors: null, universe: null, linkedin_url: null },
     discovery_count: 0,
@@ -85,6 +92,67 @@ test("fetchScreeningGrid pages all companies and preserves the selection revisio
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+const roundColumns = [{ key: "R1", round_no: 1, provider: "llmsuite", provider_label: "LLM Suite", score_columns: ["fit", "risk"], output_columns: ["fit", "risk", "rationale"] }];
+const keyword = { best_match_pct: 75, hit_count: 2, matched: [{ id: 1, text: "insurance" }], queries: [{ query_id: "q1", rationale: "Core business", display_query: "insurance OR claims", match_pct: 75 }] };
+const rounds = { R1: { provider: "llmsuite", provider_label: "LLM Suite", score_columns: ["fit", "risk"], values: { fit: "CHECK", risk: 0, rationale: "Analyst review" }, scores: { fit: "CHECK", risk: 0 } } };
+async function withToolResult(result: unknown, action: () => Promise<void>) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, result }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try { await action(); } finally { globalThis.fetch = original; }
+}
+
+test("grid parses separate Phase 2 scores, keyword evidence, simulation and multiple round outputs", async () => {
+  await withToolResult({ rows: [{ ...pageRow("one", true), mid_score: 3, mid_keyword: keyword, mid_semantic_score: 7.4, iscc_relevancy: 0.88, simulated: true, rounds }], total: 1, considered_count: 1, hidden_count: 0, selection_revision: 1, source_hash: "one", rounds: roundColumns, has_mid_keyword: true, has_semantic: true, has_iscc: true }, async () => {
+    const grid = await fetchScreeningGrid("run-insurance", "one");
+    assert.deepEqual(grid.rounds, roundColumns);
+    assert.equal(grid.has_semantic, true);
+    assert.equal(grid.has_mid_keyword, true);
+    assert.equal(grid.has_iscc, true);
+    assert.equal(grid.rows[0].mid_score, 3);
+    assert.equal(grid.rows[0].mid_semantic_score, 7.4);
+    assert.equal(grid.rows[0].iscc_relevancy, 0.88);
+    assert.equal(grid.rows[0].simulated, true);
+    assert.deepEqual(grid.rows[0].mid_keyword, keyword);
+    assert.deepEqual(grid.rows[0].rounds, rounds);
+  });
+});
+
+test("missing and invalid new scores remain null; real zero scores stay zero", async () => {
+  await withToolResult({ rows: [{ ...pageRow("one", true), mid_semantic_score: 0, iscc_relevancy: 2, rounds: { R1: { ...rounds.R1, scores: { fit: null, risk: 11 } } } }, pageRow("two", true)], total: 2, considered_count: 2, hidden_count: 0, selection_revision: 1, source_hash: "one" }, async () => {
+    const grid = await fetchScreeningGrid("run-insurance", "one");
+    assert.equal(grid.rows[0].mid_semantic_score, 0);
+    assert.equal(grid.rows[0].iscc_relevancy, null);
+    assert.deepEqual(grid.rows[0].rounds.R1.scores, { fit: null, risk: null });
+    assert.equal(grid.rows[1].mid_semantic_score, null);
+    assert.equal(grid.rows[1].mid_keyword, null);
+    assert.deepEqual(grid.rounds, []);
+  });
+});
+
+test("grid rejects round metadata changing during pagination", async () => {
+  const original = globalThis.fetch;
+  let page = 0;
+  globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, result: { rows: [pageRow(String(++page), true)], next_cursor: page === 1 ? "1" : null, total: 2, considered_count: 2, hidden_count: 0, selection_revision: 1, source_hash: "one", rounds: page === 1 ? [] : roundColumns } }));
+  try { await assert.rejects(fetchScreeningGrid("run-insurance", "one"), /changed while/); } finally { globalThis.fetch = original; }
+});
+
+test("detail and timeline parse backend Phase 2 shapes", async () => {
+  await withToolResult({ company_id: "one", company: { name: "One" }, mid_keyword: keyword, mid_semantic: { score: 0 }, iscc: { relevancy: 0 }, simulated: true, rounds }, async () => {
+    const detail = await fetchCompanyDetail("run-insurance", "run1", "one");
+    assert.deepEqual(detail.mid_keyword, keyword);
+    assert.equal(detail.mid_semantic?.score, 0);
+    assert.equal(detail.iscc?.relevancy, 0);
+    assert.deepEqual(detail.rounds, rounds);
+    assert.equal(detail.simulated, true);
+  });
+  await withToolResult({ rounds: [{ ...roundColumns[0], plan_id: "plan1", created_at: "2026-10-07T05:25:00Z", jobs: { total: 10, ready: 0, running: 0, done: 9, failed: 1, other: 0 }, assessed_companies: 9, score_distribution: { fit: { "7": 4, CHECK: 2 } }, simulated: true }] }, async () => {
+    const timeline = await fetchScreeningRounds("run-insurance", "run1");
+    assert.equal(timeline[0].jobs.failed, 1);
+    assert.equal(timeline[0].score_distribution.fit.CHECK, 2);
+    assert.equal(timeline[0].simulated, true);
+  });
 });
 
 test("hide, keep-only, and restore helpers produce the full considered set", () => {

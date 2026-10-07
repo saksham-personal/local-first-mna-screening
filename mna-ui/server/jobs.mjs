@@ -156,6 +156,55 @@ function count(summary, key) {
   return value;
 }
 
+export function companyEntryFromGridRow(candidate) {
+  const companyId = candidate.company_id;
+  const payload = candidate.company_payload && typeof candidate.company_payload === "object"
+    ? candidate.company_payload
+    : {};
+  const midSourceRow = payload.mid_source_row && typeof payload.mid_source_row === "object"
+    ? safeClone(payload.mid_source_row)
+    : undefined;
+  const pb = candidate.pb && typeof candidate.pb === "object" ? candidate.pb : {};
+  // `company_payload` carries the raw canonical name/website/description (what get_company
+  // returned before); the grid's own fields prefer PitchBook and label descriptions.
+  const details = {
+    company_id: companyId,
+    name: typeof payload.name === "string" ? payload.name : candidate.name,
+    website: payload.website ?? null,
+    description: payload.description ?? null,
+    city: candidate.hq_city,
+    metadata: { hq_state: candidate.hq_state },
+    identifiers: Array.isArray(payload.identifiers) ? payload.identifiers : [],
+    keywords: Array.isArray(payload.keywords) ? payload.keywords : [],
+    "PB_Website": pb.website ?? null,
+    "PB_Name": pb.name ?? null,
+    "PB_Description": pb.description ?? null,
+    "PB_LinkedIn URL": pb.linkedin_url ?? null,
+    "PB_HQ Location": pb.hq_location ?? null,
+    "PB_Active Investors": pb.active_investors ?? null,
+    "PB_Universe": pb.universe ?? null,
+  };
+  if (payload.has_enrichment === true)
+    details.ROGO = payload.rogo && typeof payload.rogo === "object" ? safeClone(payload.rogo) : {};
+  return {
+    row: {
+      company: {
+        company_id: companyId,
+        ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
+        ...(typeof candidate.website === "string" ? { website: candidate.website } : {}),
+      },
+      considered: candidate.considered,
+      // The grid's best MID score covers every company, including rows beyond the legacy 1,000-row candidate page.
+      ...(typeof candidate.mid_score === "number" ? { score: candidate.mid_score } : {}),
+    },
+    detail: details,
+    sourceRows:
+      midSourceRow
+        ? [{ source: "MID", row: midSourceRow }]
+        : [],
+  };
+}
+
 function publicJob(job) {
   const output = {
     id: job.id,
@@ -315,26 +364,31 @@ export function createJobRegistry(options) {
 
     const savedRows = new Map();
     let cursor, expectedTotal, consideredCount, sourceHash, selectionRevision, criteriaRevision;
-    let pageSize = 500;
+    let pageSize = 2000;
     do {
       let page;
-      try {
-        page = await tool("get_shortlist_context", {
-          run_id: runId, include_hidden: true, limit: pageSize,
-          ...(cursor ? { after_company_id: cursor } : {}),
-        });
-      } catch (error) {
-        if (pageSize > 1 && /(?:too large|exceeds|2 MB|2MB|byte limit)/i.test(errorMessage(error))) {
+      while (true) {
+        try {
+          page = await tool("get_screening_grid", {
+            run_id: runId,
+            include_hidden: true,
+            include_company_payload: true,
+            limit: pageSize,
+            ...(cursor ? { after_company_id: cursor } : {}),
+          });
+          break;
+        } catch (error) {
+          if (pageSize <= 1 || !/(?:too large|exceeds|2 MB|2MB|byte limit)/i.test(errorMessage(error)))
+            throw error;
           pageSize = Math.max(1, Math.floor(pageSize / 2));
-          continue;
         }
-        throw error;
       }
-      if (!Array.isArray(page?.candidates) || !Number.isSafeInteger(page.total) || page.total < 0 ||
+      if (!Array.isArray(page?.rows) || !Number.isSafeInteger(page.total) || page.total < 0 ||
           !Number.isSafeInteger(page.considered_count) || page.considered_count < 0 ||
+          page.rows.length > pageSize || !(page.next_cursor === null || typeof page.next_cursor === "string") ||
           typeof page.source_hash !== "string" ||
           !(typeof page.selection_revision === "string" || Number.isSafeInteger(page.selection_revision)))
-        throw new Error("The saved company reader returned an invalid page.");
+        throw new Error("The screening grid returned an invalid page.");
       const revision = JSON.stringify(page.criteria_revision ?? null);
       if (expectedTotal !== undefined && (expectedTotal !== page.total || consideredCount !== page.considered_count ||
           sourceHash !== page.source_hash || selectionRevision !== page.selection_revision ||
@@ -346,29 +400,22 @@ export function createJobRegistry(options) {
       selectionRevision = page.selection_revision;
       criteriaRevision = revision;
       let lastId = cursor;
-      for (const candidate of page.candidates) {
+      for (const candidate of page.rows) {
         const id = candidate?.company_id;
         if (typeof id !== "string" || !id || (lastId && id <= lastId) ||
             savedRows.has(id) || typeof candidate.considered !== "boolean")
-          throw new Error("The saved company reader returned an invalid or duplicate company.");
-        savedRows.set(id, {
-          company: { company_id: id,
-            ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
-            ...(typeof candidate.website === "string" ? { website: candidate.website } : {}) },
-          considered: candidate.considered,
-        });
+          throw new Error("The screening grid returned an invalid or duplicate company.");
+        savedRows.set(id, companyEntryFromGridRow(candidate));
         lastId = id;
       }
-      if (page.has_more !== true && page.has_more !== false)
-        throw new Error("The saved company reader returned an invalid page.");
-      const next = page.next_after_company_id;
-      if (page.has_more && (!page.candidates.length || next !== page.candidates.at(-1).company_id ||
+      const next = page.next_cursor;
+      if (next != null && (!page.rows.length || next !== page.rows.at(-1).company_id ||
           (cursor && next <= cursor)))
-        throw new Error("The saved company reader did not advance its cursor.");
-      cursor = page.has_more ? next : undefined;
+        throw new Error("The screening grid did not advance its cursor.");
+      cursor = next ?? undefined;
     } while (cursor);
-    if (savedRows.size !== expectedTotal || [...savedRows.values()].filter((row) => row.considered).length !== consideredCount)
-      throw new Error("The saved company reader did not return the full company set.");
+    if (savedRows.size !== expectedTotal || [...savedRows.values()].filter((company) => company.row.considered).length !== consideredCount)
+      throw new Error("The screening grid did not return the full company set.");
 
     // The legacy candidate reader supplies retrieval scores but caps at 1,000.
     // The paged shortlist above owns the complete membership and review flags.
@@ -380,10 +427,9 @@ export function createJobRegistry(options) {
     for (const candidate of candidateSet.candidates) {
       const row = candidateRow(candidate);
       const saved = row && savedRows.get(row.company.company_id);
-      if (!saved || row.considered !== saved.considered)
+      if (!saved || row.considered !== saved.row.considered)
         throw new Error("The saved company list changed during discovery. Search again.");
-      if (typeof row.score === "number") saved.score = row.score;
-      if (Number.isSafeInteger(row.rank)) saved.rank = row.rank;
+      if (Number.isSafeInteger(row.rank)) saved.row.rank = row.rank;
     }
     const current = await tool("get_shortlist_context", { run_id: runId, include_hidden: true, limit: 1 });
     if (current.total !== expectedTotal || current.considered_count !== consideredCount ||
@@ -391,26 +437,7 @@ export function createJobRegistry(options) {
         JSON.stringify(current.criteria_revision ?? null) !== criteriaRevision)
       throw new Error("The saved company list changed during discovery. Search again.");
 
-    const companies = [];
-    for (const [companyId, row] of savedRows) {
-      const detail = await tool("get_company", { company_id: companyId });
-      const sources = await tool("get_source_rows", {
-        company_id: companyId,
-        source: "MID",
-        limit: 20,
-      });
-      await tool("get_company_context", {
-        run_id: runId,
-        company_id: companyId,
-        sections: ["core", "description", "identifiers", "enrichment"],
-        max_chars: 12_000,
-      });
-      companies.push({
-        row: safeClone(row),
-        detail: safeClone(detail),
-        sourceRows: Array.isArray(sources?.rows) ? safeClone(sources.rows) : [],
-      });
-    }
+    const companies = [...savedRows.values()].map(safeClone);
 
     const summary = await tool("get_discovery_summary", { run_id: runId });
     const counts = {
@@ -420,7 +447,7 @@ export function createJobRegistry(options) {
     };
     const total = count(summary, "total_unique");
     const other = summary.other == null ? 0 : count(summary, "other");
-    const consideredIds = [...savedRows].filter(([, row]) => row.considered).map(([id]) => id);
+    const consideredIds = [...savedRows].filter(([, company]) => company.row.considered).map(([id]) => id);
     if (
       total !== counts.midOnly + counts.isccOnly + counts.both + other ||
       total !== consideredIds.length

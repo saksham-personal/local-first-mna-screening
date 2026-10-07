@@ -99,3 +99,10 @@
   .company-drawer-scroll { padding: 15px 16px; }
   .company-drawer-footer { padding: 11px 16px; }
 }
+/* Discovery and screening evidence stay separate in the compact overview. */
+.company-drawer-phase-scores { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 145px); gap: 12px; align-items: center; font-size: 12px; }
+.company-drawer-phase-scores > span { color: var(--text-muted); }
+.company-drawer-round-scores { display: flex; flex-wrap: wrap; gap: 12px; }
+.company-drawer-round-scores > div { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.company-drawer-round-output { font-size: 12px; line-height: 1.65; color: var(--text-muted); overflow-wrap: anywhere; }
+.company-drawer-round-output strong { color: var(--text); }
