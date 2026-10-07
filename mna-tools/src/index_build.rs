@@ -24,7 +24,9 @@ use crate::{
     tabular,
 };
 
-const BATCH: usize = 5_000;
+// Rows per write transaction. Small enough (~1-2 s each) that the app's own writes on other
+// connections are not starved while a 150k-row build runs.
+const BATCH: usize = 500;
 const CANCELLED: &str = "Index build cancelled";
 const STEP_DEFS: [(&str, &str); 8] = [
     ("read_workbook", "Read workbook"),
@@ -457,15 +459,31 @@ impl Worker {
             .first()
             .cloned()
             .ok_or_else(|| Error::Validation("Workbook has no sheets".into()))?;
-        let mut reader = workbook
+        let dimensions = workbook
             .worksheet_cells_reader(&sheet)
-            .map_err(workbook_error)?;
-        let dimensions = reader.dimensions();
+            .map_err(workbook_error)?
+            .dimensions();
         self.total = if dimensions.end.0 > 0 {
             Some(dimensions.end.0 as usize)
         } else {
-            None
+            // No dimension record (some writers omit it): count data rows in a quick read-only
+            // pass so every later step can show progress and an ETA.
+            let mut counter = workbook
+                .worksheet_cells_reader(&sheet)
+                .map_err(workbook_error)?;
+            let (mut rows, mut last) = (0usize, 0u32);
+            while let Some(cell) = counter.next_cell().map_err(workbook_error)? {
+                let (r, _) = cell.get_position();
+                if r > 0 && r != last && !cell_text(cell.get_value()).is_empty() {
+                    rows += 1;
+                    last = r;
+                }
+            }
+            Some(rows)
         };
+        let mut reader = workbook
+            .worksheet_cells_reader(&sheet)
+            .map_err(workbook_error)?;
         self.end(0, "done", Some(format!("First sheet: {sheet}")))?;
         self.begin(1, None)?;
         let mut headers = BTreeMap::<u32, String>::new();
@@ -650,23 +668,39 @@ impl Worker {
                 self.config.search_columns.join(", ")
             )));
         }
-        let configured: BTreeSet<&String> = self
+        // Alias groups (ECID/ECI, CID/Crescendo ID, name and website columns) count as present
+        // when any one of their names is present; report a group only when none is.
+        let groups: Vec<&Vec<String>> = vec![
+            &self.config.name_columns,
+            &self.config.website_columns,
+            &self.config.identifier_columns.ecid,
+            &self.config.identifier_columns.cid,
+            &self.config.identifier_columns.pbid,
+        ];
+        let satisfied: BTreeSet<String> = groups
+            .iter()
+            .filter(|group| group.iter().any(|c| present.contains(&normalize_header(c))))
+            .flat_map(|group| group.iter().map(|c| normalize_header(c)))
+            .collect();
+        let mut missing = self
             .config
             .metadata_columns
             .iter()
             .chain(&self.config.search_columns)
             .chain(&self.config.llm_description_columns)
-            .chain(&self.config.name_columns)
-            .chain(&self.config.website_columns)
-            .chain(&self.config.identifier_columns.ecid)
-            .chain(&self.config.identifier_columns.cid)
-            .chain(&self.config.identifier_columns.pbid)
-            .collect();
-        let missing = configured
-            .into_iter()
-            .filter(|s| !present.contains(&normalize_header(s)))
+            .filter(|c| {
+                let key = normalize_header(c);
+                !present.contains(&key) && !satisfied.contains(&key)
+            })
             .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
+        for group in groups {
+            if !group.iter().any(|c| present.contains(&normalize_header(c))) {
+                missing.push(group.join(" / "));
+            }
+        }
         if !missing.is_empty() {
             append_log(
                 &mut self.log,
