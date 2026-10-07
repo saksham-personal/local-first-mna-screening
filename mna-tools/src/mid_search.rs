@@ -364,20 +364,39 @@ pub fn search(store: &Store, arguments: &Value) -> Result<Value> {
         .join(",");
     // Hit sets hold only company ids and bm25; names are read for the returned rows only.
     let hits = store.with_connection(|c| {
+        // FTS first, then a row_no -> company map built once: joining the FTS table to
+        // mid_rows lets SQLite drive the join from mid_rows (one FTS query per row), which
+        // takes minutes on a 150k-row bundle.
+        let mut companies = std::collections::HashMap::new();
+        {
+            let mut statement =
+                c.prepare("SELECT row_no,company_id FROM mid_rows WHERE bundle_id=?")?;
+            let mut rows = statement.query(params![bundle.id])?;
+            while let Some(row) = rows.next()? {
+                companies.insert(row.get::<_, i64>(0)?, row.get::<_, String>(1)?);
+            }
+        }
         let mut hits = BTreeMap::new();
         for k in &args.keywords {
             let table = format!(
                 "mid_fts_{}{}",
-                if matches!(k.r#match, Match::Exact) { "exact_" } else { "" },
+                if matches!(k.r#match, Match::Exact) {
+                    "exact_"
+                } else {
+                    ""
+                },
                 bundle.fts
             );
             let query = format!("{{{}}} : {}", columns.join(" "), phrase(&k.text)?);
-            let sql = format!("SELECT m.company_id,bm25({table},{weights}) FROM {table} JOIN mid_rows m ON m.row_no={table}.rowid AND m.bundle_id=? WHERE {table} MATCH ?");
+            let sql =
+                format!("SELECT rowid,bm25({table},{weights}) FROM {table} WHERE {table} MATCH ?");
             let mut records = BTreeMap::new();
             let mut statement = c.prepare(&sql)?;
-            let mut rows = statement.query(params![bundle.id, query])?;
+            let mut rows = statement.query(params![query])?;
             while let Some(row) = rows.next()? {
-                records.insert(row.get::<_, String>(0)?, row.get::<_, f64>(1)?);
+                if let Some(company) = companies.get(&row.get::<_, i64>(0)?) {
+                    records.insert(company.clone(), row.get::<_, f64>(1)?);
+                }
             }
             hits.insert(k.id.clone(), records);
         }
