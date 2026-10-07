@@ -9,6 +9,7 @@ pub mod grid;
 pub mod identity;
 pub mod index_build;
 pub mod mid_config;
+pub mod mid_search;
 pub mod projection;
 pub mod prompts;
 pub mod protocol;

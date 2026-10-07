@@ -15,3 +15,33 @@ test('non-core exclusions stay deferred and text negation cannot bypass approved
   assert.deepEqual(discoveryQueries('Software that is not only used for claims'), ['software claims']);
   assert.throws(() => discoveryQueries('Exclude consulting'), /core business description/);
 });
+
+// @ts-expect-error The packet excludes the companion declaration file.
+import { midKeywordPlan as untypedMidKeywordPlan } from '../src/lib/discovery-query.mjs';
+const midKeywordPlan: (definition: string, exclusions?: string[]) => {
+  rationale: string; keywords: { id: string; text: string; weight: number; match: string }[]; expression: string;
+}[] = untypedMidKeywordPlan;
+
+test('MID planner creates deterministic broad Boolean groups with verbatim approved exclusions', () => {
+  const business = discoveryDefinition(exampleDefinition);
+  const plan = midKeywordPlan(exampleDefinition, business.exclusions);
+  assert.deepEqual(plan, midKeywordPlan(exampleDefinition, business.exclusions));
+  assert.ok(plan.length >= 2 && plan.length <= 4);
+  assert.match(plan[0].expression, /\) AND \(/);
+  assert.match(plan[0].expression, /AND NOT/);
+  assert.deepEqual(plan[0].keywords.filter(keyword => keyword.id.startsWith('x')).map(keyword => keyword.text), business.exclusions);
+  assert.ok(plan[0].keywords.some(keyword => keyword.text === 'insurance*'));
+  assert.ok(plan[0].keywords.some(keyword => keyword.text === 'software*'));
+  const phrases = plan[1].keywords.map(keyword => keyword.text);
+  for (const phrase of ['insurance policy', 'policy administration', 'claims management']) assert.ok(phrases.includes(phrase));
+  assert.ok(phrases.every(phrase => business.positive.toLowerCase().includes(phrase)));
+  assert.ok(plan.every(group => group.rationale.endsWith('.') && group.keywords.every(keyword => keyword.weight === 1 && keyword.match === 'stem')));
+});
+
+test('MID planner never invents exclusions and keeps deferred attributes out of keywords', () => {
+  const plan = midKeywordPlan('Claims software in US. Exclude consulting');
+  assert.ok(plan.every(group => !group.expression.includes('NOT')));
+  assert.ok(plan.flatMap(group => group.keywords).every(keyword => !/consulting|\bus\b/i.test(keyword.text)));
+  assert.equal(midKeywordPlan('Insurance')[1].keywords[0].text, 'insurance*');
+  assert.throws(() => midKeywordPlan('Exclude consulting'), /core business description/);
+});

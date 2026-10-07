@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { discoveryDefinition, discoveryQueries } from '../src/lib/discovery-query.mjs';
+import { discoveryDefinition, discoveryQueries, midKeywordPlan } from '../src/lib/discovery-query.mjs';
 export { qualitativeQuery } from '../src/lib/discovery-query.mjs';
 
 const MAX_SESSION_ID = 128;
@@ -248,7 +248,6 @@ export function createJobRegistry(options) {
       if (typeof created?.run_id !== "string" || !SAFE_ID.test(created.run_id))
         throw new Error("The Rust server did not return a valid screening ID.");
       runId = created.run_id;
-      await tool("import_company_files", { files: [seedFile], source: "MID" });
       await tool(
         "approve_screening_profile",
         {
@@ -268,36 +267,45 @@ export function createJobRegistry(options) {
         "This saved Rust run belongs to different approved screening criteria. Start a new run.",
       );
 
-    // Criteria may have been saved in this run before discovery started. The
-    // fixture import is idempotent and does not replace the run or its reviews.
-    if (input.backendRunId)
-      await tool("import_company_files", { files: [seedFile], source: "MID" });
-
+    const index = await tool("get_mid_index_status", {});
     const exclusions = Array.isArray(profile.content?.core_business_exclusions)
       ? profile.content.core_business_exclusions.filter(value => typeof value === 'string') : [];
-    for (const query of discoveryQueries(input.definition)) {
-      const found = await tool("search_mid", {
-        run_id: runId,
-        query,
-        mode: "lexical",
-        limit: 1000,
-        prefer_meilisearch: false,
-        ...(exclusions.length ? { filters: { exclude_keywords: exclusions } } : {}),
-      });
-      const rows = searchRows(found);
-      if (rows.length)
-        await tool("add_candidates", {
+    if (index.active != null) {
+      for (const group of midKeywordPlan(input.definition, exclusions)) {
+        await tool("search_mid", { run_id: runId, ...group, limit: 5000, add_to_run: true });
+      }
+      // The tool-result event preserves an honest skipped reason in the job ledger.
+      await tool("score_mid_semantic", { run_id: runId });
+    } else {
+      // Criteria may have been saved in this run before discovery started. The
+      // fixture import is idempotent and does not replace the run or its reviews.
+      await tool("import_company_files", { files: [seedFile], source: "MID" });
+
+      for (const query of discoveryQueries(input.definition)) {
+        const found = await tool("search_mid", {
           run_id: runId,
-          companies: rows.map((row) => ({
-            company_id: row.company.company_id,
-            ...(Number.isSafeInteger(row.rank) ? { rank: row.rank } : {}),
-            ...(typeof row.score === "number" && Number.isFinite(row.score)
-              ? { retrieval_score: row.score }
-              : {}),
-          })),
-          discovery_source: "MID",
-          query_id: typeof found.query_id === "string" ? found.query_id : null,
+          query,
+          mode: "lexical",
+          limit: 1000,
+          prefer_meilisearch: false,
+          ...(exclusions.length ? { filters: { exclude_keywords: exclusions } } : {}),
         });
+        const rows = searchRows(found);
+        if (rows.length)
+          await tool("add_candidates", {
+            run_id: runId,
+            companies: rows.map((row) => ({
+              company_id: row.company.company_id,
+              ...(Number.isSafeInteger(row.rank) ? { rank: row.rank } : {}),
+              ...(typeof row.score === "number" && Number.isFinite(row.score)
+                ? { retrieval_score: row.score }
+                : {}),
+            })),
+            discovery_source: "MID",
+            query_id: typeof found.query_id === "string" ? found.query_id : null,
+          });
+      }
+
     }
 
     const savedRows = new Map();
