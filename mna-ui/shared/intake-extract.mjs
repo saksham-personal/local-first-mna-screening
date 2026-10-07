@@ -1,13 +1,4 @@
-const INDUSTRIES = [
-  "Technology, Media, & Telecommunications",
-  "Consumer/Retail",
-  "Diversified",
-  "Financial Institutions Group",
-  "Energy/Power & Renewables/Mining",
-  "Healthcare",
-  "Unassigned Industry",
-];
-const SECTORS = {
+export const INDUSTRY_SECTORS = {
   "Technology, Media, & Telecommunications": ["Technology", "Media", "Communications"],
   "Consumer/Retail": ["Retail Industries", "Consumer", "C&R Business Services", "Business Services"],
   Diversified: ["Aerospace & Defense", "Automotive", "Basic Materials", "Capital Goods & Other", "Chemicals", "Metals", "Transportation"],
@@ -16,15 +7,17 @@ const SECTORS = {
   Healthcare: ["Biotech/Pharma", "Healthcare Services", "Life Science tools & diagnostics", "Medical Devices", "Pharmaceuticals"],
   "Unassigned Industry": ["Unassigned Industry"],
 };
-const REQUEST_TYPES = [
+
+const INDUSTRIES = Object.keys(INDUSTRY_SECTORS);
+export const REQUEST_TYPES = [
   "New Platform (Sponsor / Family Office)",
   "Add-on (Sponsor / Family Office)",
   "Acquisitive Strategic Client (non-Sponsor)",
   "General Industry Screen",
 ];
-const SIZE_OPTIONS = ["$0 - 50MM", "$50MM - 100MM", "$100MM - 250MM", "$250MM - 500MM", "$500MM+"];
-const OWNERSHIP_OPTIONS = ["Non-sponsor owned / Family or founder owned", "Sponsor owned", "VC-backed"];
-const GEOGRAPHY_OPTIONS = ["US - All regions", "Canada"];
+export const SIZE_OPTIONS = ["$0 - 50MM", "$50MM - 100MM", "$100MM - 250MM", "$250MM - 500MM", "$500MM+"];
+export const OWNERSHIP_OPTIONS = ["Non-sponsor owned / Family or founder owned", "Sponsor owned", "VC-backed"];
+export const GEOGRAPHY_OPTIONS = ["US - All regions", "Canada"];
 
 const labels = [
   { label: "Submitter name", key: "submitterName", kind: "text" },
@@ -60,10 +53,19 @@ function matchOptions(value, options) {
   return options.filter((option) => haystack.includes(normalized(option)));
 }
 
+function validDate(yearValue, month, day) {
+  const year = Number(yearValue);
+  if (!Number.isInteger(year) || year < 1 || year > 9999 || month < 1 || month > 12 || day < 1) return "";
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (day > daysInMonth) return "";
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function dateValue(value) {
   const trimmed = value.trim();
   const iso = trimmed.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  if (iso) return validDate(iso[1], Number(iso[2]), Number(iso[3]));
   const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
   const match = trimmed.match(/\b(\d{1,2})\s+([a-z]{3,9})\.?[,]?\s+(\d{4})\b/i)
     ?? trimmed.match(/\b([a-z]{3,9})\.?\s+(\d{1,2})[,]?\s+(\d{4})\b/i);
@@ -72,13 +74,53 @@ function dateValue(value) {
   const day = Number(dayFirst ? match[1] : match[2]);
   const monthText = (dayFirst ? match[2] : match[1]).toLocaleLowerCase();
   const month = monthNames.findIndex((name) => monthText.startsWith(name)) + 1;
-  const year = match[3];
-  if (!month || day < 1 || day > 31) return "";
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return validDate(match[3], month, day);
 }
 
 function customValues(value) {
   return value.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function labelExpression(field) {
+  const pattern = field.label.split(/\s+/).map(escapeRegExp).join("[\\t \\r\\n]+");
+  return new RegExp(`(?<![A-Za-z0-9_])(${pattern})(?![A-Za-z0-9_])`, "gi");
+}
+
+function hasShortLabelBoundary(text, start, end) {
+  const followingSpaces = text.slice(end).match(/^[\t ]*/)?.[0].length ?? 0;
+  const after = text.slice(end + followingSpaces);
+  const followedByColonOrLineBreak = after.startsWith(":") || /^(?:\r?\n)/.test(after);
+  const precededByLineBreak = /(?:\r?\n)[\t ]*$/.test(text.slice(0, start));
+  return followedByColonOrLineBreak || precededByLineBreak;
+}
+
+function labelOccurrences(text) {
+  const candidates = [];
+  const orderedLabels = [...labels].sort((left, right) => right.label.length - left.label.length);
+  for (const field of orderedLabels) {
+    const expression = labelExpression(field);
+    for (const match of text.matchAll(expression)) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if ((field.key === "industry" || field.key === "sector") && !hasShortLabelBoundary(text, start, end)) continue;
+
+      let valueStart = end;
+      while (/[\t ]/.test(text[valueStart] ?? "")) valueStart += 1;
+      if (text[valueStart] === ":") valueStart += 1;
+      while (/\s/.test(text[valueStart] ?? "")) valueStart += 1;
+      candidates.push({ field, start, end, valueStart });
+    }
+  }
+  candidates.sort((left, right) => left.start - right.start || right.end - left.end);
+  const occurrences = [];
+  let consumedUntil = -1;
+  for (const candidate of candidates) {
+    // Longest labels win when one label overlaps another (notably Sub-sector/Sector).
+    if (candidate.start < consumedUntil) continue;
+    occurrences.push(candidate);
+    consumedUntil = candidate.end;
+  }
+  return occurrences;
 }
 
 /**
@@ -88,16 +130,7 @@ function customValues(value) {
 export function extractIntakeFieldsFromText(text) {
   if (typeof text !== "string" || !text.trim()) return { fields: {}, matched: [] };
   try {
-    const occurrences = [];
-    for (const field of labels) {
-      const pattern = field.label.split(/\s+/).map(escapeRegExp).join("\\s+");
-      const expression = new RegExp(`^([\\t ]*)(${pattern})[\\t ]*:?\\s*`, "gimu");
-      for (const match of text.matchAll(expression)) {
-        const labelStart = match.index + match[1].length;
-        occurrences.push({ field, start: labelStart, valueStart: match.index + match[0].length });
-      }
-    }
-    occurrences.sort((left, right) => left.start - right.start);
+    const occurrences = labelOccurrences(text);
     if (!occurrences.length) return { fields: {}, matched: [] };
 
     const fields = {};
@@ -114,11 +147,18 @@ export function extractIntakeFieldsFromText(text) {
       else if (kind === "industry") fields[key] = matchOption(value, INDUSTRIES) ?? "";
       else if (kind === "sector") {
         const industry = fields.industry;
-        fields[key] = matchOption(value, industry ? (SECTORS[industry] ?? []) : Object.values(SECTORS).flat()) ?? "";
-      } else if (kind === "size") fields[key] = matchOptions(value, SIZE_OPTIONS).length ? matchOptions(value, SIZE_OPTIONS) : customValues(value);
-      else if (kind === "ownership") fields[key] = matchOptions(value, OWNERSHIP_OPTIONS).length ? matchOptions(value, OWNERSHIP_OPTIONS) : customValues(value);
-      else if (kind === "geography") fields[key] = matchOptions(value, GEOGRAPHY_OPTIONS).length ? matchOptions(value, GEOGRAPHY_OPTIONS) : customValues(value);
-      else if (kind === "execs") {
+        const sectorOptions = industry ? INDUSTRY_SECTORS[industry] ?? [] : Object.values(INDUSTRY_SECTORS).flat();
+        fields[key] = matchOption(value, sectorOptions) ?? "";
+      } else if (kind === "size") {
+        const matchedOptions = matchOptions(value, SIZE_OPTIONS);
+        fields[key] = matchedOptions.length ? matchedOptions : customValues(value);
+      } else if (kind === "ownership") {
+        const matchedOptions = matchOptions(value, OWNERSHIP_OPTIONS);
+        fields[key] = matchedOptions.length ? matchedOptions : customValues(value);
+      } else if (kind === "geography") {
+        const matchedOptions = matchOptions(value, GEOGRAPHY_OPTIONS);
+        fields[key] = matchedOptions.length ? matchedOptions : customValues(value);
+      } else if (kind === "execs") {
         const sameAsSubmitter = /\bsame as submitter\b/i.test(value);
         fields[key] = sameAsSubmitter ? "" : value;
         if (sameAsSubmitter) fields.sameAsSubmitter = true;

@@ -15,6 +15,12 @@ export type ExtractedIntakeFields = {
   geographyFocus?: string[];
 };
 
+export const INDUSTRY_SECTORS: Record<string, string[]>;
+export const REQUEST_TYPES: string[];
+export const SIZE_OPTIONS: string[];
+export const OWNERSHIP_OPTIONS: string[];
+export const GEOGRAPHY_OPTIONS: string[];
+
 export function extractIntakeFieldsFromText(text: string): {
   fields: ExtractedIntakeFields;
   matched: string[];

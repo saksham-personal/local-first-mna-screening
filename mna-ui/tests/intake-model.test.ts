@@ -151,6 +151,29 @@ US - All regions, Canada
   assert.deepEqual(extractIntakeFieldsFromText("An unrelated document").fields, {});
 });
 
+test("the printed form extractor handles a flat single-line document without matching labels in prose", () => {
+  const text = "Submitter name: Casey Morgan Due date: 25 Sep 2026 Senior client exec(s): Same as submitter Request type: General Industry Screen Industry: Diversified Sector: Basic Materials Sub-sector: Building products Investment thesis: We seek businesses that source lumber and serve residential construction Relevant products/services: Engineered wood Focus on any specific end-markets: Residential construction General size parameters: $100MM - 250MM, $500MM+ Ownership preference: Sponsor owned Geography focus: US - All regions, Canada";
+  const result = extractIntakeFieldsFromText(text);
+
+  assert.equal(result.fields.submitterName, "Casey Morgan");
+  assert.equal(result.fields.dueDate, "2026-09-25");
+  assert.equal(result.fields.sameAsSubmitter, true);
+  assert.equal(result.fields.requestType, "General Industry Screen");
+  assert.equal(result.fields.industry, "Diversified");
+  assert.equal(result.fields.sector, "Basic Materials");
+  assert.equal(result.fields.subSector, "Building products");
+  assert.equal(result.fields.investmentThesis, "We seek businesses that source lumber and serve residential construction");
+  assert.deepEqual(result.fields.sizeParameters, ["$100MM - 250MM", "$500MM+"]);
+  assert.deepEqual(result.fields.geographyFocus, ["US - All regions", "Canada"]);
+  assert.equal(result.matched.length, 13);
+  assert.deepEqual(extractIntakeFieldsFromText("The industry has changed and its sector is growing.").matched, []);
+});
+
+test("the printed form extractor rejects impossible calendar dates", () => {
+  const result = extractIntakeFieldsFromText("Due date: 31 Feb 2026");
+  assert.equal(result.fields.dueDate, "");
+});
+
 test("characterCount counts without imposing a maximum", () => {
   assert.equal(characterCount("a".repeat(100_001)), 100_001);
 });

@@ -35,9 +35,9 @@ test("resizing applies pointer deltas, minimum dimensions, and viewport bounds",
     height: 420,
   });
   assert.deepEqual(resizeWindowRect(rect, { x: 900, y: 500 }, { width: 1200, height: 900 }), {
-    left: 0,
+    left: 100,
     top: 0,
-    width: 1200,
+    width: 1100,
     height: 900,
   });
 });

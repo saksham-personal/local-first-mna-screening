@@ -1,9 +1,9 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { Dialog } from "radix-ui";
 import { Plus, X } from "lucide-react";
 import { GEOGRAPHY_OPTIONS, INDUSTRY_SECTORS, OWNERSHIP_OPTIONS, REQUEST_TYPES, SIZE_OPTIONS } from "./intake-options";
-import { characterCount, emptyIntake, normalizeIntake, sectorsFor, type IntakeForm as IntakeFormData } from "./intake-model";
+import { characterCount, normalizeIntake, sectorsFor, type IntakeForm as IntakeFormData } from "./intake-model";
 import SelectField from "../ui/SelectField";
 import HelpTip from "../ui/HelpTip";
 import "./intake.css";
@@ -88,7 +88,7 @@ function ChipMultiSelect({
       {!options.length && <span className="if-empty-choice">No options selected.</span>}
     </div>
     <div className="if-add-custom">
-      <input aria-label={`Add custom ${label.toLocaleLowerCase()}`} value={custom} onChange={(event) => setCustom(event.target.value)} onKeyDown={handleKeyDown} placeholder="Add custom" />
+      <input aria-label={`Custom ${label.toLocaleLowerCase()} value`} value={custom} onChange={(event) => setCustom(event.target.value)} onKeyDown={handleKeyDown} placeholder="Add custom" />
       <button type="button" onClick={addCustom} disabled={!custom.trim()} aria-label={`Add custom ${label.toLocaleLowerCase()}`}><Plus size={15} /> Add</button>
     </div>
   </fieldset>;
@@ -97,13 +97,15 @@ function ChipMultiSelect({
 export default function IntakeForm({ open, initial, sourceFileName, onViewDocument, onCancel, onSubmit, busy = false }: Props) {
   const headingId = useId();
   const descriptionId = useId();
-  const [form, setForm] = useState<IntakeFormData>(() => emptyIntake());
+  const [form, setForm] = useState<IntakeFormData>(() => normalizeIntake(initial));
+  const wasOpen = useRef(open);
   const sectors = sectorsFor(form.industry);
   const hasSearchDefinition = Boolean(form.investmentThesis.trim() || form.productsServices.trim());
 
-  useEffect(() => {
+  if (open !== wasOpen.current) {
+    wasOpen.current = open;
     if (open) setForm(normalizeIntake(initial));
-  }, [open, initial]);
+  }
 
   const update = <K extends keyof IntakeFormData>(key: K, value: IntakeFormData[K]) => {
     setForm((current) => {
