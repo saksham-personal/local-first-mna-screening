@@ -164,3 +164,14 @@
   .ct-main:has(.br-host) .ct-view-switch > button { width: 28px; gap: 0; font-size: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .br-dock-mark.is-running { animation: none; } .br-progress > span { transition: none; } }
+.br-index { border-left: 3px solid var(--info); padding-left: 10px; margin-top: 8px; }
+.br-index-open { border: 0; background: transparent; text-align: left; padding: 0; font: inherit; cursor: pointer; }
+.br-index-open:focus-visible { outline: 2px solid var(--info); outline-offset: 3px; }
+.br-index-open:hover strong { text-decoration: underline; }
+.br-index .index-progress { margin-top: 5px; height: 5px; }
+.br-index-steps { display: flex; gap: 8px; list-style: none; padding: 0; margin: 10px 0 0; }
+.br-index-steps li { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-muted); }
+.br-index-steps .br-index-step-done { background: var(--success); border-color: var(--success); }
+.br-index-steps .br-index-step-running { background: var(--info); border-color: var(--info); }
+.br-index-steps .br-index-step-skipped { background: var(--text-muted); border-color: var(--text-muted); }
+.br-index-steps .br-index-step-failed { background: var(--danger); border-color: var(--danger); }

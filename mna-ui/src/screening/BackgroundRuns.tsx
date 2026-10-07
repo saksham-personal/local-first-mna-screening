@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef } from "react";
 import { ArrowRight, Check, ChevronDown, ChevronUp, CircleAlert, Clock3, Pause, Play, RotateCcw, Square, X } from "lucide-react";
 import { formatDateTime, formatTime, plural } from "../lib/format";
+import type { IndexBuild } from "../index/index-build-client";
+import { buildEtaText, isActiveBuild, overallPercent, stepPresentation } from "../index/index-build-state";
+import { IndexProgressBar } from "../index/BuildIndexDialog";
 import "./background-runs.css";
 
 export type BackgroundRunView = {
@@ -34,6 +37,9 @@ export type SearchRunView = {
 };
 
 type Props = {
+  indexBuilds?: IndexBuild[];
+  onOpenIndex?: (id: string) => void;
+  onDismissIndex?: (id: string) => void;
   jobs: BackgroundRunView[];
   searches?: SearchRunView[];
   /** Whether the dock shows its run list. The header Activity button drives this. */
@@ -68,9 +74,9 @@ function percent(job: BackgroundRunView) {
   return job.total > 0 ? Math.max(0, Math.min(100, (job.completed / job.total) * 100)) : 0;
 }
 
-export default function BackgroundRuns({ jobs, searches = [], expanded, onExpandedChange, layoutKey, onAction, onDismiss, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
+export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismissIndex, jobs, searches = [], expanded, onExpandedChange, layoutKey, onAction, onDismiss, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const items = searches.length + jobs.length;
+  const items = indexBuilds.length + searches.length + jobs.length;
   const visible = items > 0 || expanded;
   useLayoutEffect(() => {
     const host = hostRef.current, main = host?.parentElement;
@@ -98,9 +104,9 @@ export default function BackgroundRuns({ jobs, searches = [], expanded, onExpand
     const observer = new ResizeObserver(measure);
     [main, header, sideChatHeader, composer, toggle].forEach(element => { if (element) observer.observe(element); });
     return () => observer.disconnect();
-  }, [jobs, searches, expanded, visible, layoutKey]);
+  }, [indexBuilds, jobs, searches, expanded, visible, layoutKey]);
   if (!visible) return null;
-  const activeCount = jobs.filter((job) => job.state === "running" || job.state === "queued").length + searches.filter((search) => search.state === "running").length;
+  const activeCount = indexBuilds.filter(isActiveBuild).length + jobs.filter((job) => job.state === "running" || job.state === "queued").length + searches.filter((search) => search.state === "running").length;
   const totalBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.total), 0);
   const completedBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.completed), 0);
   const aggregatePercent = totalBatches > 0 ? Math.min(100, (completedBatches / totalBatches) * 100) : 0;
@@ -128,6 +134,15 @@ export default function BackgroundRuns({ jobs, searches = [], expanded, onExpand
       {expanded && (
         <div className="br-dock-details" id="activity-details">
           {items === 0 && <p className="br-empty">Searches and screening runs show up here while they work.</p>}
+          {indexBuilds.length > 0 && <section className="br-group" aria-label="Index builds">
+            <h3 className="br-group-title">Index builds<span>{indexBuilds.length}</span></h3>
+            {indexBuilds.map(build => <section className="br-run br-index" key={build.build_id}>
+              <div className="br-run-heading"><button type="button" className="br-index-open br-run-copy" onClick={() => onOpenIndex?.(build.build_id)}><strong>{build.bundle.name}</strong><span>Index build · {isActiveBuild(build) ? build.steps.find(step => step.id === build.current_step)?.label ?? "Starting" : build.status}</span></button>{!isActiveBuild(build) && <button type="button" className="br-icon-button" aria-label={`Dismiss ${build.bundle.name}`} onClick={() => onDismissIndex?.(build.build_id)}><X size={15} /></button>}</div>
+              <div className="br-progress-label"><span>{isActiveBuild(build) ? buildEtaText(build) : build.status === "succeeded" ? plural(build.bundle.row_count, "company", "companies") : "Build stopped"}</span><span>{overallPercent(build.steps)}%</span></div>
+              <IndexProgressBar value={overallPercent(build.steps)} label={`${build.bundle.name} progress`} />
+              <ol className="br-index-steps" aria-label="Build steps">{build.steps.map(step => <li key={step.id} className={`br-index-step-${step.status}`} title={`${step.label}: ${stepPresentation(step.status).label}`} aria-label={`${step.label}: ${stepPresentation(step.status).label}`} />)}</ol>
+            </section>)}
+          </section>}
           {searches.length > 0 && (
             <section className="br-group" aria-label="Searches">
               <h3 className="br-group-title">Searches<span>{searches.length}</span></h3>

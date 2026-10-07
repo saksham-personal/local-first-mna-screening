@@ -26,3 +26,12 @@ test("dedupe keys bind content to the session and purpose without delimiter coll
   assert.notEqual(dedupeKey("s", "chat", "abc"), dedupeKey("s", "chat", "def"));
   assert.notEqual(dedupeKey("s:chat", "chat", "abc"), dedupeKey("s", "chat:chat", "abc"));
 });
+
+test("MID workbook drops accept exactly one XLSX", () => {
+  assert.equal(routeDrop("mid_index"), "mid_index");
+  assert.deepEqual(allowedExtensions("mid_index"), [".xlsx"]);
+  validateDropFiles([{ name: "MID.XLSX" }], "mid_index");
+  assert.throws(() => validateDropFiles([{ name: "MID.csv" }], "mid_index"), /MID workbook accepts .xlsx/);
+  assert.throws(() => validateDropFiles([], "mid_index"), /Choose one/);
+  assert.throws(() => validateDropFiles([{ name: "one.xlsx" }, { name: "two.xlsx" }], "mid_index"), /Choose one/);
+});
