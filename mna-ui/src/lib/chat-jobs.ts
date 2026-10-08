@@ -201,7 +201,7 @@ function finishJob(
         counts,
         backendRunId: job.result.backendRunId,
         note: current
-          ? "Saved fictional MID results. ISCC is not connected. MID and ISCC scores stay separate."
+          ? (job.result as { indexed?: boolean }).indexed ? "Saved MID results from the built MID index. MID and ISCC scores stay separate." : "Saved fictional example MID results (no MID index is built yet). MID and ISCC scores stay separate."
           : "These results use earlier criteria. Review and approve the current criteria before continuing.",
       },
       context?.turnId,

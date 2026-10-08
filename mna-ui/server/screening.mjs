@@ -115,7 +115,8 @@ export function createScreeningPreparation({ call, now = () => Date.now() }) {
     let total;
     let bytes = 0;
     let size = 100;
-    do {
+    let more = true; // `continue` inside do…while would test `cursor` and quit on the first page
+    while (more) {
       let page;
       try {
         page = await traced("get_candidate_source_data", {
@@ -160,7 +161,8 @@ export function createScreeningPreparation({ call, now = () => Date.now() }) {
       if (next && (next === cursor || !page.rows.length))
         throw new Error("The source reader did not advance its cursor.");
       cursor = next;
-    } while (cursor);
+      more = Boolean(cursor);
+    }
     if (rows.length !== (total ?? 0))
       throw new Error(
         "The source reader did not return the full company set. Refresh and try again.",

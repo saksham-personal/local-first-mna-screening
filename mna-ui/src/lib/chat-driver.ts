@@ -485,7 +485,7 @@ export function createChatAdapter(
           await flushCriteriaDraft(sessionId);
           content.push({
             type: "text",
-            text: "This example searches fictional MID data. Review and approve the criteria before discovery. ISCC and model services are disconnected.",
+            text: "This example loads sample criteria. Review and approve them before discovery; discovery uses the built MID index, or fictional sample data when no index is built.",
           });
         } else if (
           /^\/export$|^(?:show|open)(?: the)? session log$/i.test(text)

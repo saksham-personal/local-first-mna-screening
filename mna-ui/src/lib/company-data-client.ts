@@ -10,7 +10,8 @@ export async function readCompanySources(sessionId: string, runId: string): Prom
   let cursor: string | undefined;
   let size = 100;
   let total: number | undefined;
-  do {
+  let more = true; // `continue` inside do…while would test `cursor` and quit on the first page
+  while (more) {
     const args: ToolResult = { run_id: runId, include_hidden: true, limit: size, ...(cursor ? { after_company_id: cursor } : {}) };
     const receipt = sessionStore.startTool("get_candidate_source_data", args, { sessionId, title: "Read company sources" });
     let page: ToolResult;
@@ -29,7 +30,8 @@ export async function readCompanySources(sessionId: string, runId: string): Prom
     const next = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
     if (next && (next === cursor || !page.rows.length)) throw new Error("Company source paging did not advance.");
     cursor = next;
-  } while (cursor);
+    more = Boolean(cursor);
+  }
   if (rows.length !== total) throw new Error("The company list changed while reading data. Try again.");
   return rows;
 }

@@ -210,3 +210,25 @@ test("company reload failures can retry, and criteria edits discard an in-flight
     if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage); else Reflect.deleteProperty(globalThis, "localStorage");
   }
 });
+
+test("company restore retries an oversized FIRST page at a smaller size instead of stopping", async () => {
+  const { readRunCompanies } = await import("../src/lib/company-mapper");
+  const prior = globalThis.fetch;
+  const ids = ["A1", "A2", "A3"];
+  const limits: number[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const { arguments: args } = JSON.parse(String(init?.body));
+    limits.push(args.limit);
+    if (args.limit > 1000) return Response.json({ ok: false, error: "screening grid page exceeds 2 MB; retry with a smaller limit" }, { status: 400 });
+    const start = args.after_company_id ? ids.indexOf(args.after_company_id) + 1 : 0;
+    const rows = ids.slice(start, start + 2).map(company_id => ({ company_id, name: company_id, considered: true, source: "MID", company_payload: { name: company_id, mid_source_row: { "Company Name": company_id } } }));
+    const next = start + 2 < ids.length ? rows.at(-1)!.company_id : null;
+    return Response.json({ ok: true, result: { rows, total: ids.length, considered_count: ids.length, source_hash: "h", selection_revision: 1, criteria_revision: null, next_cursor: next } });
+  };
+  try {
+    const companies = await readRunCompanies("RUN-X");
+    assert.deepEqual(companies.map(company => company.pk), ids);
+    assert.equal(limits[0], 2000);
+    assert.equal(limits[1], 1000);
+  } finally { globalThis.fetch = prior; }
+});

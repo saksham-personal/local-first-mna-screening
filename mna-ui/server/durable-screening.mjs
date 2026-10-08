@@ -62,7 +62,8 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
     if (!id) return { rows: [], catalog: buildCatalog([]) };
     const rows = [];
     let cursor, total, size = 100, bytes = 0;
-    do {
+    let more = true; // `continue` inside do…while would test `cursor` and quit on the first page
+    while (more) {
       let page;
       try {
         page = await traced("get_candidate_source_data", {
@@ -93,7 +94,8 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
       if (next && (next === cursor || !page.rows.length))
         throw new Error("The source reader did not advance its cursor.");
       cursor = next;
-    } while (cursor);
+      more = Boolean(cursor);
+    }
     if (rows.length !== (total ?? 0))
       throw new Error("The source reader did not return the full company set. Refresh and try again.");
     return { rows, catalog: buildCatalog(rows) };

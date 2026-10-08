@@ -38,7 +38,8 @@ export async function readRunCompanies(runId: string): Promise<Company[]> {
   const companies: Company[] = [];
   let cursor: string | undefined, signature: string | undefined, total: number | undefined;
   let limit = 2000;
-  do {
+  let more = true; // `continue` inside do…while would test `cursor` and quit on the first page
+  while (more) {
     let page: ToolResult;
     try {
       page = await callTool("get_screening_grid", { run_id: runId, include_hidden: true, include_company_payload: true, limit, ...(cursor ? { after_company_id: cursor } : {}) });
@@ -58,7 +59,8 @@ export async function readRunCompanies(runId: string): Promise<Company[]> {
     const next = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
     if (next && (!page.rows.length || next !== companies.at(-1)?.pk || next === cursor)) throw new Error("Company grid paging did not advance.");
     cursor = next;
-  } while (cursor);
+    more = Boolean(cursor);
+  }
   if (companies.length !== total) throw new Error("The company list changed while loading. Try again.");
   return companies;
 }

@@ -466,7 +466,7 @@ export function createJobRegistry(options) {
         step: "company-list-ready",
       },
     });
-    return { backendRunId: runId, companies, counts };
+    return { backendRunId: runId, companies, counts, indexed: index.active != null };
   }
 
   function create(value) {
