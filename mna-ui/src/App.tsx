@@ -63,8 +63,7 @@ import {
   getChatState,
   patchArtifact,
   saveArtifact,
-  useChatState,
-} from "./lib/chat-store";
+  useChatState, restoreChatCompanies } from "./lib/chat-store";
 import { reviseCriteria, addResearchToCriteria } from "./lib/chat-driver";
 import {
   getJob,
@@ -421,6 +420,11 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   const snapshot = useSessionSnapshot();
   const session = snapshot.sessions.find((s) => s.id === snapshot.activeId)!;
   const state = useChatState(session.id);
+  // Large runs keep companies in the local service, not in browser storage; rebuild them
+  // for the open session only.
+  useEffect(() => {
+    if (state.companiesTrimmed && state.backendRunId && !state.companiesLoading) void restoreChatCompanies(session.id);
+  }, [session.id, state.companiesTrimmed, state.backendRunId, state.companiesLoading]);
   const [pitchBookReview, setPitchBookReview] = useState<{ sessionId: string; report: EnrichmentReport } | null>(null);
   useEffect(() => {
     const review = (event: Event) => {
@@ -1232,7 +1236,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
                 {job?.state === "running"
                   ? "Searching companies"
                   : approved(state)
-                    ? `${plural(consideredCompanies(state).length, "company", "companies")} · criteria approved`
+                    ? `${plural(state.companiesTrimmed || state.companiesLoading ? state.counts.midOnly + state.counts.isccOnly + state.counts.both : consideredCompanies(state).length, "company", "companies")} · criteria approved`
                     : state.criteriaText
                       ? "Review criteria before searching"
                       : "Ready when you are"}

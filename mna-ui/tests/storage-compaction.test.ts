@@ -122,7 +122,7 @@ test("5,000-company state uses under 300 KB and all keys under 2 MB; reload page
     return Response.json({ ok: true, result });
   };
   try {
-    assert.equal(getChatState(id).companiesLoading, true);
+    assert.equal(getChatState(id).companiesTrimmed, true); // restore is started by the app for the open session
     await restoreChatCompanies(id);
     assert.equal(pages, 3); assert.equal(getChatState(id).companiesLoadError, undefined);
     assert.deepEqual(getChatState(id).companies, companies);

@@ -53,17 +53,15 @@ export function restoreChatCompanies(id: string): Promise<void> {
     if (latest.backendRunId !== runId || latest.revision !== revision) return;
     const considered = companies.filter(company => company.considered !== false);
     const counts = { midOnly: considered.filter(company => company.source === "MID").length, isccOnly: considered.filter(company => company.source === "ISCC").length, both: considered.filter(company => company.source === "both").length };
-    updateChatState(id, { companies, companiesTrimmed: false, counts,
+    updateChatState(id, { companies, companiesTrimmed: false, counts, companiesLoading: false,
       artifacts: latest.artifacts.map(artifact => artifact.type === "companies" && artifact.backendRunId === runId && artifact.dataTrimmed
         ? { ...artifact, companies, counts, dataTrimmed: false } : artifact),
     });
     // The grid payload uses the discovery mapper, including PB/ROGO and raw
     // MID fields. Restore review metadata separately without remapping those
-    // companies through the source-table display projection.
+    // companies; the companies stay usable if this refresh fails.
     const { refreshShortlist } = await import("./review-client");
-    await refreshShortlist(id, runId);
-    if (getChatState(id).backendRunId === runId && getChatState(id).revision === revision)
-      updateChatState(id, { companiesLoading: false });
+    await refreshShortlist(id, runId).catch(error => console.warn(`Shortlist refresh after restore failed: ${String(error?.message ?? error)}`));
   }).catch(error => {
     const latest = getChatState(id);
     if (latest.backendRunId === runId && latest.revision === revision)
@@ -407,11 +405,8 @@ export function getChatState(id: string): ChatState {
     writeCompact(id, key(id), compactChatState(state), compactChatState(state, true));
     mirrorWorkspace(state);
   }
-  if (state.companiesTrimmed && state.backendRunId) {
-    state = { ...state, companiesLoading: true };
-    states.set(id, state);
-    queueMicrotask(() => { void restoreChatCompanies(id); });
-  }
+  // Companies are rebuilt for the session the analyst opens (App calls
+  // restoreChatCompanies for the active session), not for every session in the sidebar.
   return state;
 }
 export function updateChatState(
