@@ -858,12 +858,22 @@ impl ColumnModel {
             };
             model.derived(id, "identity", "text", &[path], true, false);
         }
+        // One combined Description column: the cell shows the first description and its
+        // tooltip lists every MID/ISCC description field (from get_grid_descriptions).
+        model.derived(
+            "Description",
+            "identity",
+            "text",
+            &["description"],
+            true,
+            true,
+        );
         model.derived(
             "company_id",
             "identity",
             "text",
             &["company_id"],
-            true,
+            false,
             false,
         );
         let mid_scores = match view {

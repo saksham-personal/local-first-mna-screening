@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { descriptionPreview, descriptionSections, withDescriptionValues } from "../src/workspace/description-content";
+import { combinedDescriptionText, descriptionPreview, descriptionSections, withDescriptionValues } from "../src/workspace/description-content";
 import type { GridCatalogColumn, GridCompany, GridDescription } from "../src/lib/grid-client";
 import { catalogColumnSpecs } from "../src/workspace/company-catalog";
 import { filterRows } from "../src/grid/grid-filter";
@@ -37,4 +37,14 @@ test("cached page descriptions participate in filters without replacing column d
   assert.deepEqual(original.values, { Company: "One" });
   const missing = withDescriptionValues(original, catalog, { company_id: "one", sources: [mid] });
   assert.equal(missing.values?.[catalog[0].id], null);
+});
+
+test("combined Description column previews the first description and filters on all of them", () => {
+  const description = { company_id: "C1", sources: [
+    { source: "MID" as const, items: [{ label: "Company Description", text: "Claims software" }, { label: "Offerings", text: "claims, billing" }] },
+    { source: "ISCC" as const, items: [{ label: "Company Description", text: "Insurance claims platform" }] },
+  ] };
+  assert.equal(descriptionPreview(description, "Description", "derived"), "Claims software");
+  assert.equal(combinedDescriptionText(description), "Claims software · claims, billing · Insurance claims platform");
+  assert.equal(combinedDescriptionText({ company_id: "C2", sources: [] }), undefined);
 });
