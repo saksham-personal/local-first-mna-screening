@@ -246,7 +246,7 @@ fn grid_v2_projects_keywords_semantic_iscc_rounds_aliases_and_simulation() {
     let page = data
         .execute(
             "get_screening_grid",
-            &json!({"run_id":"R","include_hidden":true,"limit":2000}),
+            &json!({"run_id":"R","include_hidden":true,"limit":1000}),
         )
         .unwrap();
     let company = page["rows"]
