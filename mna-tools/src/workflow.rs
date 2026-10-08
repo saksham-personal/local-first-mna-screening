@@ -597,24 +597,96 @@ impl WorkflowService {
         if step.kind != ActionKind::BingResearch {
             return Err(Error::Validation("Step must be bing_research".into()));
         }
-        let ids = self.scope(&step, &args.company_ids, 100)?;
-        let mut queries = Vec::new();
-        let placeholders =
-            regex::Regex::new(r"(?i)\{company\}|\{website\}|<company>").expect("constant regex");
-        for id in ids {
-            let company = self.hydrated_company(&args.run_id, &id)?["company"].clone();
-            let name = preferred(&company, "PB_Name", "name");
-            let website = preferred(&company, "PB_Website", "website");
+        if args.company_ids.is_empty() || args.company_ids.len() > 500 {
+            return Err(Error::Validation(
+                "company_ids requires 1..=500 entries".into(),
+            ));
+        }
+        let approved: HashSet<&str> = step.company_ids.iter().map(String::as_str).collect();
+        let ids = if args
+            .company_ids
+            .iter()
+            .all(|id| approved.contains(id.as_str()))
+        {
+            args.company_ids.clone()
+        } else {
+            // Preserve typed/alias identity bridges without resolving the entire
+            // approved scope once for every requested company.
+            let approved = step
+                .company_ids
+                .iter()
+                .map(|id| self.store.resolve_company_id(id))
+                .collect::<Result<HashSet<_>>>()?;
+            let ids = args
+                .company_ids
+                .iter()
+                .map(|id| self.store.resolve_company_id(id))
+                .collect::<Result<Vec<_>>>()?;
+            if ids.iter().any(|id| !approved.contains(id)) {
+                return Err(Error::Validation(
+                    "Company is outside the approved step".into(),
+                ));
+            }
+            ids
+        };
+        // Bing only needs name and website. Hydrating evidence and assessments for
+        // every company made a single batch perform hundreds of redundant reads.
+        let identities = self.store.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT c.company_id,COALESCE(NULLIF(TRIM(e.pb_name),''),c.name),COALESCE(NULLIF(TRIM(e.pb_website),''),c.website,'')
+                 FROM json_each(?1) ids LEFT JOIN companies direct ON direct.company_id=ids.value
+                 LEFT JOIN company_identifiers alias ON direct.company_id IS NULL AND alias.kind='PK' AND alias.identifier=ids.value
+                 JOIN companies c ON c.company_id=COALESCE(direct.company_id,alias.company_id)
+                 JOIN candidates x ON x.company_id=c.company_id AND x.run_id=?2
+                 LEFT JOIN company_enrichment e ON e.company_id=c.company_id ORDER BY CAST(ids.key AS INTEGER)",
+            )?;
+            let rows = stmt.query_map(params![serde_json::to_string(&ids)?, args.run_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })?.collect::<std::result::Result<Vec<_>, _>>()?;
+            if rows.len() != ids.len() {
+                return Err(Error::NotFound("A company is not a candidate in this run".into()));
+            }
+            if rows.iter().map(|(id, _, _)| id).collect::<HashSet<_>>().len() != rows.len() {
+                return Err(Error::Validation("Duplicate company_ids".into()));
+            }
+            if let Some((id, _, _)) = rows.iter().find(|(_, name, _)| name.trim().is_empty()) {
+                return Err(Error::Validation(format!("Company {id} has no usable identity")));
+            }
+            Ok(rows)
+        })?;
+        fn expand(template: &str, name: &str, website: &str) -> String {
+            let mut out = String::with_capacity(template.len() + name.len() + website.len());
+            let mut rest = template;
+            while !rest.is_empty() {
+                let token = [("{company}", name), ("{website}", website)]
+                    .into_iter()
+                    .find(|(key, _)| {
+                        rest.get(..key.len())
+                            .is_some_and(|v| v.eq_ignore_ascii_case(key))
+                    });
+                if let Some((key, value)) = token {
+                    out.push_str(value);
+                    rest = &rest[key.len()..];
+                } else if rest
+                    .get(..9)
+                    .is_some_and(|v| v.eq_ignore_ascii_case("<company>"))
+                {
+                    out.push_str(name);
+                    out.push_str("; ");
+                    out.push_str(website);
+                    rest = &rest[9..];
+                } else {
+                    let ch = rest.chars().next().expect("nonempty template");
+                    out.push(ch);
+                    rest = &rest[ch.len_utf8()..];
+                }
+            }
+            out
+        }
+        let mut queries = Vec::with_capacity(ids.len() * step.query_templates.len());
+        for (id, name, website) in identities {
             for (index, template) in step.query_templates.iter().enumerate() {
-                let expanded = placeholders.replace_all(
-                    template,
-                    |capture: &regex::Captures<'_>| match capture[0].to_ascii_lowercase().as_str() {
-                        "{company}" => name.to_string(),
-                        "{website}" => website.to_string(),
-                        _ => format!("{name}; {website}"),
-                    },
-                );
-                queries.push(json!({"company_id":id,"question_index":index+1,"query":expanded}));
+                queries.push(json!({"company_id":id,"question_index":index+1,"query":expand(template, &name, &website)}));
             }
         }
         Ok(

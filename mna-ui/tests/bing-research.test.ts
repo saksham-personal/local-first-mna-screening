@@ -5,7 +5,7 @@ import { createBingResearch } from '../server/bing-research.mjs';
 
 const queries = ['{company} products', '{company} {website} customers', '{company} business description'];
 
-function fixture(count = 1, connected = false) {
+function fixture(count = 1, connected = false, options: { simulated?: boolean } = {}) {
   const calls: { tool: string; args: Record<string, any> }[] = [];
   const companies = Array.from({ length: count }, (_, index) => ({ company_id: `A-${String(index).padStart(4, '0')}`, name: `MID ${index}`, website: `mid${index}.example`, PB_Name: `PB ${index}`, PB_Website: `pb${index}.example`, coverage: { PB: true, ROGO: false, BING: false } }));
   let templates: string[] = [];
@@ -27,33 +27,48 @@ function fixture(count = 1, connected = false) {
     if (tool === 'bing_search') {
       const company = companies.find(item => item.company_id === args.company_id);
       if (company) company.coverage.BING = true;
-      return { evidence_id: 'evidence-1', results: [{ title: 'Primary page', url: 'https://pb.example/products', snippet: 'Business description' }] };
+      return { evidence_id: 'evidence-1', simulated: options.simulated === true, results: [{ title: 'Primary page', url: 'https://pb.example/products', snippet: 'Business description' }] };
     }
     throw new Error(`Unexpected call ${tool}`);
   } });
   return { service, calls, companies, setRevision: (value: string) => { revision = value; } };
 }
 
-test('company preview derives all considered IDs and prefers PitchBook identity', async () => {
+test('preview shows templates/count; approval binds the current considered IDs', async () => {
   const f = fixture(2);
   const preview = await f.service.preview({ runId: 'run-1', mode: 'company', companyIds: ['wrong-manual-id'], queries: ['{company} products'] });
   assert.equal(preview.companyCount, 2);
   assert.equal(preview.queryCount, 2);
-  assert.equal(preview.queries[0].query, 'PB 0 products');
-  assert.deepEqual(f.calls.find(call => call.tool === 'propose_action_plan')?.args.steps[0].company_ids, f.companies.map(company => company.company_id));
+  assert.equal(preview.queries[0].query, '{company} products');
+  assert.ok(!f.calls.some(call => call.tool === 'propose_action_plan'));
   const result = await f.service.run({ token: preview.token, approved: true });
   assert.equal(result.executed, false);
+  assert.deepEqual(f.calls.find(call => call.tool === 'propose_action_plan')?.args.steps[0].company_ids, f.companies.map(company => company.company_id));
   assert.ok(!f.calls.some(call => call.tool === 'bing_search'));
 });
 
-test('stale selection or source identity prevents approval and send', async () => {
-  const f = fixture(1, true), preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries });
+// Identity changes before approval are reflected when a batch is sent; no identity preview is approved.
+test('approval uses current names but refuses a selection that changed since the preview', async () => {
+  // The analyst approves the count shown in the preview; a different membership needs a new preview.
+  const stale = fixture(26, true), stalePreview = await stale.service.preview({ runId: 'run-1', mode: 'company', queries });
+  stale.setRevision('revision-2');
+  await assert.rejects(stale.service.run({ token: stalePreview.token, approved: true }), /changed since the preview/i);
+  assert.ok(!stale.calls.some(call => call.tool === 'approve_action_plan'));
+
+  const f = fixture(26, true), preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries });
   f.companies[0].PB_Name = 'Changed';
+  const first = await f.service.run({ token: preview.token, approved: true });
+  assert.equal(first.more, true);
+  assert.ok(f.calls.some(call => call.tool === 'bing_search' && call.args.query === 'Changed products'));
+  f.setRevision('revision-3');
   await assert.rejects(f.service.run({ token: preview.token, approved: true }), /changed/i);
-  assert.ok(!f.calls.some(call => call.tool === 'approve_action_plan'));
-  const f2 = fixture(1, true), second = await f2.service.preview({ runId: 'run-1', mode: 'company', queries });
-  f2.setRevision('revision-2');
-  await assert.rejects(f2.service.run({ token: second.token, approved: true }), /changed/i);
+});
+
+test('simulated research leads carry the SIMULATED label', async () => {
+  const f = fixture(1, true, { simulated: true }), preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries });
+  const result = await f.service.run({ token: preview.token, approved: true });
+  assert.ok(result.rows.length > 0);
+  for (const row of result.rows) assert.equal(row.Verification, 'SIMULATED — Unverified research lead');
 });
 
 test('connected research sends exact approved queries and returns unverified leads', async () => {
@@ -70,9 +85,8 @@ test('more than 100 considered companies are paged and every approved query is p
   const f = fixture(501, true);
   const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries: ['{company} products'] });
   assert.equal(preview.queryCount, 501);
-  assert.equal(preview.queries.length, 20);
-  assert.equal(preview.previewTruncated, true);
-  assert.equal(f.calls.filter(call => call.tool === 'get_shortlist_context').length, 2);
+  assert.equal(preview.queries.length, 1);
+  assert.equal(f.calls.filter(call => call.tool === 'get_shortlist_context').length, 1);
   let result;
   do { result = await f.service.run({ token: preview.token, approved: true }); } while (result.more);
   assert.equal(result.processedQueries, 501);
@@ -95,7 +109,34 @@ test('query expansion inserts identity literally and does not expand inserted pl
   f.companies[0].PB_Name = 'A $& {website} Group';
   f.companies[0].PB_Website = 'site.example';
   const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries: ['{company} {WEBSITE} products'] });
-  assert.equal(preview.queries[0].query, 'A $& {website} Group site.example products');
+  assert.equal(preview.queries[0].query, '{company} {WEBSITE} products');
   const result = await f.service.run({ token: preview.token, approved: true });
   assert.equal(result.executed, true);
+});
+
+test('5613-company disconnected approval reads IDs once per page and one freshness read', async () => {
+  const f = fixture(5613);
+  f.companies.forEach(company => { company.name = ''; });
+  const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries });
+  f.calls.length = 0;
+  const result = await f.service.run({ token: preview.token, approved: true });
+  assert.equal(result.companyCount, 5613);
+  assert.equal(result.executed, false);
+  assert.equal(f.calls.filter(call => call.tool === 'get_shortlist_context' && call.args.limit === 500).length, Math.ceil(5613 / 500));
+  assert.equal(f.calls.filter(call => call.tool === 'get_shortlist_context' && call.args.limit === 1).length, 1);
+  assert.ok(f.calls.every(call => !['get_company', 'prepare_bing_queries', 'bing_search'].includes(call.tool)));
+});
+
+test('queries are prepared only for the sending batch and cancellation stops subsequent batches', async () => {
+  const f = fixture(501, true);
+  const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries });
+  await f.service.run({ token: preview.token, approved: true });
+  const prepared = f.calls.filter(call => call.tool === 'prepare_bing_queries');
+  assert.equal(prepared.length, 1);
+  assert.equal(prepared[0].args.company_ids.length, 25);
+  f.service.cancel({ token: preview.token });
+  const stopped = await f.service.run({ token: preview.token, approved: true });
+  assert.equal(stopped.cancelled, true);
+  assert.equal(stopped.more, false);
+  assert.equal(f.calls.filter(call => call.tool === 'bing_search').length, 75);
 });

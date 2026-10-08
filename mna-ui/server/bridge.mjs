@@ -407,11 +407,11 @@ export async function startBridge() {
         const result = await background[backgroundMatch[1]](input);
         return respond(res, 200, backgroundMatch[1] === 'stage' ? result : { job: result });
       }
-      const researchMatch = url.pathname.match(/^\/api\/research\/(preview|run)$/);
+      const researchMatch = url.pathname.match(/^\/api\/research\/(preview|run|cancel)$/);
       if (researchMatch) return respond(res, 200, await research[researchMatch[1]](input));
       const conversationMatch = url.pathname.match(/^\/api\/conversation\/(ask|generate)$/);
       if (conversationMatch) return respond(res, 200, await conversation[conversationMatch[1]](input));
-      const screeningMatch = url.pathname.match(/^\/api\/screening\/(catalog|preview|approve)$/);
+      const screeningMatch = url.pathname.match(/^\/api\/screening\/(catalog|preview|approve|list|build)$/);
       if (screeningMatch) {
         const controller = new AbortController();
         res.on('close', () => { if (!res.writableEnded) controller.abort(); });

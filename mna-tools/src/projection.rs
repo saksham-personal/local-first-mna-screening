@@ -130,32 +130,62 @@ pub fn description_lines(
     iscc: &Value,
     identity: &IdentitySources,
 ) -> (Vec<(&'static str, String)>, bool) {
+    description_lines_with_columns(
+        pb,
+        mid,
+        iscc,
+        identity,
+        &["Description", "Business Description", "Company Description"],
+    )
+}
+
+fn description_lines_with_columns(
+    pb: &Value,
+    mid: &Value,
+    iscc: &Value,
+    identity: &IdentitySources,
+    mid_columns: &[&str],
+) -> (Vec<(&'static str, String)>, bool) {
+    fn joined(source: &Value, columns: &[&str]) -> Option<String> {
+        let values = columns
+            .iter()
+            .filter_map(|column| text_field(source, &[*column]))
+            .collect::<Vec<_>>();
+        (!values.is_empty()).then(|| values.join("; "))
+    }
     let mut lines = Vec::new();
-    for (label, key, value, fields) in [
-        (
-            PB_DESCRIPTION_LABEL,
-            "PB",
-            pb,
-            vec!["PB_Description", "Description"],
-        ),
-        (
-            MID_DESCRIPTION_LABEL,
-            "MID",
-            mid,
-            vec!["Description", "Business Description", "Company Description"],
-        ),
-        (
-            ISCC_DESCRIPTION_LABEL,
-            "ISCC",
-            iscc,
-            vec!["Description", "Business Description", "Company Description"],
-        ),
-    ] {
-        if !identity.description.iter().any(|s| s == key) {
-            continue;
+    if identity.description.iter().any(|s| s == "PB") {
+        if let Some(text) = text_field(pb, &["PB_Description", "Description"]) {
+            lines.push((PB_DESCRIPTION_LABEL, text));
         }
-        if let Some(text) = text_field(value, &fields) {
-            lines.push((label, text));
+    }
+    if identity.description.iter().any(|s| s == "MID") {
+        if let Some(text) = joined(mid, mid_columns) {
+            lines.push((MID_DESCRIPTION_LABEL, text));
+        }
+    }
+    if identity.description.iter().any(|s| s == "ISCC") {
+        let text = joined(
+            iscc,
+            &[
+                "Company Description",
+                "Pitchbook Description",
+                "Factset Description",
+                "Demandbase Description",
+                "Dealogic Description",
+                "Offerings",
+                "Pitchbook Keywords",
+                "NAICS Description",
+            ],
+        )
+        .or_else(|| text_field(iscc, &["Description", "Business Description"]));
+        if let Some(text) = text {
+            if !lines.iter().any(|(label, existing)| {
+                *label == MID_DESCRIPTION_LABEL
+                    && existing.trim().to_lowercase() == text.trim().to_lowercase()
+            }) {
+                lines.push((ISCC_DESCRIPTION_LABEL, text));
+            }
         }
     }
     let legacy = [pb, mid, iscc]
@@ -184,7 +214,7 @@ pub fn join_descriptions(lines: &[(&'static str, String)]) -> String {
         .iter()
         .map(|(label, text)| format!("{label}: {text}"))
         .collect::<Vec<_>>()
-        .join("\r\n")
+        .join("\n")
 }
 
 pub fn valid_pb_linkedin(value: &str) -> bool {
@@ -407,6 +437,23 @@ pub fn snapshot_selected(
         .map(|s| (*s).to_owned())
         .collect();
     input_columns.extend(source_fields.iter().map(|(_, _, alias)| alias.clone()));
+    let active_config: Option<String> = connection
+        .query_row(
+            "SELECT config_json FROM mid_bundles WHERE status='active'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let mid_columns: Vec<String> = if let Some(raw_config) = active_config {
+        serde_json::from_str::<crate::mid_config::MidIndexConfig>(&raw_config)?.description_columns
+    } else {
+        vec![
+            "Description".into(),
+            "Business Description".into(),
+            "Company Description".into(),
+        ]
+    };
+    let mid_column_refs = mid_columns.iter().map(String::as_str).collect::<Vec<_>>();
     let mut rows = Vec::new();
     let mut selected_hashes = Vec::new();
     let mut pb_linkedin_count = 0;
@@ -441,7 +488,8 @@ pub fn snapshot_selected(
             &identity.website,
             &["PB_Website", "Website", "Websites", "Company Website"],
         );
-        let (mut descriptions, legacy_sources) = description_lines(pb, mid, iscc, identity);
+        let (mut descriptions, legacy_sources) =
+            description_lines_with_columns(pb, mid, iscc, identity, &mid_column_refs);
         let linkedin =
             text_field(pb, &["PB_LinkedIn URL", "LinkedIn URL"]).filter(|v| valid_pb_linkedin(v));
         if linkedin.is_some() {

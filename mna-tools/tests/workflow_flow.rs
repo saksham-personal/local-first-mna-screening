@@ -344,6 +344,58 @@ fn identical_bing_query_text_does_not_replace_another_companys_research() {
 }
 
 #[test]
+fn bing_prepares_500_companies_in_one_bounded_call() {
+    let (store, workflow) = fixture(true);
+    let ids = (0..500).map(|i| format!("B{i:04}")).collect::<Vec<_>>();
+    let companies = ids
+        .iter()
+        .map(|id| json!({"company_id":id,"name":"A $& {website} Group","website":"site.example"}))
+        .collect::<Vec<_>>();
+    store
+        .execute("ingest_companies", &json!({"companies":companies}))
+        .unwrap();
+    store
+        .execute(
+            "add_candidates",
+            &json!({"run_id":"R1","companies":ids,"discovery_source":"MID"}),
+        )
+        .unwrap();
+    let plan = approved_plan(
+        &workflow,
+        json!([{"step_id":"bing","kind":"bing_research","company_ids":ids,"query_templates":["{COMPANY} {website} products","<company> workflows"]}]),
+    );
+    let started = std::time::Instant::now();
+    let result = workflow
+        .execute(
+            "prepare_bing_queries",
+            &json!({"run_id":"R1","plan_id":plan,"step_id":"bing","company_ids":ids}),
+        )
+        .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "500-company preparation exceeded generous 10s bound"
+    );
+    assert_eq!(result["queries"].as_array().unwrap().len(), 1000);
+    assert_eq!(
+        result["queries"][0]["query"],
+        "A $& {website} Group site.example products"
+    );
+    assert_eq!(result["executed"], false);
+    assert!(workflow
+        .execute(
+            "prepare_bing_queries",
+            &json!({"run_id":"R1","plan_id":plan,"step_id":"bing","company_ids":["B0000","B0000"]})
+        )
+        .is_err());
+    assert!(workflow
+        .execute(
+            "prepare_bing_queries",
+            &json!({"run_id":"R1","plan_id":plan,"step_id":"bing","company_ids":["C1"]})
+        )
+        .is_err());
+}
+
+#[test]
 fn migration_does_not_treat_system_initialization_as_human_approval() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("legacy.db");

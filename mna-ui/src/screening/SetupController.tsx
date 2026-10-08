@@ -12,6 +12,9 @@ import {
   hydrateScreeningSources,
   fetchScreeningPrompt,
   splitExamples,
+  listSetupBuilds,
+  getSetupBuild,
+  type SetupBuild,
 } from "../lib/screening-client";
 import type {
   ScreeningCatalog,
@@ -27,6 +30,7 @@ export default function SetupController({
   mode,
   request,
   initialConfig,
+  buildId,
   onClose,
   onSaved,
 }: {
@@ -35,19 +39,24 @@ export default function SetupController({
   mode: ScreeningMode;
   request?: string;
   initialConfig?: ScreeningConfig;
+  buildId?: string;
   onClose: () => void;
   onSaved: (prepared: PreparedScreening) => void;
 }) {
   const initial = useRef(getChatState(sessionId)).current;
   const [catalog, setCatalog] = useState<ScreeningCatalog>();
+  const [build, setBuild] = useState<SetupBuild>();
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
     setError("");
-    void getScreeningCatalog(sessionId, initial.backendRunId)
-      .then((data) => {
-        if (active) setCatalog(data);
+    void Promise.all([getScreeningCatalog(sessionId, initial.backendRunId), listSetupBuilds()])
+      .then(([data, builds]) => {
+        if (active) {
+          setBuild(builds.filter(job => (!buildId || job.id === buildId) && job.sessionId === sessionId && job.runId === initial.backendRunId && job.provider === provider && job.config.mode === mode && job.status !== "approved").at(-1));
+          setCatalog(data);
+        }
       })
       .catch((error) => {
         if (active) setError(String(error.message ?? error));
@@ -55,7 +64,16 @@ export default function SetupController({
     return () => {
       active = false;
     };
-  }, [sessionId, initial.backendRunId, attempt]);
+  }, [sessionId, initial.backendRunId, attempt, buildId]);
+  useEffect(() => {
+    if (!build || (build.status !== "building" && !(build.status === "ready" && !build.catalog))) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void getSetupBuild(sessionId, build.id).then(job => { if (active) { setBuild(job); if (job.catalog) setCatalog(job.catalog); } })
+        .catch(error => { if (active) setBuild({ ...build, status: "error", error: String(error.message ?? error) }); });
+    }, 1000);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [sessionId, build]);
   const guard = () => {
     const current = getChatState(sessionId);
     if (
@@ -112,7 +130,9 @@ export default function SetupController({
       provider={provider}
       initialMode={mode}
       initialPrompt={request}
-      initialConfig={initialConfig}
+      initialConfig={build?.config ?? initialConfig}
+      build={build}
+      onInvalidateBuild={() => setBuild(undefined)}
       catalog={catalog}
       criteriaText={initial.definition}
       onClose={onClose}
@@ -137,7 +157,9 @@ export default function SetupController({
       }}
       onPreview={async (config) => {
         guard();
-        return previewScreening(sessionId, initial.backendRunId, config);
+        const job = await previewScreening(sessionId, initial.backendRunId, config);
+        setBuild(job);
+        return job.preview;
       }}
       onApprove={async (config, preview) => {
         guard();

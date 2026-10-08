@@ -5,6 +5,9 @@ import type { IndexBuild } from "../index/index-build-client";
 import { buildEtaText, isActiveBuild, overallPercent, stepPresentation, buildStatusText } from "../index/index-build-state";
 import { IndexProgressBar } from "../index/BuildIndexDialog";
 import { exportActivity, exportJobsEvent, exportRunIds, listExports, type ExportJob } from "../lib/screening-client";
+import { listSetupBuilds, type SetupBuild } from "../lib/screening-client";
+import { startBackgroundScreening } from "../lib/background-client";
+import SetupController from "./SetupController";
 import "./background-runs.css";
 
 export type BackgroundRunView = {
@@ -76,6 +79,18 @@ function percent(job: BackgroundRunView) {
 }
 
 export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismissIndex, jobs, searches = [], expanded, onExpandedChange, layoutKey, onAction, onDismiss, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
+  const [builds, setBuilds] = useState<SetupBuild[]>([]);
+  const [reviewBuild, setReviewBuild] = useState<SetupBuild>();
+  const [buildError, setBuildError] = useState("");
+  useEffect(() => {
+    let active = true, timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { const jobs = await listSetupBuilds(); if (active) setBuilds(jobs.filter(job => job.status !== "approved")); } catch { /* Retry at the next activity poll. */ }
+      if (active) timer = setTimeout(() => void poll(), 2000);
+    };
+    void poll();
+    return () => { active = false; clearTimeout(timer); };
+  }, []);
   const hostRef = useRef<HTMLDivElement>(null);
   const [exports, setExports] = useState<ExportJob[]>([]);
   const [exportError, setExportError] = useState("");
@@ -111,7 +126,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     void refresh();
     return () => { disposed = true; clearTimeout(timer); window.removeEventListener(exportJobsEvent, started); };
   }, []);
-  const items = indexBuilds.length + searches.length + jobs.length + exports.length;
+  const items = indexBuilds.length + searches.length + jobs.length + exports.length + builds.length;
   const visible = items > 0 || expanded || !!exportError;
   useLayoutEffect(() => {
     const host = hostRef.current, main = host?.parentElement;
@@ -139,9 +154,9 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     const observer = new ResizeObserver(measure);
     [main, header, sideChatHeader, composer, toggle].forEach(element => { if (element) observer.observe(element); });
     return () => observer.disconnect();
-  }, [indexBuilds, jobs, searches, exports, expanded, visible, layoutKey]);
+  }, [indexBuilds, jobs, searches, exports, builds, expanded, visible, layoutKey]);
   if (!visible) return null;
-  const activeCount = exports.filter(job => job.state === "running").length + indexBuilds.filter(isActiveBuild).length + jobs.filter((job) => job.state === "running" || job.state === "queued").length + searches.filter((search) => search.state === "running").length;
+  const activeCount = exports.filter(job => job.state === "running").length + builds.filter(build => build.status === "building").length + indexBuilds.filter(isActiveBuild).length + jobs.filter((job) => job.state === "running" || job.state === "queued").length + searches.filter((search) => search.state === "running").length;
   const totalBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.total), 0);
   const completedBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.completed), 0);
   const aggregatePercent = totalBatches > 0 ? Math.min(100, (completedBatches / totalBatches) * 100) : 0;
@@ -168,6 +183,16 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
       </button>
       {expanded && (
         <div className="br-dock-details" id="activity-details">
+          {builds.length > 0 && <section className="br-group" aria-label="Input table preparation">
+            <h3 className="br-group-title">Input tables<span>{builds.length}</span></h3>
+            {buildError && <p className="br-message" role="alert">{buildError}</p>}
+            {builds.map(build => <section className="br-run" key={build.id}>
+              <div className="br-run-heading"><div className="br-run-copy"><strong>{build.status === "building" ? `Preparing input table · ${build.completed.toLocaleString()} of ${plural(build.total, "company", "companies")}` : build.status === "ready" ? "Input table ready for review" : "Input table needs attention"}</strong><span>{providerNames[build.provider]}</span></div></div>
+              <div className="br-progress" role="progressbar" aria-label="Input table preparation" aria-valuemin={0} aria-valuemax={build.total} aria-valuenow={build.completed}><span style={{ width: `${build.total ? Math.min(100, build.completed / build.total * 100) : 0}%` }} /></div>
+              {build.error && <p className="br-message">{build.error}</p>}
+              {build.sessionId && <div className="br-actions"><button type="button" onClick={() => setReviewBuild(build)}>{build.status === "ready" ? "Review & approve" : "Open setup"}<ArrowRight size={13} /></button></div>}
+            </section>)}
+          </section>}
           {items === 0 && <p className="br-empty">Searches and screening runs show up here while they work.</p>}
           {exportError && <p className="br-message br-search-error" role="alert">{exportError}</p>}
           {exports.length > 0 && <section className="br-group" aria-label="Exports">
@@ -288,6 +313,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
         </div>
       )}
     </aside>
+    {reviewBuild?.sessionId && <SetupController buildId={reviewBuild.id} sessionId={reviewBuild.sessionId} provider={reviewBuild.provider} mode={reviewBuild.config.mode} onClose={() => setReviewBuild(undefined)} onSaved={prepared => { setBuildError(""); void startBackgroundScreening(reviewBuild.sessionId!, prepared).catch(error => setBuildError(String(error.message ?? error))); setReviewBuild(undefined); }} />}
     </div>
   );
 }
