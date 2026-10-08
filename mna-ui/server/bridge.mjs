@@ -161,6 +161,24 @@ export async function startBridge() {
   const env = { ...process.env, MNA_ENABLE_EXTERNAL: String(externalEnabled), MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_CONTROLLER_KEY: controllerKey, MNA_BIND: `127.0.0.1:${ports.rust}`, MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
   if (simulate) { env.MNA_SIMULATE = '1'; console.log('Simulated providers are ON (dev only). Data is labelled SIMULATED.'); } else { delete env.MNA_SIMULATE; }
   for (const key of Object.keys(env)) if (/(?:OPENAI|ANTHROPIC|AZURE_OPENAI|GOOGLE|GEMINI|COHERE|BING|M365|ISCC|MEILI|LLMSUITE|PROVIDER_(?:URL|ENDPOINT|API_KEY))/i.test(key) && !(externalEnabled && /^MNA_(?:LLMSUITE|M365|BING|ISCC)_/.test(key))) delete env[key];
+  // Optional local embedding worker (Arctic-embed-m-v2 ONNX int8) for MID semantic scoring.
+  // SCREENING_EMBED_MODEL_DIR points at the unpacked model folder (onnx/model_int8.onnx + tokenizer.json).
+  let embedWorker;
+  const embedDir = process.env.SCREENING_EMBED_MODEL_DIR;
+  if (embedDir && !env.MNA_EMBED_ENDPOINT) {
+    const embedPort = Number(process.env.SCREENING_EMBED_PORT || 8865);
+    embedWorker = spawn(process.env.SCREENING_PYTHON || 'python', [
+      resolve(root, '..', 'mna-tools', 'scripts', 'local_embed_worker.py'),
+      '--model', resolve(embedDir, 'onnx', 'model_int8.onnx'), '--tokenizer', resolve(embedDir, 'tokenizer.json'),
+      '--port', String(embedPort), '--intra-op-threads', process.env.SCREENING_EMBED_THREADS || '4',
+    ], { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] });
+    embedWorker.on('error', () => {});
+    for (let attempt = 0; attempt < 120 && !env.MNA_EMBED_ENDPOINT; attempt++) {
+      try { if ((await fetch(`http://127.0.0.1:${embedPort}/health`, { signal: AbortSignal.timeout(500) })).ok) env.MNA_EMBED_ENDPOINT = `http://127.0.0.1:${embedPort}/embed`; } catch {}
+      if (!env.MNA_EMBED_ENDPOINT) await new Promise(done => setTimeout(done, 500));
+    }
+    console.log(env.MNA_EMBED_ENDPOINT ? `Semantic search is ON (local embedding worker on port ${embedPort}).` : 'The embedding worker did not start; semantic search stays off.');
+  }
   const rust = spawn(binary, [], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let launchError = '';
   rust.on('error', error => { launchError = error.message; });
@@ -176,7 +194,7 @@ export async function startBridge() {
     await new Promise(resolveWait => setTimeout(resolveWait, 100));
   }
   if (!ready) {
-    rust.kill();
+    rust.kill(); embedWorker?.kill();
     throw new Error(launchError || `The Rust tool server did not start. Check that port ${ports.rust} is free.`);
   }
 
@@ -347,8 +365,8 @@ export async function startBridge() {
   try {
     await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(ports.bridge, '127.0.0.1', resolveListen); });
   } catch (error) {
-    rust.kill();
+    rust.kill(); embedWorker?.kill();
     throw error;
   }
-  return { close: () => { background.close(); server.close(); rust.kill(); }, rust, jobs };
+  return { close: () => { background.close(); server.close(); rust.kill(); embedWorker?.kill(); }, rust, jobs };
 }
