@@ -27,6 +27,8 @@ const DEFAULT_GRID_LIMIT: usize = 500;
 const MAX_GRID_LIMIT: usize = 1000;
 const SOFT_PAGE_BYTES: usize = 1536 * 1024;
 const HARD_PAGE_BYTES: usize = 8 * 1024 * 1024;
+/// Source rows sampled per source to discover column headers.
+const HEADER_SAMPLE_ROWS: usize = 400;
 /// Newest source rows read per company and source when composing the grid description. A
 /// newer blank value falls back to an older nonblank one, as in the source readers.
 const ROWS_PER_SOURCE: i64 = 4;
@@ -711,10 +713,15 @@ impl ColumnModel {
             .and_then(|v| serde_json::from_value(v["workbook_columns"].clone()).ok())
             .unwrap_or_default();
         let need_mid_headers = mid_columns.is_empty();
-        let sql = format!("{RUN_ALIASES} SELECT DISTINCT s.source,j.key
-            FROM aliases a JOIN source_rows s ON s.company_id=a.alias_id JOIN json_each(s.row_json) j
-            WHERE (s.source='MID' AND ?2) OR (s.source='ISCC' AND s.run_scope=?1)
-            ORDER BY s.source,j.key");
+        // Headers come from a bounded sample of rows so the cost does not grow with run size.
+        let sql = format!("{RUN_ALIASES}, sample AS (
+              SELECT * FROM (SELECT s.source,s.row_json FROM aliases a JOIN source_rows s ON s.company_id=a.alias_id
+                WHERE s.source='MID' AND ?2 LIMIT {HEADER_SAMPLE_ROWS})
+              UNION ALL
+              SELECT * FROM (SELECT s.source,s.row_json FROM aliases a JOIN source_rows s ON s.company_id=a.alias_id
+                WHERE s.source='ISCC' AND s.run_scope=?1 LIMIT {HEADER_SAMPLE_ROWS}))
+            SELECT DISTINCT x.source,j.key FROM sample x JOIN json_each(x.row_json) j
+            ORDER BY x.source,j.key");
         let mut statement = conn.prepare(&sql)?;
         let mut iscc_columns = Vec::new();
         for row in statement.query_map(params![run_id, need_mid_headers], |r| {
@@ -858,7 +865,7 @@ impl ColumnModel {
         let mid_scores = match view {
             GridView::Mid => Some(("MID Score", "MID Semantic Score")),
             GridView::Iscc => None,
-            GridView::All if has_mid && !has_iscc => Some(("MID Score", "MID Semantic Score")),
+            GridView::All if !has_iscc => Some(("MID Score", "MID Semantic Score")),
             GridView::All => Some(("MID_Keyword Score", "MID_Semantic Score")),
         };
         if let Some((keyword, semantic)) = mid_scores {
@@ -969,7 +976,11 @@ impl ColumnModel {
         visible: bool,
         description: bool,
     ) {
-        if self.columns.iter().any(|c| c.catalog["id"] == id) {
+        if let Some(existing) = self.columns.iter_mut().find(|c| c.catalog["id"] == id) {
+            // A workbook/ISCC column of the same name falls back to the stored identity.
+            if existing.path.is_empty() {
+                existing.path = path.iter().map(|s| (*s).to_owned()).collect();
+            }
             return;
         }
         self.columns.push(GridColumn { id: id.to_owned(), kind, catalog: json!({"id":id,"label":id,"group":group,"source":"derived","type":kind,"default_visible":visible}), mid: None, iscc: None, path: path.iter().map(|s| (*s).to_owned()).collect(), description });
@@ -1039,7 +1050,9 @@ fn typed_value(value: &Value, kind: &str) -> Value {
     if kind == "number" {
         let clean = text.trim().replace(',', "");
         if let Ok(number) = clean.parse::<f64>() {
-            return json!(number);
+            if number.is_finite() {
+                return json!(number);
+            }
         }
     }
     if kind == "date" {
@@ -1067,7 +1080,6 @@ fn typed_value(value: &Value, kind: &str) -> Value {
                 }
             }
         }
-        return Value::Null;
     }
     match value {
         Value::Number(_) | Value::String(_) => value.clone(),
@@ -1122,11 +1134,10 @@ fn clip(text: &str, max: usize) -> String {
 /// `get_screening_grid`
 pub fn screening_grid(store: &Store, arguments: &Value) -> Result<Value> {
     let args: GridArgs = parse(arguments)?;
-    let limit = args.limit.unwrap_or(DEFAULT_GRID_LIMIT);
-    if !(1..=MAX_GRID_LIMIT).contains(&limit) {
-        return Err(Error::Validation(format!(
-            "limit must be 1..={MAX_GRID_LIMIT}"
-        )));
+    // Larger requests (older callers ask for 2000) are clamped; pages shrink further by size.
+    let limit = args.limit.unwrap_or(DEFAULT_GRID_LIMIT).min(MAX_GRID_LIMIT);
+    if limit == 0 {
+        return Err(Error::Validation("limit must be at least 1".into()));
     }
     if let Some(cursor) = &args.after_company_id {
         bounded("after_company_id", cursor, 160)?;

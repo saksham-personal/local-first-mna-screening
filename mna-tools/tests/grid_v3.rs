@@ -583,7 +583,7 @@ fn grid_page_500_of_6000_candidates_with_75_workbook_columns_is_fast() {
 }
 
 #[test]
-fn missing_source_cells_stay_null_and_unparsed_numbers_stay_text() {
+fn identity_falls_back_and_unparsed_typed_values_stay_text() {
     let store = fixture();
     store.with_connection(|conn| {
         candidate(conn,"C1",true)?;
@@ -592,9 +592,9 @@ fn missing_source_cells_stay_null_and_unparsed_numbers_stay_text() {
         Ok(())
     }).unwrap();
     let result = page(&store, "mid");
-    assert!(result["rows"][0]["values"]["Company"].is_null());
+    assert_eq!(result["rows"][0]["values"]["Company"], "Company C1");
     assert_eq!(result["rows"][0]["values"]["Annual Revenue"], "unknown");
-    assert!(result["rows"][0]["values"]["Last Call Date"].is_null());
+    assert_eq!(result["rows"][0]["values"]["Last Call Date"], "invalid");
     assert!(result["rows"][0]["values"].get("Description").is_none());
 }
 
@@ -637,7 +637,6 @@ fn grid_arguments_validate_limit_view_and_requested_columns() {
     let data = DataService::new(store);
     for extra in [
         json!({"limit":0}),
-        json!({"limit":1001}),
         json!({"view":"invalid"}),
         json!({"columns":["unknown"]}),
     ] {
@@ -647,7 +646,9 @@ fn grid_arguments_validate_limit_view_and_requested_columns() {
             .extend(extra.as_object().unwrap().clone());
         assert!(data.execute("get_screening_grid", &args).is_err());
     }
-    assert!(data
-        .execute("get_screening_grid", &json!({"run_id":"R","limit":1000}))
-        .is_ok());
+    for limit in [1000, 2000] {
+        assert!(data
+            .execute("get_screening_grid", &json!({"run_id":"R","limit":limit}))
+            .is_ok());
+    }
 }
