@@ -56,25 +56,27 @@ async function prepareAndFreeze(service: any, input: any) {
   return { preview: current.preview };
 }
 
-test("automatic screening prepares without a deployment and keeps execution unavailable", async () => {
-  const f = fixture({ model: "" });
+// Setup now submits a dropdown model id; disconnected preparation still sends nothing.
+test("selected screening model prepares without provider configuration and keeps execution unavailable", async () => {
+  const f = fixture({ model: "m365-copilot" });
   const { preview } = await prepareAndFreeze(f.service, { runId: "run-1", config: f.config });
-  assert.equal(f.calls.find((entry) => entry.tool === "propose_prepared_plan")?.args.deployment, "automatic");
+  assert.equal(f.calls.find((entry) => entry.tool === "propose_prepared_plan")?.args.deployment, "m365-copilot");
   assert.deepEqual(preview.warnings, []);
   const { prepared } = await f.service.approve({ runId: "run-1", config: f.config, fingerprint: preview.fingerprint, approved: true });
-  assert.equal(prepared.model, "automatic");
+  assert.equal(prepared.model, "m365-copilot");
   assert.equal(prepared.config.model, prepared.model);
   assert.equal(prepared.executed, false);
 });
 
-test("configured automatic model is frozen in the approved proposal", async () => {
+// An explicit selection must survive preview and ignore later deployment changes.
+test("selected dropdown model is frozen in the approved proposal", async () => {
   let configured = "configured-m365";
-  const f = fixture({ model: "", deployment: () => configured });
+  const f = fixture({ model: "m365-copilot", deployment: () => configured });
   const { preview } = await prepareAndFreeze(f.service, { runId: "run-1", config: f.config });
-  assert.equal(f.calls.find((entry) => entry.tool === "propose_prepared_plan")?.args.deployment, configured);
+  assert.equal(f.calls.find((entry) => entry.tool === "propose_prepared_plan")?.args.deployment, "m365-copilot");
   configured = "changed-after-preview";
   const { prepared } = await f.service.approve({ runId: "run-1", config: f.config, fingerprint: preview.fingerprint, approved: true });
-  assert.equal(prepared.model, "configured-m365");
+  assert.equal(prepared.model, "m365-copilot");
   assert.equal(prepared.config.model, prepared.model);
 });
 

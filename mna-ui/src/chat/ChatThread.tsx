@@ -55,7 +55,12 @@ import {
   getChatState,
   updateChatState,
   useChatState,
+  saveControllerTurns,
+  controllerMessageIds,
+  controllerPart,
 } from "../lib/chat-store";
+import { controllerAvailable, controllerHealth, getControllerPreferences, readControllerTurns, setControllerPreferences, subscribeControllerPreferences, type ControllerView } from "../lib/controller-client";
+import ControllerMessage, { type ControllerData } from "./ControllerMessage";
 import { appendWorkspaceMessages } from "../lib/workspace-message-sync";
 import {
   createChatAdapter,
@@ -244,12 +249,17 @@ function LoadingPart() {
     </div>
   ) : null;
 }
+function ControllerPart({ data }: { data: unknown }) {
+  const scope = useContext(ChatScope);
+  if (!data || typeof data !== "object" || (!("pending" in data) && !("turn" in data) && !("error" in data))) return <p className="cc-warnings">Restoring LLM Suite reply from saved screening history…</p>;
+  return <ControllerMessage data={data as ControllerData} openSetup={() => scope.onAction({ type: "configure-screening", artifactId: "", provider: "llm_suite", mode: "screening" })} />;
+}
 const parts = {
   Text: MarkdownMessage,
   Empty: LoadingPart,
   tools: { Fallback: ToolCall },
   ToolGroup: ToolTimeline,
-  data: { by_name: { "screening-artifact": ArtifactPart } },
+  data: { by_name: { "screening-artifact": ArtifactPart, "controller-turn": ControllerPart } },
 };
 function MessageActions({ user = false }: { user?: boolean }) {
   const copied = useAuiState((s) => s.message.isCopied);
@@ -321,13 +331,14 @@ function MessageAttachment() {
 }
 const attachmentComponents = { Attachment: MessageAttachment };
 function AssistantMessage() {
+  const controller = useAuiState(s => s.message.content.some(part => part.type === "data" && part.name === "controller-turn"));
   return (
     <MessagePrimitive.Root className="ct-message ct-assistant">
-      <div className="ct-message-meta">
+      {!controller && <div className="ct-message-meta">
         <span className="ct-assistant-mark">s</span>
         <strong>Screening assistant</strong>
         <Timestamp />
-      </div>
+      </div>}
       <div className="ct-message-body">
         <MessagePrimitive.Parts components={parts} />
         <MessagePrimitive.Error>
@@ -336,7 +347,7 @@ function AssistantMessage() {
             <ErrorPrimitive.Message />
           </div>
         </MessagePrimitive.Error>
-        <MessageActions />
+        {!controller && <MessageActions />}
       </div>
     </MessagePrimitive.Root>
   );
@@ -572,6 +583,30 @@ function ModelMenu({ state }: { state: ChatState }) {
     />
   );
 }
+function ControllerMode({ state }: { state: ChatState }) {
+  const preferences = useSyncExternalStore(subscribeControllerPreferences, () => getControllerPreferences(state.sessionId));
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof controllerHealth>>>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    const refresh = () => controllerHealth().then(value => { if (active) { setHealth(value); setError(""); } }).catch(() => { if (active) { setHealth(undefined); setError("LLM Suite is disconnected."); } });
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [state.backendRunId]);
+  const available = controllerAvailable(state.backendRunId, health);
+  if (!available && !preferences.mode) return null;
+  return <div className="cc-mode" aria-label="Chat send mode">
+    <button type="button" aria-pressed={!preferences.mode} onClick={() => setControllerPreferences(state.sessionId, { mode: false })}>Current assistant</button>
+    <button type="button" aria-pressed={preferences.mode} disabled={!available} onClick={() => setControllerPreferences(state.sessionId, { mode: true })}>Send to LLM Suite</button>
+    {preferences.mode && <details className="cc-mode-menu"><summary>Conversation menu</summary><div><button type="button" onClick={event => {
+      setControllerPreferences(state.sessionId, { newConversation: true });
+      event.currentTarget.closest("details")?.removeAttribute("open");
+    }}>New conversation</button></div></details>}
+    {preferences.mode && preferences.newConversation && <span>Next message starts a new conversation</span>}
+    {!available && <span role="status">{error || "LLM Suite controller is unavailable."}</span>}
+  </div>;
+}
 function Conversation({
   state,
   onBusyChange,
@@ -743,6 +778,7 @@ function Conversation({
           </div>
         )}
         <Queue />
+        <ControllerMode state={state} />
         <div className="ct-composer-context">
           <button type="button" onClick={scope.openContext}>
             <span
@@ -860,6 +896,31 @@ function ChatRuntime({
     unstable_enableMessageQueue: true,
     unstable_queueClearOnCancel: false,
   });
+  useEffect(() => {
+    if (!state.backendRunId) return;
+    let active = true;
+    void readControllerTurns(state.backendRunId).then(response => {
+      if (!active || runtime.thread.getState().isRunning) return;
+      const views = saveControllerTurns(sessionId, response);
+      const ids = controllerMessageIds(sessionId);
+      const repository = runtime.thread.export();
+      let changed = false;
+      const messages = repository.messages.map(item => {
+        const turn = views.find(view => ids.get(view.turn_id) === item.message.id);
+        if (!turn) return item;
+        const part = item.message.content.find(part => part.type === "data" && part.name === "controller-turn");
+        const previous = part?.type === "data" ? (part.data as { turn?: ControllerView }).turn : undefined;
+        const content = [controllerPart({ ...turn, divider: previous?.divider ?? turn.divider, rotatedFrom: previous?.rotatedFrom ?? turn.rotatedFrom })];
+        if (JSON.stringify(item.message.content) === JSON.stringify(content)) return item;
+        changed = true;
+        return { ...item, message: fromThreadMessageLike({ id: item.message.id, role: "assistant", createdAt: new Date(turn.created_at), content }, item.message.id, { type: "complete", reason: "stop" }) };
+      });
+      if (changed) runtime.thread.import({ ...repository, messages });
+    }).catch(error => {
+      if (active) sessionStore.addEvent({ sessionId, kind: "system", origin: "workspace", status: "error", title: "LLM Suite history could not be restored", text: String(error.message ?? error) });
+    });
+    return () => { active = false; };
+  }, [sessionId, state.backendRunId, runtime]);
   useEffect(
     () => () => {
       runtime.thread.cancelRun();

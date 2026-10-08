@@ -18,6 +18,8 @@ import {
   patchArtifact,
   saveArtifact,
   updateChatState,
+  controllerPart,
+  saveControllerTurns,
 } from "./chat-store";
 import {
   artifactPart,
@@ -53,6 +55,7 @@ import { companyDataRows, refreshCompanyContext } from "./company-data-client";
 import { processStagedUploads } from "./import-pipeline";
 import { approveDurableCriteria, persistCriteriaDraft, flushCriteriaDraft, refreshShortlist } from "./review-client";
 import { askProvider, generateDraft } from "./conversation-client";
+import { controllerAvailable, controllerHealth, getControllerPreferences, sendControllerTurn, setControllerPreferences } from "./controller-client";
 
 type Part = ThreadAssistantMessagePart;
 export function transcriptFor(sessionId: string): ThreadMessageLike[] {
@@ -343,7 +346,7 @@ export function createChatAdapter(
         prior.branchMessageIds.length > ancestors.length &&
         !prior.branchMessageIds.includes(user.id);
       if (
-        editingEarlier &&
+        editingEarlier && !getControllerPreferences(sessionId).mode &&
         prior.criteriaMessageId &&
         !ancestors.includes(prior.criteriaMessageId)
       ) {
@@ -438,6 +441,17 @@ export function createChatAdapter(
       };
       try {
         let state = getChatState(sessionId);
+        if (!action && getControllerPreferences(sessionId).mode) {
+          yield { content: [{ type: "data", name: "controller-turn", data: { pending: true, startedAt: begun } }] };
+          const health = await controllerHealth();
+          if (!controllerAvailable(state.backendRunId, health)) throw new Error("LLM Suite controller is unavailable or disconnected. A saved screening run and connected provider are required.");
+          const newConversation = getControllerPreferences(sessionId).newConversation;
+          const response = await sendControllerTurn(sessionId, state.backendRunId!, text, newConversation, abortSignal);
+          setControllerPreferences(sessionId, { newConversation: false });
+          const views = saveControllerTurns(sessionId, response, messageId);
+          if (views[0]) yield { content: [controllerPart(views[0])] };
+          return;
+        }
         const submittedFiles = [...attachmentParts
           .flatMap((p) =>
             p.type === "data" && p.name === "screening-artifact"
@@ -939,7 +953,9 @@ export function createChatAdapter(
             abortSignal.aborted ? "cancelled" : "error",
             message,
           );
-        content.push({
+        content.push(!action && getControllerPreferences(sessionId).mode ? {
+          type: "data", name: "controller-turn", data: { error: abortSignal.aborted ? "LLM Suite request stopped. Completed work remains saved." : message },
+        } : {
           type: "text",
           text: abortSignal.aborted
             ? "Reply stopped. Completed work remains saved."

@@ -28,6 +28,8 @@ import type {
   ScreeningProvider,
 } from "../lib/screening-contract";
 import { defaultScreeningConfig } from "../lib/screening-data";
+import { batchLimit, batchWarning, defaultBatchSize, selectedModel, syncBatchSize, type ScreeningModel } from "../lib/screening-contract";
+import SelectField from "../ui/SelectField";
 import { hasPitchBookData, type SetupBuild } from "../lib/screening-client";
 import HelpTip from "../ui/HelpTip";
 import { plural } from "../lib/format";
@@ -36,6 +38,7 @@ import "./screening-setup.css";
 
 type Props = {
   provider: ScreeningProvider;
+  models: ScreeningModel[];
   initialMode?: ScreeningMode;
   initialPrompt?: string;
   initialConfig?: ScreeningConfig;
@@ -83,10 +86,7 @@ function normalized(config: ScreeningConfig): ScreeningConfig {
   return {
     ...config,
     model: config.model,
-    batchSize: Math.max(
-      1,
-      Math.min(200, Math.round(Number(config.batchSize) || 1)),
-    ),
+    batchSize: syncBatchSize(config.provider, config.batchSize),
     inputColumns: [
       "index",
       ...unique(config.inputColumns).filter((column) => column.toLocaleLowerCase() !== "index"),
@@ -111,6 +111,7 @@ function isSpreadsheet(file: File) {
 
 export default function ScreeningSetup({
   provider,
+  models,
   initialMode = "screening",
   initialPrompt,
   initialConfig,
@@ -138,6 +139,8 @@ export default function ScreeningSetup({
           initialPrompt,
         ),
     );
+    config.model = selectedModel(models, config.model);
+    if (!initialConfig) config.batchSize = defaultBatchSize(provider);
     if (!initialConfig) config.inputColumns = [...config.inputColumns, ...catalog.sources.filter(source => source.source === "BING" || source.source === "RESULTS").flatMap(source => source.fields.map(field => field.id))];
     if (keepLinkedIn && !config.inputColumns.includes("LinkedIn URL")) config.inputColumns.push("LinkedIn URL");
     if (!offerLinkedIn) config.inputColumns = config.inputColumns.filter(column => column !== "LinkedIn URL");
@@ -182,6 +185,11 @@ export default function ScreeningSetup({
   }, [catalogSignature]);
 
   useEffect(() => {
+    if (build && (build.config.model !== config.model || build.config.batchSize !== config.batchSize)) {
+      onInvalidateBuild?.();
+      setPreview(null);
+      return;
+    }
     if (build?.status === "ready") setPreview({ value: build.preview, version: version.current });
     if (build?.status === "error") setError(build.error ?? "Input table preparation failed. Rebuild input table.");
   }, [build]);
@@ -448,30 +456,36 @@ export default function ScreeningSetup({
               </div>
               <div className="ss-two-fields">
                 <div className="ss-field">
-                  <div className="ss-model-label"><label htmlFor="ss-model">Model or deployment</label><button type="button" className="ss-link" onClick={() => edit({ ...config, model: "" })}>Use automatic</button></div>
-                  <input
-                    id="ss-model"
+                  <span>Model</span>
+                  <SelectField
+                    label="Model"
                     value={config.model}
-                    onChange={(event) =>
-                      edit({ ...config, model: event.target.value })
-                    }
-                    placeholder="Automatic"
-                    autoComplete="off"
+                    onChange={(model) => edit({ ...config, model })}
+                    options={models.map(model => ({ value: model.id, label: model.label }))}
                   />
                 </div>
                 <div className="ss-field">
                   <span><label htmlFor="ss-batch-size">Companies per batch</label> <HelpTip label="About batch timing">LLM Suite allows up to seven sends per minute. Provider response times can add delays.</HelpTip></span>
-                  <input
+                  <div className="ss-batch-controls"><input
+                    type="range"
+                    aria-label="Companies per batch slider"
+                    min={1}
+                    max={batchLimit(provider)}
+                    step={1}
+                    value={config.batchSize}
+                    onChange={(event) => edit({ ...config, batchSize: syncBatchSize(provider, event.target.value) })}
+                  /><input
                     id="ss-batch-size"
                     type="number"
                     min={1}
-                    max={200}
+                    max={batchLimit(provider)}
                     step={1}
                     value={config.batchSize}
                     onChange={(event) =>
-                      edit({ ...config, batchSize: Number(event.target.value) })
+                      edit({ ...config, batchSize: syncBatchSize(provider, event.target.value) })
                     }
-                  />
+                  /></div>
+                  {batchWarning(provider, config.batchSize) && <small className="ss-batch-warning" role="status">{batchWarning(provider, config.batchSize)}</small>}
                 </div>
               </div>
               <label className="ss-field">
@@ -516,14 +530,14 @@ export default function ScreeningSetup({
                   )}
                 </small>
               )}
-              {provider === "llm_suite" && (
+              {(
                 <p className="ss-timing">
                   {plural(catalog.total, "company", "companies")} ·{" "}
                   {plural(batches, "batch", "batches")}, up to{" "}
                   {plural(config.batchSize, "company", "companies")} each.
-                  {minimumMinutes > 0
+                  {provider === "llm_suite" && (minimumMinutes > 0
                     ? ` The rate limit adds at least ${plural(minimumMinutes, "minute", "minutes")}.`
-                    : " This fits one rate window if capacity is free."}
+                    : " This fits one rate window if capacity is free.")}
                 </p>
               )}
             </section>

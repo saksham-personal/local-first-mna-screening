@@ -1,6 +1,36 @@
 import { useSyncExternalStore } from "react";
 import type { ChatArtifact, ChatState } from "./chat-contract";
 import { sessionStore } from "./session-store";
+import { controllerViews, type ControllerResponse, type ControllerView } from "./controller-client";
+
+export function controllerPart(turn: ControllerView) {
+  return { type: "data" as const, name: "controller-turn", data: { turn } };
+}
+export function controllerMessageIds(sessionId: string) {
+  const events = sessionStore.getSnapshot().sessions.find(session => session.id === sessionId)?.events ?? [];
+  return new Map(events.flatMap(event => {
+    const reference = (event.result as { controllerTurnId?: string } | undefined)?.controllerTurnId;
+    if (reference) return [[reference, event.messageId ?? event.id] as const];
+    return Array.isArray(event.content) ? event.content.flatMap(part => {
+      const value = part as { type?: string; name?: string; data?: { turn?: ControllerView } };
+      return value.type === "data" && value.name === "controller-turn" && value.data?.turn ? [[value.data.turn.turn_id, event.messageId ?? event.id] as const] : [];
+    }) : [];
+  }));
+}
+/** Stable server ids keep reloads and repair rounds from duplicating messages. */
+export function saveControllerTurns(sessionId: string, response: ControllerResponse, firstMessageId?: string) {
+  const known = controllerMessageIds(sessionId);
+  const views = controllerViews(response);
+  const additions = views.filter(turn => !known.has(turn.turn_id));
+  const ids = additions.map((turn, index) => index === 0 && firstMessageId ? firstMessageId : `controller-${turn.turn_id}`);
+  const state = getChatState(sessionId);
+  updateChatState(sessionId, { branchMessageIds: [...state.branchMessageIds, ...ids.filter(id => !state.branchMessageIds.includes(id))] });
+  additions.forEach((turn, index) => sessionStore.addEvent({ sessionId, messageId: ids[index], kind: "message", role: "assistant",
+    origin: index === 0 && firstMessageId ? "assistant" : "workspace", status: turn.error ? "error" : "success",
+    title: "LLM Suite", text: turn.context ?? turn.notes ?? "LLM Suite controller turn", content: [controllerPart(turn)], result: { controllerTurnId: turn.turn_id },
+    startedAt: turn.created_at, finishedAt: turn.created_at }));
+  return views;
+}
 
 const states = new Map<string, ChatState>();
 const listeners = new Set<() => void>();
@@ -88,7 +118,7 @@ function validSetupConfig(value: unknown): boolean {
     value.prompt.length <= 60_000 &&
     count(value.batchSize) &&
     value.batchSize >= 1 &&
-    value.batchSize <= 100 &&
+    value.batchSize <= (value.provider === "copilot" ? 50 : 200) &&
     ["inputColumns", "outputColumns"].every((key) => {
       const columns = value[key];
       return (
