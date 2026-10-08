@@ -59,6 +59,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ("space_search_semantic", "Search all compatible active MID vectors using free text", "search", true),
         ("space_search_iscc", "Search ISCC and hydrate companies without a run", "search", true),
         ("space_recent", "Read recent Search Space searches", "search", false),
+        ("get_controller_turns", "Read saved controller turns, Markdown replies, instructions and outcomes", "workflow", false),
         ("get_shortlist_context", "Read considered companies, hidden count, source coverage and chosen results for this screening run", "review", false),
         ("get_criteria_history", "Read every criteria revision with its Intake Form, exclusions, validity period (created_at to superseded_at) and analyst approval; last_criteria is the newest revision", "review", false),
         (
@@ -460,6 +461,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     .or_else(|| crate::projection::input_schema(name))
                     .or_else(|| crate::execution::input_schema(name))
                     .or_else(|| crate::review::input_schema(name))
+                    .or_else(|| crate::controller::input_schema(name))
                     .unwrap_or_else(|| json!({"type":"object","additionalProperties":false})),
             },
         )
@@ -582,6 +584,8 @@ impl Runtime {
             tokio::task::spawn_blocking(move || {
                 if crate::export_jobs::input_schema(&owned_tool).is_some() {
                     exports.execute(&store, &owned_tool, &owned_arguments)
+                } else if owned_tool == "get_controller_turns" {
+                    crate::controller::get_controller_turns(&store, &owned_arguments)
                 } else if crate::index_build::input_schema(&owned_tool).is_some() {
                     crate::index_build::execute(&store, &owned_tool, &owned_arguments)
                 } else if owned_tool == "get_grid_descriptions" {
@@ -891,6 +895,7 @@ async fn admin(
             | "llmsuite-slot"
             | "llmsuite-consume"
             | "provider-text"
+            | "controller-turn"
             | "shortlist-review"
             | "criteria-save"
             | "criteria-approve"
@@ -913,6 +918,22 @@ async fn admin(
             Err(e) => return Error::Validation(e.to_string()).into_response(),
         };
         return match crate::gateway::dispatch(state.runtime.store.clone(), args).await {
+            Ok(result) => Json(result).into_response(),
+            Err(error) => error.into_response(),
+        };
+    }
+    if operation == "controller-turn" {
+        let args = match serde_json::from_value(arguments) {
+            Ok(args) => args,
+            Err(error) => return Error::Validation(error.to_string()).into_response(),
+        };
+        return match crate::controller::run_controller_turn(
+            &state.runtime,
+            &state.runtime.store,
+            args,
+        )
+        .await
+        {
             Ok(result) => Json(result).into_response(),
             Err(error) => error.into_response(),
         };
@@ -1035,11 +1056,12 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("apply_enrichment_review", "/admin/enrichment-review"),
         ("dispatch_provider_text", "/admin/provider-text"),
         ("start_export", "/admin/export-start"),
+        ("run_controller_turn", "/admin/controller-turn"),
         ("start_index_build", "/admin/index-build-start"),
         ("cancel_index_build", "/admin/index-build-cancel"),
         ("activate_mid_bundle", "/admin/mid-bundle-activate"),
         ("delete_mid_bundle", "/admin/mid-bundle-delete"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::export_jobs::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"run_controller_turn"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="run_controller_turn"{Some(crate::controller::turn_input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::export_jobs::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 
