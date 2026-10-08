@@ -612,6 +612,11 @@ pub fn parse_reply(text: &str) -> ParsedReply {
             .take()
             .and_then(|v| (!v.trim().is_empty()).then(|| v.trim().to_owned()));
     }
+    if reply.instructions.is_empty() && !has_instruction_heading && !text.trim().is_empty() {
+        reply.warnings.push(
+            "No instruction set was found in the reply (expected an \"Instruction set\" section with numbered actions, or \"None.\")".into(),
+        );
+    }
     reply
 }
 

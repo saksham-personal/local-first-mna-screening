@@ -1255,3 +1255,20 @@ I will search.
     );
     assert!(reasoning.instructions.is_empty());
 }
+
+#[test]
+fn unstructured_reply_reports_missing_instruction_set() {
+    let reply = parse_reply("totally unstructured nonsense");
+    assert!(reply.instructions.is_empty());
+    assert!(reply
+        .warnings
+        .iter()
+        .any(|w| w.starts_with("No instruction set was found")));
+    let none = parse_reply("## Context\nNothing to do.\n\n## Instruction set\nNone.\n");
+    assert!(none.instructions.is_empty());
+    assert!(!none
+        .warnings
+        .iter()
+        .any(|w| w.starts_with("No instruction set was found")));
+    assert!(parse_reply("").warnings.is_empty());
+}
