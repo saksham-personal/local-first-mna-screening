@@ -22,7 +22,7 @@ export type StagedFile = {
   uploadArtifactId?: string;
 };
 export type ResearchStep = "pitchbook" | "rogo" | "bing" | "llm" | "copilot";
-type ArtifactBase = { id: string; title: string; createdAt: string };
+type ArtifactBase = { id: string; title: string; createdAt: string; dataTrimmed?: boolean };
 export type ChatArtifact = ArtifactBase &
   (
     | {
@@ -162,6 +162,10 @@ export type ChatState = {
   ignored: string[];
   artifacts: ChatArtifact[];
   companies: Company[];
+  companiesTrimmed?: boolean;
+  companiesLoading?: boolean;
+  companiesLoadError?: string;
+  storageNotice?: string;
   counts: FunnelCounts;
   backendRunId?: string;
   jobId?: string;

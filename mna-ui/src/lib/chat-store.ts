@@ -5,6 +5,73 @@ import { sessionStore } from "./session-store";
 const states = new Map<string, ChatState>();
 const listeners = new Set<() => void>();
 const key = (id: string) => `screening-chat-v1:${id}`;
+const restoring = new Map<string, Promise<void>>();
+const storageNotices = new Set<string>();
+
+export function compactChatState(state: ChatState, aggressive = false): ChatState {
+  const trimmed = !!state.backendRunId && (state.companies.length > 0 || state.companiesTrimmed === true);
+  const large = (value: unknown) => JSON.stringify(value ?? null).length * 2 > (aggressive ? 2048 : 16 * 1024);
+  return { ...state,
+    companies: trimmed ? [] : state.companies,
+    companiesTrimmed: trimmed, companiesLoading: undefined, companiesLoadError: undefined, storageNotice: undefined,
+    selectedResults: large(state.selectedResults) ? undefined : state.selectedResults,
+    artifacts: state.artifacts.map(artifact => {
+      if (artifact.type === "companies" && artifact.backendRunId) return { ...artifact, companies: [], dataTrimmed: true };
+      if (artifact.type === "data-table" && large(artifact.rows)) return { ...artifact, rows: [], dataTrimmed: true };
+      if (artifact.type === "research" && large(artifact.companies)) return { ...artifact, companies: [], dataTrimmed: true };
+      if (artifact.type === "memory" && large(artifact.entries)) return { ...artifact, entries: [], dataTrimmed: true };
+      if (artifact.type === "screening-setup") return { ...artifact, prepared: { ...artifact.prepared, jobs: large(artifact.prepared.jobs) ? [] : artifact.prepared.jobs } };
+      return artifact;
+    }),
+  };
+}
+
+function storageNotice(id: string) {
+  if (storageNotices.has(id)) return;
+  storageNotices.add(id);
+  const state = states.get(id);
+  if (state) states.set(id, { ...state, storageNotice: "Browser storage is full. Export this session to keep a copy." });
+}
+
+function writeCompact(id: string, storageKey: string, value: unknown, fallback = value): void {
+  try { localStorage.setItem(storageKey, JSON.stringify(value)); }
+  catch {
+    try { localStorage.setItem(storageKey, JSON.stringify(fallback)); }
+    catch { storageNotice(id); }
+  }
+}
+
+export function restoreChatCompanies(id: string): Promise<void> {
+  const pending = restoring.get(id);
+  if (pending) return pending;
+  const state = getChatState(id), runId = state.backendRunId;
+  if (!runId || (!state.companiesTrimmed && !state.companiesLoadError)) return Promise.resolve();
+  const revision = state.revision;
+  states.set(id, { ...state, companiesLoading: true, companiesLoadError: undefined });
+  const request = import("./company-mapper").then(({ readRunCompanies }) => readRunCompanies(runId)).then(async companies => {
+    const latest = getChatState(id);
+    if (latest.backendRunId !== runId || latest.revision !== revision) return;
+    const considered = companies.filter(company => company.considered !== false);
+    const counts = { midOnly: considered.filter(company => company.source === "MID").length, isccOnly: considered.filter(company => company.source === "ISCC").length, both: considered.filter(company => company.source === "both").length };
+    updateChatState(id, { companies, companiesTrimmed: false, counts,
+      artifacts: latest.artifacts.map(artifact => artifact.type === "companies" && artifact.backendRunId === runId && artifact.dataTrimmed
+        ? { ...artifact, companies, counts, dataTrimmed: false } : artifact),
+    });
+    // The grid payload uses the discovery mapper, including PB/ROGO and raw
+    // MID fields. Restore review metadata separately without remapping those
+    // companies through the source-table display projection.
+    const { refreshShortlist } = await import("./review-client");
+    await refreshShortlist(id, runId);
+    if (getChatState(id).backendRunId === runId && getChatState(id).revision === revision)
+      updateChatState(id, { companiesLoading: false });
+  }).catch(error => {
+    const latest = getChatState(id);
+    if (latest.backendRunId === runId && latest.revision === revision)
+      updateChatState(id, { companiesLoading: false, companiesLoadError: String(error.message ?? error) });
+  }).finally(() => { restoring.delete(id); listeners.forEach(fn => fn()); });
+  restoring.set(id, request);
+  return request;
+}
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 const strings = (value: unknown): value is string[] =>
@@ -249,6 +316,7 @@ export function emptyChatState(sessionId: string): ChatState {
 export function getChatState(id: string): ChatState {
   if (states.has(id)) return states.get(id)!;
   let state = emptyChatState(id);
+  let loaded = false;
   try {
     const raw =
       typeof localStorage === "undefined"
@@ -280,6 +348,7 @@ export function getChatState(id: string): ChatState {
       )
         throw new Error("Invalid saved screening");
       state = parsed;
+      loaded = true;
       const approval = sessionStore
         .getSnapshot()
         .sessions.find((s) => s.id === id)
@@ -333,6 +402,16 @@ export function getChatState(id: string): ChatState {
     });
   }
   states.set(id, state);
+  if (loaded) {
+    // Migrate legacy snapshots before another write can hit an already-full origin.
+    writeCompact(id, key(id), compactChatState(state), compactChatState(state, true));
+    mirrorWorkspace(state);
+  }
+  if (state.companiesTrimmed && state.backendRunId) {
+    state = { ...state, companiesLoading: true };
+    states.set(id, state);
+    queueMicrotask(() => { void restoreChatCompanies(id); });
+  }
   return state;
 }
 export function updateChatState(
@@ -340,24 +419,17 @@ export function updateChatState(
   change: Partial<ChatState> | ((current: ChatState) => ChatState),
 ): ChatState {
   const before = getChatState(id);
-  const next =
+  let next =
     typeof change === "function" ? change(before) : { ...before, ...change };
+  if (next.revision !== before.revision || next.backendRunId !== before.backendRunId)
+    next = { ...next, companiesTrimmed: next.companiesTrimmed && !next.companies.length && next.revision === before.revision,
+      companiesLoading: false, companiesLoadError: undefined };
   states.set(id, next);
   try {
-    if (typeof localStorage !== "undefined")
-      localStorage.setItem(key(id), JSON.stringify(next));
-  } catch {
-    sessionStore.addEvent({
-      sessionId: id,
-      kind: "system",
-      status: "error",
-      origin: "system",
-      title: "Chat changes could not be saved",
-      text: "Browser storage is full. Export this session to keep a copy.",
-    });
-  }
+    if (typeof localStorage !== "undefined") writeCompact(id, key(id), compactChatState(next), compactChatState(next, true));
+  } catch { storageNotice(id); }
   listeners.forEach((fn) => fn());
-  return next;
+  return states.get(id)!;
 }
 export function useChatState(id: string): ChatState {
   return useSyncExternalStore(
@@ -431,7 +503,8 @@ export function approved(state: ChatState): boolean {
 
 /** Keep the alternate table view on the same approved criteria and real results. */
 export function mirrorWorkspace(state: ChatState): void {
-  if (typeof localStorage === "undefined") return;
+  try { if (typeof localStorage === "undefined") return; }
+  catch { storageNotice(state.sessionId); return; }
   const isApproved = approved(state);
   let existing: Record<string, unknown> = {};
   try {
@@ -482,22 +555,18 @@ export function mirrorWorkspace(state: ChatState): void {
           ? "discovery"
           : "criteria",
   };
-  localStorage.setItem(
-    `screening-workspace-v3:${state.sessionId}`,
-    JSON.stringify(workspace),
-  );
+  writeCompact(state.sessionId, `screening-workspace-v3:${state.sessionId}`, workspace);
   if (state.backendRunId)
-    localStorage.setItem(
-      `screening-executed-v1:${state.sessionId}`,
-      JSON.stringify({
+    writeCompact(state.sessionId,
+      `screening-executed-v1:${state.sessionId}`, {
         backendRunId: state.backendRunId,
-        companies: state.companies,
+        companiesTrimmed: true,
         counts: state.counts,
         criteriaText: state.criteriaText,
         definition: state.definition,
-      }),
+      },
     );
-  else localStorage.removeItem(`screening-executed-v1:${state.sessionId}`);
+  else { try { localStorage.removeItem(`screening-executed-v1:${state.sessionId}`); } catch { storageNotice(state.sessionId); } }
 }
 
 export function syncWorkspaceIntoChat(sessionId: string): void {
@@ -575,6 +644,11 @@ export function syncWorkspaceIntoChat(sessionId: string): void {
     const executed = JSON.parse(
       localStorage.getItem(`screening-executed-v1:${sessionId}`) || "null",
     );
+    if (record(executed) && executed.companiesTrimmed === true && executed.criteriaText === state.criteriaText && executed.definition === state.definition && typeof executed.backendRunId === "string") {
+      if (!state.backendRunId) updateChatState(sessionId, { backendRunId: executed.backendRunId, companiesTrimmed: true });
+      void restoreChatCompanies(sessionId);
+      return;
+    }
     if (
       record(executed) &&
       executed.criteriaText === state.criteriaText &&
