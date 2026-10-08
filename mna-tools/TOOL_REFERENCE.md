@@ -45,8 +45,10 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 - [Evidence](#evidence): `save_evidence`, `get_evidence`, `get_missing_evidence`
 - [Research](#research): `bing_search`, `m365_research`, `fetch_url`, `extract_url_context`
 - [Durable memory](#durable-memory): `search_research_memory`, `get_previous_research`, `get_recent_agent_events`, `get_search_history`, `get_open_questions`, `add_open_question`, `resolve_open_question`
-- [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `get_screening_grid`, `get_company_detail`, `update_candidate_status`, `get_discovery_summary`
-- [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `get_enrichment_report`, `export_candidate_set`
+- [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `get_screening_grid`, `get_grid_descriptions`, `get_company_detail`, `update_candidate_status`, `get_discovery_summary`
+- [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `get_enrichment_report`, `export_candidate_set`, `get_export`, `list_exports`
+- [Search Space](#search-space): `space_sync_status`, `space_browse`, `space_search_lexical`, `space_search_semantic`, `space_search_iscc`, `space_recent`
+- [LLM Suite controller](#llm-suite-controller): `get_controller_turns`
 - [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_progress`, `get_execution_job`, `get_model_assessments`, `get_screening_rounds`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
 - [Recovery](#recovery): `save_checkpoint`, `get_checkpoint`
 
@@ -1527,29 +1529,56 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 **Purpose:** Page every candidate of a run with the fields the company grid needs.
 
-**How it works:** Pages the saved run by company ID, including hidden rows by default. Each row has identity, source, considered state, source coverage, separate MID keyword Match %, MID semantic 0–10 score, ISCC relevancy 0–1, simulation flag and per-round provider results. include_company_payload optionally adds canonical fields, identifiers and source data; a response over 2 MiB is rejected. limit defaults to 1,000, maximum 2,000. This is a read, not a new search or fit verdict.
+**How it works:** Pages the saved run by company ID, including hidden rows by default. view (all, mid or iscc) selects the column model: MID and ISCC views use plain workbook names; the All view merges mapped ISCC↔MID columns under the MID name and prefixes the rest ISCC_/MID_. columns limits the values returned (descriptions only when requested). Each row has identity, source, considered state, Coverage (banker) and Hydration (PB/ROGO/Bing) fields, the MID keyword score, MID semantic 0–10 score, ISCC relevancy 0–1, simulation flag and per-round provider results. Pages shrink automatically to about 1.5 MB, so callers never see a size error; limit defaults to 500 and larger values are clamped to 1,000. This is a read, not a new search or fit verdict.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `after_company_id` | No | string or null | `null` |
+| `columns` | No | array or null | `null` |
 | `include_company_payload` | No | boolean | `false` |
 | `include_hidden` | No | boolean | `true` |
 | `limit` | No | integer or null | `null` |
 | `run_id` | Yes | string | — |
+| `view` | No | GridView | — |
 
-**Returned data and effects:** Rows, ordered round metadata, has_mid_keyword/has_semantic/has_iscc flags, counts, revisions, source hash and next_cursor. Per-round scores remain separate from retrieval scores.
+**Returned data and effects:** columns (catalog with group, source, type and default visibility), rows with values, ordered round metadata, has_mid_keyword/has_semantic/has_iscc flags, counts, revisions, source hash and next_cursor. Per-round scores remain separate from retrieval scores.
 
 **Example arguments:**
 
 ```json
 {
   "run_id": "R42",
-  "include_hidden": true,
-  "limit": 1000
+  "view": "all",
+  "limit": 500
 }
 ```
 
-### 55. `get_company_detail`
+### 55. `get_grid_descriptions`
+
+**Purpose:** Read the description text behind the grid's Description tooltip.
+
+**How it works:** For up to 500 candidates of a run, returns each company's description fields grouped by source: MID fields from the active bundle's description_columns and ISCC description fields. Empty and "-" values are skipped. A single-source company has one entry.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `company_ids` | Yes | array of string | — |
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** companies: [{company_id, sources: [{source: MID|ISCC, items: [{label, text}]}]}]. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42",
+  "company_ids": [
+    "C-1",
+    "C-2"
+  ]
+}
+```
+
+### 56. `get_company_detail`
 
 **Purpose:** Read everything known about one candidate for the company drawer.
 
@@ -1559,6 +1588,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 |---|---|---|---|
 | `company_id` | Yes | string | — |
 | `run_id` | Yes | string | — |
+| `view` | No | GridView | — |
 
 **Returned data and effects:** company, identifiers, considered state, sources, descriptions, mid_keyword, mid_semantic, iscc, rounds, simulated and activity. Read-only.
 
@@ -1571,7 +1601,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 56. `update_candidate_status`
+### 57. `update_candidate_status`
 
 **Purpose:** Record a considered funnel state and supporting reason.
 
@@ -1597,7 +1627,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 57. `get_discovery_summary`
+### 58. `get_discovery_summary`
 
 **Purpose:** Report the full unique funnel and the next-step default.
 
@@ -1619,7 +1649,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Enrichment and exports
 
-### 58. `inspect_enrichment_files`
+### 59. `inspect_enrichment_files`
 
 **Purpose:** Identify staged spreadsheet roles before hydration or run selection.
 
@@ -1644,7 +1674,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 59. `import_enrichment_files`
+### 60. `import_enrichment_files`
 
 **Purpose:** Classify and join a mixed analyst upload into compact company context.
 
@@ -1674,7 +1704,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 60. `get_enrichment_report`
+### 61. `get_enrichment_report`
 
 **Purpose:** Read a saved PitchBook or ROGO import match report.
 
@@ -1696,7 +1726,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 61. `export_candidate_set`
+### 62. `export_candidate_set`
 
 **Purpose:** Create one of the analyst's three exact workbook formats.
 
@@ -1721,9 +1751,217 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
+### 63. `get_export`
+
+**Purpose:** Read the progress of a background export job.
+
+**How it works:** Returns the status of one export started by the analyst-only start_export operation. Status survives a restart; a job that was running when the service stopped is reported as failed: interrupted.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `export_id` | Yes | string | — |
+
+**Returned data and effects:** export_id, run_id, kind, state (running|done|failed), rows_done, rows_total, file, error and timestamps. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "export_id": "EXP-1"
+}
+```
+
+### 64. `list_exports`
+
+**Purpose:** List the background export jobs of a run.
+
+**How it works:** Lists export jobs for run_id, newest first, from the in-memory registry and the status files in the export folder.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** exports: the same records as get_export. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42"
+}
+```
+
+## Search Space
+
+### 65. `space_sync_status`
+
+**Purpose:** Read the Search Space lexical index state.
+
+**How it works:** Reports whether the managed Meilisearch is up and whether the active MID bundle is synced. Needs no run.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+
+**Returned data and effects:** meili (up|down), index, bundle_id, documents, last_synced_at and task_status. Read-only.
+
+**Example arguments:**
+
+```json
+{}
+```
+
+### 66. `space_browse`
+
+**Purpose:** Page through every company of the active MID bundle.
+
+**How it works:** Returns the active bundle's companies with all workbook columns, 100 per page by default (maximum 200), optionally sorted by one column. Needs no run.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `limit` | No | integer | `100` |
+| `offset` | No | integer | `0` |
+| `sort` | No | Sort or null | — |
+
+**Returned data and effects:** results with values, columns, total, offset and limit. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "offset": 0,
+  "limit": 100
+}
+```
+
+### 67. `space_search_lexical`
+
+**Purpose:** Keyword search over the whole MID population.
+
+**How it works:** Keywords alone are ORed across the bundle's search columns in Meilisearch. A query expression (uppercase AND, OR, NOT, parentheses; keyword text or ids k1, k2…) overrides the keyword union and uses the same evaluator as MID discovery; a standalone NOT is rejected. The first page of each search is saved to recent searches.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `expression` | No | string or null | — |
+| `keywords` | No | array of SpaceKeyword | `[]` |
+| `limit` | No | integer | `100` |
+| `offset` | No | integer | `0` |
+
+**Returned data and effects:** results with matched_keywords, raw_score and match_strength (matched ÷ positive keywords), total and query_id. Read-only apart from the saved search record.
+
+**Example arguments:**
+
+```json
+{
+  "keywords": [
+    {
+      "id": "k1",
+      "text": "claims management"
+    },
+    {
+      "id": "k2",
+      "text": "policy administration"
+    }
+  ],
+  "expression": "k1 OR k2",
+  "offset": 0,
+  "limit": 100
+}
+```
+
+### 68. `space_search_semantic`
+
+**Purpose:** Meaning-based search over the whole MID population.
+
+**How it works:** Embeds "query: <text>" with the local Arctic-embed-m-v2 worker and ranks every active-bundle vector by cosine similarity (score 0–10). Returns skipped with a reason when embeddings are unavailable.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `limit` | No | integer | `100` |
+| `min_score` | No | number or null | — |
+| `offset` | No | integer | `0` |
+| `text` | Yes | string | — |
+
+**Returned data and effects:** results with score, total and query_id, or status skipped with reason. Read-only apart from the saved search record.
+
+**Example arguments:**
+
+```json
+{
+  "text": "Software insurers use to administer policies and claims",
+  "offset": 0,
+  "limit": 100
+}
+```
+
+### 69. `space_search_iscc`
+
+**Purpose:** Pull ISCC results for a query without a screening run.
+
+**How it works:** Calls the ISCC provider (simulated in development), drops iQ Link and hydrates the rows into the company store with no run scope.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `count` | Yes | integer | — |
+| `query` | Yes | string | — |
+
+**Returned data and effects:** query_id, results with values and company ids, columns, total and simulated flag.
+
+**Example arguments:**
+
+```json
+{
+  "query": "claims management software for insurers",
+  "count": 100
+}
+```
+
+### 70. `space_recent`
+
+**Purpose:** List recent Search Space searches.
+
+**How it works:** Lists saved lexical, semantic and ISCC searches, newest first.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `limit` | No | integer | `100` |
+
+**Returned data and effects:** queries: [{query_id, source, query, parameters, created_at}]. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "limit": 20
+}
+```
+
+## LLM Suite controller
+
+### 71. `get_controller_turns`
+
+**Purpose:** Read the stored LLM Suite controller turns of a run.
+
+**How it works:** Returns the controller turns saved for run_id in the shape the chat renders: each turn's kind (analyst, feedback, handoff), parsed context, reasoning, notes, instruction rows with status (executed, rejected, failed), bounded result summaries and parser warnings, plus the active conversation id, rotated_from and rotation reason.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `limit` | No | integer or null | — |
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** conversation_id, rotated, rotated_from, rotation, estimated_tokens and turns. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42",
+  "limit": 20
+}
+```
+
 ## Approved action graphs and screening
 
-### 62. `propose_action_plan`
+### 72. `propose_action_plan`
 
 **Purpose:** Turn an interpreted analyst request into a durable dependency graph.
 
@@ -1770,7 +2008,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 63. `get_action_plan`
+### 73. `get_action_plan`
 
 **Purpose:** Read a plan, its approval metadata and completed dependencies.
 
@@ -1792,7 +2030,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 64. `propose_prepared_plan`
+### 74. `propose_prepared_plan`
 
 **Purpose:** Freeze an immutable version-2 screening or question handoff.
 
@@ -1874,7 +2112,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 65. `get_prepared_plan`
+### 75. `get_prepared_plan`
 
 **Purpose:** Read a frozen handoff, its approval state and durable batch jobs.
 
@@ -1894,7 +2132,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 66. `get_execution_progress`
+### 76. `get_execution_progress`
 
 **Purpose:** Poll approval freshness and durable batch progress without large frozen inputs.
 
@@ -1914,7 +2152,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 67. `get_execution_job`
+### 77. `get_execution_job`
 
 **Purpose:** Inspect a durable provider batch and its parser or dispatch state.
 
@@ -1934,7 +2172,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 68. `get_model_assessments`
+### 78. `get_model_assessments`
 
 **Purpose:** Read accepted provider assessments separately from retrieval and evidence.
 
@@ -1957,7 +2195,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 69. `get_screening_rounds`
+### 79. `get_screening_rounds`
 
 **Purpose:** Read approved scored-screening rounds for a run.
 
@@ -1977,7 +2215,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 70. `prepare_screening_batch`
+### 80. `prepare_screening_batch`
 
 **Purpose:** Legacy compatibility handoff for scored screening batches.
 
@@ -2016,7 +2254,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 71. `prepare_bing_queries`
+### 81. `prepare_bing_queries`
 
 **Purpose:** Expand approved fit questions using the best available company identity.
 
@@ -2045,7 +2283,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 72. `save_screening_results`
+### 82. `save_screening_results`
 
 **Purpose:** Legacy compatibility endpoint for batch scores.
 
@@ -2079,7 +2317,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 73. `get_screening_results`
+### 83. `get_screening_results`
 
 **Purpose:** Read a company's external screening history within the current run.
 
@@ -2103,7 +2341,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 74. `complete_action_step`
+### 84. `complete_action_step`
 
 **Purpose:** Release dependent graph work only after successful operations are proven.
 
@@ -2133,7 +2371,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Recovery
 
-### 75. `save_checkpoint`
+### 85. `save_checkpoint`
 
 **Purpose:** Persist the orchestrator's restart state with optimistic concurrency.
 
@@ -2166,7 +2404,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 76. `get_checkpoint`
+### 86. `get_checkpoint`
 
 **Purpose:** Resume from the latest or a named historical checkpoint.
 
@@ -2451,6 +2689,31 @@ Unknown nested fields are rejected.
 }
 ```
 
+### `Direction`
+
+```json
+{
+  "enum": [
+    "asc",
+    "desc"
+  ],
+  "type": "string"
+}
+```
+
+### `GridView`
+
+```json
+{
+  "enum": [
+    "all",
+    "mid",
+    "iscc"
+  ],
+  "type": "string"
+}
+```
+
 ### `IdentitySources`
 
 | Argument | Required by schema | Type | Schema default |
@@ -2553,11 +2816,30 @@ Unknown nested fields are rejected.
 }
 ```
 
+### `Sort`
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `column` | Yes | string | — |
+| `direction` | Yes | Direction | — |
+
+Unknown nested fields are rejected.
+
 ### `SourceColumn`
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `column` | Yes | string | — |
 | `source` | Yes | string | — |
+
+Unknown nested fields are rejected.
+
+### `SpaceKeyword`
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `id` | No | string or null | — |
+| `match` | No | Match | `"stem"` |
+| `text` | Yes | string | — |
 
 Unknown nested fields are rejected.

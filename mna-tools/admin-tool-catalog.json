@@ -256,6 +256,261 @@
   },
   {
     "controller_only": false,
+    "endpoint": "/admin/space-sync",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Empty",
+      "type": "object"
+    },
+    "name": "space_sync"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/space-add-to-run",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "query_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_ids"
+      ],
+      "title": "AddArgs",
+      "type": "object"
+    },
+    "name": "space_add_to_run"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/space-export",
+    "input_schema": {
+      "$defs": {
+        "BrowseArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sort": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Sort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "Direction": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "Format": {
+          "enum": [
+            "xlsx"
+          ],
+          "type": "string"
+        },
+        "IsccArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query",
+            "count"
+          ],
+          "type": "object"
+        },
+        "LexicalArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "expression": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keywords": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SpaceKeyword"
+              },
+              "type": "array"
+            },
+            "limit": {
+              "default": 100,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "Match": {
+          "enum": [
+            "stem",
+            "exact"
+          ],
+          "type": "string"
+        },
+        "SearchArgs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsccArgs"
+            },
+            {
+              "$ref": "#/$defs/SemanticArgs"
+            },
+            {
+              "$ref": "#/$defs/BrowseArgs"
+            },
+            {
+              "$ref": "#/$defs/LexicalArgs"
+            }
+          ]
+        },
+        "SemanticArgs": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_score": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "offset": {
+              "default": 0,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        "Sort": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "direction": {
+              "$ref": "#/$defs/Direction"
+            }
+          },
+          "required": [
+            "column",
+            "direction"
+          ],
+          "type": "object"
+        },
+        "SpaceKeyword": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "match": {
+              "$ref": "#/$defs/Match",
+              "default": "stem"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "allow_simulated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "format": {
+          "$ref": "#/$defs/Format"
+        },
+        "search": {
+          "$ref": "#/$defs/SearchArgs"
+        }
+      },
+      "required": [
+        "search",
+        "format"
+      ],
+      "title": "ExportArgs",
+      "type": "object"
+    },
+    "name": "space_export"
+  },
+  {
+    "controller_only": false,
     "endpoint": "/admin/company-files",
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -967,6 +1222,71 @@
       "type": "object"
     },
     "name": "dispatch_provider_text"
+  },
+  {
+    "controller_only": false,
+    "endpoint": "/admin/export-start",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "allow_simulated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "kind"
+      ],
+      "title": "StartArgs",
+      "type": "object"
+    },
+    "name": "start_export"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/controller-turn",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_actions": {
+          "description": "Optional subset of the fixed controller allowlist.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "analyst_message": {
+          "description": "Latest analyst request (1..4000 characters).",
+          "type": "string"
+        },
+        "new_conversation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "analyst_message"
+      ],
+      "title": "TurnRequest",
+      "type": "object"
+    },
+    "name": "run_controller_turn"
   },
   {
     "controller_only": false,

@@ -305,9 +305,49 @@ tool("get_execution_progress", "Poll approval freshness and durable batch progre
      {"plan_id":"PPLAN-returned-id"})
 
 tool("get_screening_grid", "Page every candidate of a run with the fields the company grid needs.",
-     "Pages the saved run by company ID, including hidden rows by default. Each row has identity, source, considered state, source coverage, separate MID keyword Match %, MID semantic 0–10 score, ISCC relevancy 0–1, simulation flag and per-round provider results. include_company_payload optionally adds canonical fields, identifiers and source data; a response over 2 MiB is rejected. limit defaults to 1,000, maximum 2,000. This is a read, not a new search or fit verdict.",
-     "Rows, ordered round metadata, has_mid_keyword/has_semantic/has_iscc flags, counts, revisions, source hash and next_cursor. Per-round scores remain separate from retrieval scores.",
-     {"run_id":R,"include_hidden":True,"limit":1000})
+     "Pages the saved run by company ID, including hidden rows by default. view (all, mid or iscc) selects the column model: MID and ISCC views use plain workbook names; the All view merges mapped ISCC↔MID columns under the MID name and prefixes the rest ISCC_/MID_. columns limits the values returned (descriptions only when requested). Each row has identity, source, considered state, Coverage (banker) and Hydration (PB/ROGO/Bing) fields, the MID keyword score, MID semantic 0–10 score, ISCC relevancy 0–1, simulation flag and per-round provider results. Pages shrink automatically to about 1.5 MB, so callers never see a size error; limit defaults to 500 and larger values are clamped to 1,000. This is a read, not a new search or fit verdict.",
+     "columns (catalog with group, source, type and default visibility), rows with values, ordered round metadata, has_mid_keyword/has_semantic/has_iscc flags, counts, revisions, source hash and next_cursor. Per-round scores remain separate from retrieval scores.",
+     {"run_id":R,"view":"all","limit":500})
+tool("get_grid_descriptions", "Read the description text behind the grid's Description tooltip.",
+     "For up to 500 candidates of a run, returns each company's description fields grouped by source: MID fields from the active bundle's description_columns and ISCC description fields. Empty and \"-\" values are skipped. A single-source company has one entry.",
+     "companies: [{company_id, sources: [{source: MID|ISCC, items: [{label, text}]}]}]. Read-only.",
+     {"run_id":R,"company_ids":["C-1","C-2"]})
+tool("get_export", "Read the progress of a background export job.",
+     "Returns the status of one export started by the analyst-only start_export operation. Status survives a restart; a job that was running when the service stopped is reported as failed: interrupted.",
+     "export_id, run_id, kind, state (running|done|failed), rows_done, rows_total, file, error and timestamps. Read-only.",
+     {"export_id":"EXP-1"})
+tool("list_exports", "List the background export jobs of a run.",
+     "Lists export jobs for run_id, newest first, from the in-memory registry and the status files in the export folder.",
+     "exports: the same records as get_export. Read-only.",
+     {"run_id":R})
+tool("get_controller_turns", "Read the stored LLM Suite controller turns of a run.",
+     "Returns the controller turns saved for run_id in the shape the chat renders: each turn's kind (analyst, feedback, handoff), parsed context, reasoning, notes, instruction rows with status (executed, rejected, failed), bounded result summaries and parser warnings, plus the active conversation id, rotated_from and rotation reason.",
+     "conversation_id, rotated, rotated_from, rotation, estimated_tokens and turns. Read-only.",
+     {"run_id":R,"limit":20})
+tool("space_sync_status", "Read the Search Space lexical index state.",
+     "Reports whether the managed Meilisearch is up and whether the active MID bundle is synced. Needs no run.",
+     "meili (up|down), index, bundle_id, documents, last_synced_at and task_status. Read-only.",
+     {})
+tool("space_browse", "Page through every company of the active MID bundle.",
+     "Returns the active bundle's companies with all workbook columns, 100 per page by default (maximum 200), optionally sorted by one column. Needs no run.",
+     "results with values, columns, total, offset and limit. Read-only.",
+     {"offset":0,"limit":100})
+tool("space_search_lexical", "Keyword search over the whole MID population.",
+     "Keywords alone are ORed across the bundle's search columns in Meilisearch. A query expression (uppercase AND, OR, NOT, parentheses; keyword text or ids k1, k2…) overrides the keyword union and uses the same evaluator as MID discovery; a standalone NOT is rejected. The first page of each search is saved to recent searches.",
+     "results with matched_keywords, raw_score and match_strength (matched ÷ positive keywords), total and query_id. Read-only apart from the saved search record.",
+     {"keywords":[{"id":"k1","text":"claims management"},{"id":"k2","text":"policy administration"}],"expression":"k1 OR k2","offset":0,"limit":100})
+tool("space_search_semantic", "Meaning-based search over the whole MID population.",
+     "Embeds \"query: <text>\" with the local Arctic-embed-m-v2 worker and ranks every active-bundle vector by cosine similarity (score 0–10). Returns skipped with a reason when embeddings are unavailable.",
+     "results with score, total and query_id, or status skipped with reason. Read-only apart from the saved search record.",
+     {"text":"Software insurers use to administer policies and claims","offset":0,"limit":100})
+tool("space_search_iscc", "Pull ISCC results for a query without a screening run.",
+     "Calls the ISCC provider (simulated in development), drops iQ Link and hydrates the rows into the company store with no run scope.",
+     "query_id, results with values and company ids, columns, total and simulated flag.",
+     {"query":"claims management software for insurers","count":100})
+tool("space_recent", "List recent Search Space searches.",
+     "Lists saved lexical, semantic and ISCC searches, newest first.",
+     "queries: [{query_id, source, query, parameters, created_at}]. Read-only.",
+     {"limit":20})
 tool("get_company_detail", "Read everything known about one candidate for the company drawer.",
      "Resolves a candidate by canonical or typed identifier within run_id. Reads canonical identity, source fields and lineage, labelled descriptions, keyword match details and saved rationale, MID semantic score, ISCC relevancy, each screening round, simulation marker and a bounded activity history. It does not turn unverified source or model output into an analyst decision.",
      "company, identifiers, considered state, sources, descriptions, mid_keyword, mid_semantic, iscc, rounds, simulated and activity. Read-only.",
@@ -330,8 +370,10 @@ GROUPS = [
     ("Evidence",["save_evidence","get_evidence","get_missing_evidence"]),
     ("Research",["bing_search","m365_research","fetch_url","extract_url_context"]),
     ("Durable memory",["search_research_memory","get_previous_research","get_recent_agent_events","get_search_history","get_open_questions","add_open_question","resolve_open_question"]),
-    ("Candidate funnel",["add_candidates","get_candidate_set","get_shortlist_context","get_screening_grid","get_company_detail","update_candidate_status","get_discovery_summary"]),
-    ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","get_enrichment_report","export_candidate_set"]),
+    ("Candidate funnel",["add_candidates","get_candidate_set","get_shortlist_context","get_screening_grid","get_grid_descriptions","get_company_detail","update_candidate_status","get_discovery_summary"]),
+    ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","get_enrichment_report","export_candidate_set","get_export","list_exports"]),
+    ("Search Space",["space_sync_status","space_browse","space_search_lexical","space_search_semantic","space_search_iscc","space_recent"]),
+    ("LLM Suite controller",["get_controller_turns"]),
     ("Approved action graphs and screening",["propose_action_plan","get_action_plan","propose_prepared_plan","get_prepared_plan","get_execution_progress","get_execution_job","get_model_assessments","get_screening_rounds","prepare_screening_batch","prepare_bing_queries","save_screening_results","get_screening_results","complete_action_step"]),
     ("Recovery",["save_checkpoint","get_checkpoint"]),
 ]
@@ -582,7 +624,7 @@ The tables below cover typed nested objects and enums referenced by the agent ar
 
 """
 
-assert len(TOOLS)==76 and set(META)==set(TOOLS)
+assert len(TOOLS)==86 and set(META)==set(TOOLS)
 grouped=[name for _,names in GROUPS for name in names]
 assert len(grouped)==len(TOOLS) and len(set(grouped))==len(TOOLS) and set(grouped)==set(TOOLS)
 parts=[INTRO]

@@ -1,5 +1,263 @@
 [
   {
+    "name": "space_sync_status",
+    "description": "Read active MID Meilisearch sync status",
+    "category": "search",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Empty",
+      "type": "object"
+    }
+  },
+  {
+    "name": "space_browse",
+    "description": "Browse all active MID companies without a run",
+    "category": "search",
+    "mutates_state": false,
+    "input_schema": {
+      "$defs": {
+        "Direction": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "Sort": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "direction": {
+              "$ref": "#/$defs/Direction"
+            }
+          },
+          "required": [
+            "column",
+            "direction"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 100,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "BrowseArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "space_search_lexical",
+    "description": "Search the MID population using keyword sets and Boolean expressions",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$defs": {
+        "Match": {
+          "enum": [
+            "stem",
+            "exact"
+          ],
+          "type": "string"
+        },
+        "SpaceKeyword": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "match": {
+              "$ref": "#/$defs/Match",
+              "default": "stem"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keywords": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SpaceKeyword"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": 100,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "title": "LexicalArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "space_search_semantic",
+    "description": "Search all compatible active MID vectors using free text",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 100,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_score": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "SemanticArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "space_search_iscc",
+    "description": "Search ISCC and hydrate companies without a run",
+    "category": "search",
+    "mutates_state": true,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "count"
+      ],
+      "title": "IsccArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "space_recent",
+    "description": "Read recent Search Space searches",
+    "category": "search",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 100,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "title": "RecentArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_controller_turns",
+    "description": "Read saved controller turns, Markdown replies, instructions and outcomes",
+    "category": "workflow",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "Number of recent turns, from 1 to 100 (default 20).",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "ReadRequest",
+      "type": "object"
+    }
+  },
+  {
     "name": "get_shortlist_context",
     "description": "Read considered companies, hidden count, source coverage and chosen results for this screening run",
     "category": "review",
@@ -2634,10 +2892,20 @@
   },
   {
     "name": "get_screening_grid",
-    "description": "Page every company of a run for the grid in one pass: source, scores, PitchBook/ROGO/Bing coverage, combined description and considered/hidden state",
+    "description": "Page a run's MID, ISCC or merged grid with a column catalog, separate scores, banker coverage and PitchBook/ROGO/Bing hydration",
     "category": "data",
     "mutates_state": false,
     "input_schema": {
+      "$defs": {
+        "GridView": {
+          "enum": [
+            "all",
+            "mid",
+            "iscc"
+          ],
+          "type": "string"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
@@ -2646,6 +2914,17 @@
           "description": "Keyset cursor: the next_cursor of the previous page.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "columns": {
+          "default": null,
+          "description": "Column ids to project into values. Omit to include all non-description columns.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -2661,7 +2940,7 @@
         },
         "limit": {
           "default": null,
-          "description": "Page size, default 1000, maximum 2000.",
+          "description": "Page size, default 500, maximum 1000. Large pages shrink automatically.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2671,6 +2950,9 @@
         },
         "run_id": {
           "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/GridView"
         }
       },
       "required": [
@@ -2681,11 +2963,50 @@
     }
   },
   {
+    "name": "get_grid_descriptions",
+    "description": "Read per-column MID and ISCC descriptions for up to 500 visible companies in a run",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "company_ids": {
+          "description": "Visible company ids, at most 500.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array"
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "company_ids"
+      ],
+      "title": "DescriptionArgs",
+      "type": "object"
+    }
+  },
+  {
     "name": "get_company_detail",
     "description": "Read one company's identifiers, every source field grouped by MID, ISCC, PitchBook and ROGO, labelled descriptions and recent activity",
     "category": "data",
     "mutates_state": false,
     "input_schema": {
+      "$defs": {
+        "GridView": {
+          "enum": [
+            "all",
+            "mid",
+            "iscc"
+          ],
+          "type": "string"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
@@ -2695,6 +3016,9 @@
         },
         "run_id": {
           "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/GridView"
         }
       },
       "required": [
@@ -2974,6 +3298,46 @@
       "additionalProperties": false,
       "properties": {},
       "title": "EmptyArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_export",
+    "description": "Read background export progress",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "export_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "export_id"
+      ],
+      "title": "GetArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_exports",
+    "description": "List background exports for a run",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "ListArgs",
       "type": "object"
     }
   },

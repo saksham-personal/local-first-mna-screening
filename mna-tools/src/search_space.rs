@@ -69,6 +69,7 @@ enum Match {
 }
 #[derive(Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "SpaceKeyword")]
 struct Keyword {
     id: Option<String>,
     text: String,

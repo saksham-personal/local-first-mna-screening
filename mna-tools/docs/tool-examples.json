@@ -592,8 +592,57 @@
   },
   "get_screening_grid": {
     "run_id": "R42",
-    "include_hidden": true,
-    "limit": 1000
+    "view": "all",
+    "limit": 500
+  },
+  "get_grid_descriptions": {
+    "run_id": "R42",
+    "company_ids": [
+      "C-1",
+      "C-2"
+    ]
+  },
+  "get_export": {
+    "export_id": "EXP-1"
+  },
+  "list_exports": {
+    "run_id": "R42"
+  },
+  "get_controller_turns": {
+    "run_id": "R42",
+    "limit": 20
+  },
+  "space_sync_status": {},
+  "space_browse": {
+    "offset": 0,
+    "limit": 100
+  },
+  "space_search_lexical": {
+    "keywords": [
+      {
+        "id": "k1",
+        "text": "claims management"
+      },
+      {
+        "id": "k2",
+        "text": "policy administration"
+      }
+    ],
+    "expression": "k1 OR k2",
+    "offset": 0,
+    "limit": 100
+  },
+  "space_search_semantic": {
+    "text": "Software insurers use to administer policies and claims",
+    "offset": 0,
+    "limit": 100
+  },
+  "space_search_iscc": {
+    "query": "claims management software for insurers",
+    "count": 100
+  },
+  "space_recent": {
+    "limit": 20
   },
   "get_company_detail": {
     "run_id": "R42",
