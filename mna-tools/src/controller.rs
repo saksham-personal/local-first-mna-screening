@@ -577,6 +577,6 @@ pub fn get_controller_turns(store: &Store, arguments: &Value) -> Result<Value> {
         }
         turns.reverse();
         let active:Option<(String,i64,Option<String>)>=c.query_row("SELECT conversation_id,estimated_tokens,rotated_from FROM llm_conversations WHERE run_id=? AND provider='llm_suite' AND status='active'",[&args.run_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        Ok(json!({"turn_id":turns.iter().rev().find(|t|t["kind"]=="analyst").map(|t|&t["turn_id"]),"conversation_id":active.as_ref().map(|a|&a.0),"rotated":active.as_ref().is_some_and(|a|a.2.is_some()),"estimated_tokens":active.as_ref().map(|a|a.1).unwrap_or(0),"turns":turns}))
+        Ok(json!({"turn_id":turns.iter().rev().find(|t|t["kind"]=="analyst").map(|t|&t["turn_id"]),"conversation_id":active.as_ref().map(|a|&a.0),"rotated":active.as_ref().is_some_and(|a|a.2.is_some()),"rotated_from":active.as_ref().and_then(|a|a.2.as_ref()),"rotation":active.as_ref().filter(|a|a.2.is_some()).map(|a|if turns.iter().any(|t|t["kind"]=="handoff"&&t["conversation_id"]==a.0.as_str()){"token_budget"}else{"new_conversation"}),"estimated_tokens":active.as_ref().map(|a|a.1).unwrap_or(0),"turns":turns}))
     })
 }

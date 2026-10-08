@@ -428,6 +428,8 @@ fn explicit_new_context_closes_and_threshold_rotation_sends_nonexecuting_handoff
     let second = f.turn(true).unwrap();
     assert_ne!(first["conversation_id"], second["conversation_id"]);
     assert_eq!(second["rotated"], true);
+    assert_eq!(second["rotated_from"], first["conversation_id"]);
+    assert_eq!(second["rotation"], "new_conversation");
     assert_eq!(
         f.count("SELECT COUNT(*) FROM llm_conversations WHERE status='closed'"),
         1
@@ -441,6 +443,8 @@ fn explicit_new_context_closes_and_threshold_rotation_sends_nonexecuting_handoff
     assert_ne!(second["conversation_id"], third["conversation_id"]);
     assert_eq!(third["rotated"], true);
     assert_eq!(third["turns"][0]["kind"], "handoff");
+    assert_eq!(third["rotated_from"], second["conversation_id"]);
+    assert_eq!(third["rotation"], "token_budget");
     assert!(third["turns"][0]["instructions"]
         .as_array()
         .unwrap()
