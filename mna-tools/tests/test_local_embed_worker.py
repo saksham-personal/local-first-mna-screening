@@ -99,5 +99,18 @@ class WorkerTests(unittest.TestCase):
             thread.join(timeout=2)
 
 
+    def test_sub_batches_keep_request_order(self):
+        embedder = Embedder(SimpleNamespace(model_name=DEFAULT_MODEL, version=DEFAULT_VERSION, dimensions=1))
+        embedder.session = embedder.tokenizer = embedder.np = object()
+        seen = []
+        def fake_batch(texts):
+            seen.append(texts)
+            return [[float(len(text))] for text in texts]
+        embedder._embed_batch = fake_batch
+        texts = ["x" * n for n in (40, 3, 17, 1, 25, 9, 33, 2, 11, 5)]
+        self.assertEqual(embedder.embed(texts), [[float(len(t))] for t in texts])
+        self.assertEqual([len(batch) for batch in seen], [8, 2])
+        self.assertEqual(seen[0], sorted(texts, key=len)[:8])
+
 if __name__ == "__main__":
     unittest.main()

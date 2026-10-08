@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -208,7 +209,7 @@ export async function startBridge() {
     embedWorker = spawn(process.env.SCREENING_PYTHON || 'python', [
       resolve(root, '..', 'mna-tools', 'scripts', 'local_embed_worker.py'),
       '--model', resolve(embedDir, 'onnx', 'model_int8.onnx'), '--tokenizer', resolve(embedDir, 'tokenizer.json'),
-      '--port', String(embedPort), '--intra-op-threads', process.env.SCREENING_EMBED_THREADS || '4',
+      '--port', String(embedPort), '--intra-op-threads', process.env.SCREENING_EMBED_THREADS || String(Math.max(2, Math.min(8, availableParallelism() - 2))),
     ], { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] });
     embedWorker.on('error', () => {});
     for (let attempt = 0; attempt < 120 && !env.MNA_EMBED_ENDPOINT; attempt++) {

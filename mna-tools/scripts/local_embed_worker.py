@@ -20,6 +20,7 @@ DEFAULT_MODEL = "Snowflake/snowflake-arctic-embed-m-v2.0"
 DEFAULT_VERSION = "v2.0-int8-onnx"
 DEFAULT_DIMENSIONS = 768
 MAX_REQUEST_BYTES = 600 * 1024
+SUB_BATCH = 8
 MAX_TEXTS = 32
 MAX_TEXT_BYTES = 16_000
 
@@ -146,6 +147,16 @@ class Embedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self.session is None or self.tokenizer is None or self.np is None:
             raise WorkerError("Embedding model is not loaded.")
+        # Similar-length texts run together so short texts are not padded to the longest one.
+        order = sorted(range(len(texts)), key=lambda index: len(texts[index]))
+        vectors: list[list[float]] = [[] for _ in texts]
+        for start in range(0, len(order), SUB_BATCH):
+            indexes = order[start:start + SUB_BATCH]
+            for index, vector in zip(indexes, self._embed_batch([texts[i] for i in indexes])):
+                vectors[index] = vector
+        return vectors
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         try:
             encodings = self.tokenizer.encode_batch(texts)
             feeds: dict[str, Any] = {
