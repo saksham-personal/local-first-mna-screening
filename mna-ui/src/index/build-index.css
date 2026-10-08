@@ -47,17 +47,13 @@
 .index-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .index-section { border-top: 1px solid var(--border); margin-top: 18px; padding-top: 12px; }
 .index-section summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
-.index-section h3 { font-size: 12px; margin: 14px 0 8px; }
-.index-log, .index-columns, .index-recent { padding: 0; list-style: none; }
+.index-log, .index-recent { padding: 0; list-style: none; }
 .index-log { max-height: 220px; overflow: auto; font-size: 11px; }
 .index-log li { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; padding: 4px 0; overflow-wrap: anywhere; }
 .index-log time { color: var(--text-muted); }
 .index-log-error { color: var(--danger); }
 .index-log-warn, .index-log-warning { color: var(--warning); }
 .index-log-info { color: var(--info); }
-.index-columns li { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 5px 0; font-size: 12px; overflow-wrap: anywhere; }
-.index-columns span { color: var(--text-muted); }
-.index-descriptions { color: var(--text-muted); font-size: 12px; padding-left: 18px; }
 .index-recent li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .index-recent li > div:first-child { min-width: 0; overflow-wrap: anywhere; }
 .index-recent p { color: var(--text-muted); font-size: 11px; margin: 4px 0 0; }

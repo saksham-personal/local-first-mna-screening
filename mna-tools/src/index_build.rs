@@ -114,9 +114,16 @@ pub fn execute(store: &Store, tool: &str, args: &Value) -> Result<Value> {
                     Ok(json!({"bundle_id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"row_count":r.get::<_,i64>(2)?,"activated_at":r.get::<_,Option<String>>(3)?,"semantic_status":r.get::<_,String>(4)?,"semantic_model":r.get::<_,Option<String>>(5)?,"config_hash":r.get::<_,String>(6)?,"fts_id":r.get::<_,i64>(7)?}))).optional()?;
                 let running: Option<String> = c.query_row("SELECT build_id FROM index_builds WHERE status IN ('queued','running') LIMIT 1", [], |r| r.get(0)).optional()?;
                 let running = running.map(|id| build_value(c, &id)).transpose()?;
+                let workbook_columns = c.query_row("SELECT config_json FROM mid_bundles WHERE status='active'", [], |r| r.get::<_,String>(0)).optional()?
+                    .map(|raw| serde_json::from_str::<Value>(&raw))
+                    .transpose()?
+                    .and_then(|value| value.get("workbook_columns").cloned())
+                    .unwrap_or_else(|| json!([]));
                 Ok(json!({"active":active,"running_build":running,"config":{
-                    "search_columns":config.search_columns,"llm_description_columns":config.llm_description_columns,
-                    "fts5_column_names":config.fts5_column_names,"source_weights":config.source_weights,"identifier_columns":config.identifier_columns}}))
+                    "search_columns":config.search_columns,"description_columns":config.description_columns,
+                    "display_columns":config.display_columns,"column_types":config.column_types,
+                    "coverage_columns":config.coverage_columns,"identifier_columns":config.identifier_columns,
+                    "workbook_columns":workbook_columns}}))
             })
         }
         "list_index_builds" => {
@@ -637,6 +644,12 @@ impl Worker {
                 ),
             );
         }
+        let mut snapshot = serde_json::to_value(&self.config)?;
+        snapshot["workbook_columns"] = json!(headers.values().collect::<Vec<_>>());
+        self.conn.execute(
+            "UPDATE mid_bundles SET config_json=? WHERE bundle_id=?",
+            params![snapshot.to_string(), self.bundle],
+        )?;
         let present: BTreeSet<String> = headers.values().map(|s| normalize_header(s)).collect();
         let has = |columns: &[String]| {
             columns
@@ -684,10 +697,11 @@ impl Worker {
             .collect();
         let mut missing = self
             .config
-            .metadata_columns
+            .search_columns
             .iter()
-            .chain(&self.config.search_columns)
-            .chain(&self.config.llm_description_columns)
+            .chain(&self.config.description_columns)
+            .chain(&self.config.display_columns)
+            .chain(self.config.column_types.keys())
             .filter(|c| {
                 let key = normalize_header(c);
                 !present.contains(&key) && !satisfied.contains(&key)
@@ -722,7 +736,7 @@ impl Worker {
             if let Some(company) = ingest_source_row(&tx, "MID", "", "", row, &mut self.counters)? {
                 let desc = self
                     .config
-                    .llm_description_columns
+                    .description_columns
                     .iter()
                     .filter_map(|label| {
                         field_text(row, &[label.as_str()]).map(|text| format!("{label}: {text}"))

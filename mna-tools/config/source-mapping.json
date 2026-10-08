@@ -1,0 +1,25 @@
+{
+  "_help": {
+    "version": "Schema version; keep at 1.",
+    "iscc_to_mid": "ISCC columns that share an unprefixed merged column with the named MID column.",
+    "dropped_iscc": "ISCC columns omitted from the merged view.",
+    "prefix": "Prefixes for source-only columns in the merged view."
+  },
+  "version": 1,
+  "iscc_to_mid": {
+    "CID": "Crescendo ID",
+    "ECI": "ECID",
+    "Company Name": "Company",
+    "Company Website": "Website",
+    "City": "HQ City",
+    "State": "HQ State",
+    "LOB": "BU Level 05",
+    "Sub LOB": "BU Level 06",
+    "Sub Sub LOB": "BU Level 07",
+    "Sub Sub Sub LOB": "BU Level 08",
+    "Sub Sub Sub Sub LOB": "BU Level 09",
+    "Sub Sub Sub Sub Sub LOB": "BU Level 11"
+  },
+  "dropped_iscc": ["iQ Link"],
+  "prefix": { "iscc": "ISCC_", "mid": "MID_" }
+}

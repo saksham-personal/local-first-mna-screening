@@ -249,6 +249,41 @@ fn stemming_exact_prefix_and_column_filter_use_built_config() {
     assert_eq!(f.query(json!({"columns":[column]})).unwrap()["returned"], 3);
     assert!(f.query(json!({"columns":["unknown"]})).is_err());
 }
+
+#[test]
+fn old_bundle_weights_are_ignored() {
+    let _guard = ENV.lock().unwrap();
+    let f = Fixture::new(true);
+    f.store
+        .with_connection(|c| {
+            let raw: String = c.query_row(
+                "SELECT config_json FROM mid_bundles WHERE status='active'",
+                [],
+                |r| r.get(0),
+            )?;
+            let mut config: Value = serde_json::from_str(&raw)?;
+            config["version"] = json!(1);
+            let descriptions = config["description_columns"].take();
+            config["llm_description_columns"] = descriptions;
+            config
+                .as_object_mut()
+                .unwrap()
+                .remove("description_columns");
+            config["source_weights"] = json!({"company_desc": 9.0});
+            config["metadata_columns"] = json!(["Obsolete"]);
+            c.execute(
+                "UPDATE mid_bundles SET config_json=? WHERE status='active'",
+                [config.to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        f.query(json!({"keywords":[{"id":"a","text":"claims"}]}))
+            .unwrap()["returned"],
+        3
+    );
+}
 #[test]
 fn limits_and_arguments_are_strict() {
     let _guard = ENV.lock().unwrap();
