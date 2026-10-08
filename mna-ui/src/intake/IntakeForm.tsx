@@ -7,6 +7,7 @@ import { characterCount, normalizeIntake, sectorsFor, type IntakeForm as IntakeF
 import SelectField from "../ui/SelectField";
 import HelpTip from "../ui/HelpTip";
 import "./intake.css";
+import { useMovableWindow } from "./use-movable-window";
 
 type Props = {
   open: boolean;
@@ -99,6 +100,7 @@ function ChipMultiSelect({
 }
 
 export default function IntakeForm({ open, initial, sourceFileName, onViewDocument, onCancel, onSubmit, busy = false, modal = true, onInteractOutside, onPointerDownOutside, onEscapeKeyDown }: Props) {
+  const movable = useMovableWindow("intake", open);
   const headingId = useId();
   const descriptionId = useId();
   const [form, setForm] = useState<IntakeFormData>(() => normalizeIntake(initial));
@@ -128,8 +130,8 @@ export default function IntakeForm({ open, initial, sourceFileName, onViewDocume
   return <Dialog.Root modal={modal} open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onCancel(); }}>
     {open && <Dialog.Portal>
       <Dialog.Overlay className="if-overlay" />
-      <Dialog.Content onInteractOutside={onInteractOutside} onPointerDownOutside={onPointerDownOutside} className="if-dialog" aria-labelledby={headingId} aria-describedby={descriptionId} onEscapeKeyDown={(event) => { onEscapeKeyDown?.(event); if (busy) event.preventDefault(); }}>
-        <header className="if-header">
+      <Dialog.Content ref={movable.windowRef} onKeyDown={movable.onKeyDown} onInteractOutside={onInteractOutside} onPointerDownOutside={onPointerDownOutside} className="if-dialog" aria-labelledby={headingId} aria-describedby={descriptionId} onEscapeKeyDown={(event) => { onEscapeKeyDown?.(event); if (busy) event.preventDefault(); }}>
+        <header className="if-header" title="Drag to move; double-click to reset; Alt+Arrow keys move 16px" {...movable.titlebarHandlers}>
           <div>
             <span className="if-eyebrow">Screening request</span>
             <Dialog.Title id={headingId}>Intake Form</Dialog.Title>

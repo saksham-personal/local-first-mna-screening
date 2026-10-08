@@ -10,10 +10,10 @@
   animation: sl-fade 0.12s ease-out;
 }
 .sl-drawer {
-  --sl-ink: #342b25;
-  --sl-muted: #756a62;
-  --sl-line: #e7ddd5;
-  --sl-panel: #fffdfa;
+  --sl-ink: var(--text);
+  --sl-muted: var(--text-muted);
+  --sl-line: var(--border);
+  --sl-panel: var(--surface);
   display: flex;
   flex-direction: column;
   width: min(1240px, 96vw);

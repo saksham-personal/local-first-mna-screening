@@ -707,7 +707,7 @@ function CriteriaContent({ artifact, context, onAction }: Props & { artifact: Ex
     {artifact.ignored.length > 0 && <div className="ca-notice"><strong>Recorded, not used for search</strong><p>{artifact.ignored.join(" · ")}</p></div>}
     <div className="ca-action-row">
       {editable && <><HelpTip label="Why approval applies to this version">Approval applies to this saved criteria revision. Edits create a new revision that needs approval.</HelpTip><button className="ca-primary-action" type="button" disabled={!saved && !context?.criteriaSaveError} onClick={() => onAction({ type: "approve-criteria", artifactId: artifact.id, good, bad })}><Check size={14} />Approve &amp; search</button></>}
-      {current && <button className="ca-text-action" type="button" onClick={() => onAction({ type: "edit-criteria", artifactId: artifact.id })}>Edit criteria</button>}
+      {current && <button className="ca-secondary-action" type="button" onClick={() => onAction({ type: "edit-criteria", artifactId: artifact.id })}>Edit criteria</button>}
       {artifact.intakeForm && <button className="ca-text-action" type="button" onClick={() => onAction({ type: "view-intake", artifactId: artifact.id })}>View Intake Form</button>}
     </div>
   </>;

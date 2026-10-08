@@ -208,7 +208,7 @@
   align-self: flex-start;
   max-width: none;
   background: #fff;
-  box-shadow: 0 8px 30px rgb(0 0 0 / 12%);
+  box-shadow: 0 8px 30px var(--shadow-color);
 }
 
 .pdf-preview__status {

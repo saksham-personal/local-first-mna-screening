@@ -37,3 +37,8 @@
 .intake-upload-input { display: none; }
 .if-dialog[data-state="open"] { max-width: calc(100vw - 24px); }
 @media (max-width: 600px) { .cv-window header, .cv-window footer { padding: 12px; } .cv-window-body { padding: 0 12px 12px; } .cv-window dl > div { grid-template-columns: 1fr; gap: 3px; } .criteria-inline-examples .fit-examples-fields { grid-template-columns: 1fr; } }
+
+.criteria-version-heading .ca-criteria-decision { display: inline-flex; align-items: center; gap: 7px; line-height: 1.5; }
+.criteria-inline-examples label > span { display: inline-flex; align-items: center; gap: 6px; }
+.criteria-inline-examples summary { background: transparent; user-select: none; }
+.criteria-example-copy { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 10px; border-radius: 8px; color: var(--text); background: var(--surface-muted); }

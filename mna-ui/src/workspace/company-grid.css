@@ -93,8 +93,8 @@
   align-items: center;
   padding: 3px 8px;
   border-radius: 999px;
-  background: var(--info-soft);
-  color: var(--info);
+  background: var(--source-mid-soft);
+  color: var(--source-mid);
   font-size: 11px;
   line-height: 1.2;
   font-weight: 700;
@@ -103,8 +103,8 @@
 }
 
 .mna-grid-source-ISCC {
-  background: var(--violet-soft);
-  color: var(--violet);
+  background: var(--source-iscc-soft);
+  color: var(--source-iscc);
 }
 
 .mna-grid-source-both {

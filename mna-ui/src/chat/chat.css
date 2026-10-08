@@ -1,9 +1,5 @@
 :root {
   font-family: "Geist Variable", Geist, system-ui, sans-serif;
-  --accent: #8f5a39;
-  --accent-soft: #f3eae3;
-  --ink: #302b27;
-  --muted: #766e67;
 }
 .ct-app,
 .ct-workspace-interface,
@@ -12,10 +8,10 @@
   -webkit-font-smoothing: antialiased;
 }
 .ct-app {
-  --ct-ink: #302b27;
-  --ct-muted: #81766e;
-  --ct-line: #eae5df;
-  --ct-accent: #8f5a39;
+  --ct-ink: var(--text);
+  --ct-muted: var(--text-muted);
+  --ct-line: var(--border);
+  --ct-accent: var(--accent);
   display: grid;
   grid-template-columns: var(--ct-navigation-width, 236px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
@@ -1973,3 +1969,7 @@
     min-height: 0;
   }
 }
+
+.ct-criteria-editor textarea { color: var(--text); }
+.ct-criteria-toolbar { display: flex; justify-content: flex-end; margin-bottom: 18px; }
+.ct-criteria-toolbar button { display: inline-flex; align-items: center; gap: 7px; }

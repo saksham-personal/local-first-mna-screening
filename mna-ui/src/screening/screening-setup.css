@@ -7,7 +7,7 @@
 }
 .ss-picker-overlay {
   z-index: 1020;
-  background: rgb(14 17 20 / 48%);
+  background: var(--overlay);
 }
 .ss-dialog,
 .ss-picker {
@@ -783,3 +783,9 @@
     display: none;
   }
 }
+
+.ss-source-tabs button.is-selected:nth-child(1) { color: var(--source-mid); background: var(--source-mid-soft); }
+.ss-source-tabs button.is-selected:nth-child(2) { color: var(--source-iscc); background: var(--source-iscc-soft); }
+.ss-source-tabs button.is-selected:nth-child(3) { color: var(--source-pb); background: var(--source-pb-soft); }
+.ss-source-tabs button.is-selected:nth-child(4) { color: var(--source-rogo); background: var(--source-rogo-soft); }
+.ss-source-tabs button.is-selected:nth-child(6) { color: var(--source-bing); background: var(--source-bing-soft); }
