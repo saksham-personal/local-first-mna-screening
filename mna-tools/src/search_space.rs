@@ -269,18 +269,22 @@ impl SearchSpace {
             "space_search_lexical" => {
                 let args = parse(arguments)?;
                 let mut result = self.lexical(&bundle, &args).await?;
-                self.save(
-                    "SPACE_LEXICAL",
-                    args.expression.as_deref().unwrap_or("keywords"),
-                    arguments,
-                    &mut result,
-                )?;
+                if first_page(arguments) {
+                    self.save(
+                        "SPACE_LEXICAL",
+                        args.expression.as_deref().unwrap_or("keywords"),
+                        arguments,
+                        &mut result,
+                    )?;
+                }
                 Ok(result)
             }
             "space_search_semantic" => {
                 let args: SemanticArgs = parse(arguments)?;
                 let mut result = self.semantic(&bundle, &args).await?;
-                self.save("SPACE_SEMANTIC", &args.text, arguments, &mut result)?;
+                if first_page(arguments) {
+                    self.save("SPACE_SEMANTIC", &args.text, arguments, &mut result)?;
+                }
                 Ok(result)
             }
             "space_search_iscc" => self.iscc(&parse(arguments)?, arguments).await,
@@ -962,14 +966,20 @@ impl Drop for ExportCleanup {
         }
     }
 }
+/// Recent searches record a search once, on its first page, not on every page turn.
+fn first_page(arguments: &Value) -> bool {
+    arguments.get("offset").and_then(Value::as_u64).unwrap_or(0) == 0
+}
+
 fn prune_exports() -> Result<()> {
     let now = std::time::SystemTime::now();
     for entry in std::fs::read_dir(export_dir())? {
-        let entry = entry?;
+        let Ok(entry) = entry else { continue };
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with("space-") && name.ends_with(".xlsx") {
-            let meta = entry.metadata()?;
+            // A locked or vanished old export must never block a new one.
+            let Ok(meta) = entry.metadata() else { continue };
             if meta.is_file()
                 && meta
                     .modified()
@@ -977,7 +987,7 @@ fn prune_exports() -> Result<()> {
                     .and_then(|m| now.duration_since(m).ok())
                     .is_some_and(|age| age > Duration::from_secs(7 * 24 * 60 * 60))
             {
-                std::fs::remove_file(entry.path())?;
+                let _ = std::fs::remove_file(entry.path());
             }
         }
     }

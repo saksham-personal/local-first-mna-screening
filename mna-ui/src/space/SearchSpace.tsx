@@ -159,7 +159,7 @@ export default function SearchSpace() {
   const accessibleTotal = draft.search.kind === "semantic" ? Math.min(5000, result.total) : result.total;
   const paging = pager(accessibleTotal, draft.offset, draft.limit);
   const simulated = !!result.simulated || result.results.some(r => r.simulated);
-  const status = statusError || (sync?.meili === "down" ? "Meilisearch is not running" : sync?.task_status === "processing" ? "Indexing…" : sync?.task_status === "succeeded" && sync.documents > 0 ? `Lexical index ready · ${sync.documents.toLocaleString()} companies` : "Search Space index is not synced yet");
+  const status = statusError || (sync?.meili === "down" ? "Meilisearch is not running" : sync?.task_status === "processing" ? "Indexing…" : sync?.task_status === "succeeded" && sync.documents > 0 ? `Lexical index ready · ${sync.documents.toLocaleString()} companies` : sync ? "Search Space index is not synced yet" : "Checking…");
   const exportResults = async () => {
     setExporting(true); setError("");
     try { setDownload(await exportSpace(draft.search, simulated && allowSimulated)); }
@@ -179,12 +179,12 @@ export default function SearchSpace() {
   return <section className="space-view" aria-label="Search Space">
     <div className="space-heading">
       <div><h1>Search Space</h1><p>Explore the population and choose companies for a screening.</p></div>
-      <div className="space-segment" aria-label="Discovery source">{(["MID", "ISCC"] as const).map(source => <button type="button" key={source} aria-pressed={draft.source === source} onClick={() => switchSource(source)}>{source}</button>)}</div>
+      <div className="space-segment" role="group" aria-label="Discovery source">{(["MID", "ISCC"] as const).map(source => <button type="button" key={source} aria-pressed={draft.source === source} onClick={() => switchSource(source)}>{source}</button>)}</div>
     </div>
     <div className="space-bundle"><strong>{index?.active?.name ?? "No active MID bundle"}</strong><span role="status">{status}</span></div>
     <div className="space-search-panel">
       <div className="space-search-head">
-        {draft.source === "MID" ? <div className="space-segment" aria-label="Search method">{(["lexical", "semantic"] as const).map(method => <button type="button" key={method} aria-pressed={draft.method === method} onClick={() => { update({ method }); apply({ kind: "browse" }); }}>{method === "lexical" ? "Lexical" : "Semantic"}</button>)}</div> : <strong>ISCC discovery</strong>}
+        {draft.source === "MID" ? <div className="space-segment" role="group" aria-label="Search method">{(["lexical", "semantic"] as const).map(method => <button type="button" key={method} aria-pressed={draft.method === method} onClick={() => { update({ method }); apply({ kind: "browse" }); }}>{method === "lexical" ? "Lexical" : "Semantic"}</button>)}</div> : <strong>ISCC discovery</strong>}
         <label className="space-recent">Recent searches<select aria-label="Recent searches" value="" onChange={e => restoreRecent(e.target.value)}><option value="">Choose a search</option>{recent.map(r => <option key={r.query_id} value={r.query_id}>{r.source.replace("SPACE_", "")} · {r.query === "keywords" ? (r.parameters.keywords as Keyword[] | undefined)?.map(k => k.text).join(", ") : r.query}</option>)}</select></label>
       </div>
       {draft.source === "MID" && draft.method === "lexical" && <>
@@ -209,6 +209,7 @@ export default function SearchSpace() {
         {simulated && <label className="space-simulated-export"><input type="checkbox" checked={allowSimulated} onChange={e => setAllowSimulated(e.target.checked)} />Allow simulated export</label>}
         <button type="button" disabled={loading || exporting || !result.total || (simulated && !allowSimulated)} onClick={() => { void exportResults(); }}><Download size={14} />{exporting ? "Exporting…" : "Export"}</button>
         <button type="button" disabled={loading || !selected.length || selected.length > 5000} onClick={() => { setRunId(runs[0]?.id ?? ""); setConfirmed(false); setAddOpen(true); }}><Plus size={14} />Add to screening ({selected.length})</button>
+        {selected.length > 5000 && <span className="space-note">Select at most 5,000 companies to add.</span>}
       </div>
     </div>
     {exporting && <Skeleton variant="line" label="Exporting Search Space results" />}
