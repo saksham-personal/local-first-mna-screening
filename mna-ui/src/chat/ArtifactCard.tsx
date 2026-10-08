@@ -38,6 +38,7 @@ import NextStepsCard from "./NextStepsCard";
 import EnrichmentUpload from "./EnrichmentUpload";
 import StartInBackground from "./StartInBackground";
 import { consideredCompanies } from "../lib/chat-policy";
+import { restoreChatCompanies } from "../lib/chat-store";
 
 const ShortlistReview = lazy(() => import("./ShortlistReview"));
 type GenericDataGrid = <Row>(props: DataGridProps<Row>) => ReactElement;
@@ -388,6 +389,7 @@ function ArtifactBody({ artifact, onAction, context }: Props) {
       );
     }
     case "data-table": {
+      if (artifact.dataTrimmed) return <><p className="ca-note">Company data is saved in the local service.</p><button type="button" className="ca-secondary-action" onClick={openWorkspaceCompanies}>Open in Workspace <ArrowRight size={13} /></button></>;
       const rows = artifactGridRows(artifact.rows);
       const columns = artifactGridColumns(artifact.rows, artifact.columns);
       return <>{artifact.note && <p className="ca-note">{artifact.note}</p>}{artifact.reviewable && context ? <Suspense fallback={<Skeleton variant="table" rows={5} cols={4} label="Opening table" />}><ShortlistReview rows={artifact.rows} columns={artifact.columns} context={context} planId={artifact.planId} onOpenCompany={pk => onAction({ type: "inspect-company", artifactId: artifact.id, companyId: pk })} onApply={async (keepCompanyIds, outputColumns) => { await onAction({ type: "review-shortlist", artifactId: artifact.id, keepCompanyIds, outputColumns, planId: artifact.planId }); }} /></Suspense> : <Suspense fallback={<Skeleton variant="table" rows={5} cols={4} label="Opening table" />}><DataGrid rows={rows} columns={columns} getRowId={row => String(row.__artifactGridId)} label={artifact.title} height={420} toolbarExtra={<button type="button" className="ca-secondary-action" onClick={openWorkspaceCompanies}>Open in Workspace <ArrowRight size={13} /></button>} /></Suspense>}</>;
@@ -683,7 +685,8 @@ export default function ArtifactCard({ artifact, onAction, context }: Props) {
         )}
       </header>
       <div className="ca-artifact-body">
-        <ArtifactBody artifact={artifact} onAction={onAction} context={context} />
+        {context?.storageNotice && context.artifacts[0]?.id === artifact.id && <p role="status" className="ca-note">{context.storageNotice}</p>}
+        {artifact.type === "companies" && context?.companiesLoading ? <Skeleton variant="table" rows={5} cols={4} label="Loading companies…" /> : artifact.type === "companies" && context?.companiesLoadError ? <><p role="alert" className="ca-note">Companies could not be loaded: {context.companiesLoadError}</p><button type="button" className="ca-secondary-action" onClick={() => void restoreChatCompanies(context.sessionId)}>Retry loading companies</button></> : artifact.type === "companies" && artifact.dataTrimmed && context?.backendRunId !== artifact.backendRunId ? <p className="ca-note">Company data is saved in the local service for this earlier run.</p> : <ArtifactBody artifact={artifact} onAction={onAction} context={context} />}
       </div>
     </article>
   );

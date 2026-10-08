@@ -8,6 +8,91 @@ import type {
 } from "./session-contract";
 
 const STORAGE_KEY = "mna-research-session-log-v1";
+const PAYLOAD_LIMIT = 16 * 1024;
+const SNAPSHOT_LIMIT = 1.5 * 1024 * 1024;
+export function resultOmitted(value: unknown): boolean {
+  return !!value && typeof value === "object" && (value as Record<string, unknown>)._omitted === true;
+}
+
+/** Browser storage is a receipt ledger; full tool responses live only in memory. */
+export function compactPayload(value: unknown): unknown {
+  if (value === undefined) return value;
+  const json = JSON.stringify(value);
+  const bytes = new TextEncoder().encode(json).length;
+  if (bytes <= PAYLOAD_LIMIT) return value;
+  const summary = typeof value === "string" ? value.slice(0, 500) :
+    Object.entries((value && typeof value === "object" ? value : {}) as Record<string, unknown>)
+      .map(([key, item]) => `${key}: ${Array.isArray(item) ? `${item.length} items` : typeof item === "object" ? "object" : String(item).slice(0, 80)}`).join(", ").slice(0, 500);
+  const retained: Record<string, unknown> = {};
+  // These references are used by approval chips and enrichment review after reload.
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of ["revision", "mandate", "definition", "sourceArtifactId", "artifactId", "report", "report_id", "report_ids", "summary", "run_id", "purpose", "sourceEventId"]) {
+      const item = (value as Record<string, unknown>)[key];
+      if (item !== undefined) retained[key] = compactPayload(item);
+    }
+  }
+  return { _omitted: true, bytes, summary, ...retained };
+}
+
+const compactEvents = new WeakMap<SessionEvent, SessionEvent>();
+function compactEvent(event: SessionEvent): SessionEvent {
+  const cached = compactEvents.get(event);
+  if (cached) return cached;
+  const content = Array.isArray(event.content) ? event.content.map(part => {
+    if (!part || typeof part !== "object") return compactPayload(part);
+    return Object.fromEntries(Object.entries(part).map(([key, value]) => {
+      const compact = compactPayload(value);
+      // assistant-ui expects these fields to remain strings, even when a tool
+      // response was also embedded as a text part or serialized arguments.
+      return [key, typeof value === "string" && resultOmitted(compact) && (key === "text" || key === "argsText")
+        ? key === "argsText" ? JSON.stringify(compact) : `${value.slice(0, 500)}\n\nResult not saved (large)`
+        : compact];
+    }));
+  }) : compactPayload(event.content);
+  const saved = { ...event, args: compactPayload(event.args), result: compactPayload(event.result), content };
+  compactEvents.set(event, saved);
+  return saved;
+}
+
+export function serializeSessionSnapshot(snapshot: SessionSnapshot, limit = SNAPSHOT_LIMIT): string {
+  const sessions = snapshot.sessions.map(session => {
+    const previousMarker = session.events.find(event => event.id === `omitted-${session.id}`);
+    const events = session.events.filter(event => event !== previousMarker);
+    const newest = events.slice(-400);
+    // A revision approval must remain available even after a long tool timeline.
+    const approval = session.events.filter(event => event.kind === "approval" && event.title === "Discovery criteria approved").at(-1);
+    if (approval && !newest.includes(approval)) newest.splice(0, 1, approval);
+    return { ...session, events: newest.map(compactEvent), omitted: events.length - newest.length + (previousMarker ? Number.parseInt(previousMarker.title, 10) || 0 : 0) };
+  });
+  const serialize = () => JSON.stringify({ version: 1, activeId: snapshot.activeId, sessions: sessions.map(({ omitted, ...session }) => ({
+    ...session, events: omitted ? [...session.events, { id: `omitted-${session.id}`, sessionId: session.id, sequence: (session.events.at(-1)?.sequence ?? 0) + 1, kind: "system", status: "success", origin: "system", title: `${omitted} older events not saved`, startedAt: session.createdAt }] : session.events,
+  })) });
+  let raw = serialize();
+  if (raw.length * 2 > limit) {
+    const strip = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(strip);
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(Object.entries(value).filter(([key]) => !resultOmitted(value) || key !== "summary").map(([key, item]) => [key, strip(item)]));
+    };
+    for (const session of sessions) session.events = session.events.map(event => strip(event) as SessionEvent);
+    raw = serialize();
+  }
+  while (raw.length * 2 > limit) {
+    const candidates = sessions.flatMap(session => {
+      const approval = session.events.filter(event => event.kind === "approval" && event.title === "Discovery criteria approved").at(-1);
+      return session.events.filter(event => event !== approval).map(event => ({ session, event }));
+    });
+    // In an origin with many sessions, even approval receipts may exhaust the
+    // budget. Losing a receipt safely clears approval on reload.
+    const available = candidates.length ? candidates : sessions.flatMap(session => session.events.map(event => ({ session, event })));
+    const oldest = available.sort((a, b) => a.event.startedAt.localeCompare(b.event.startedAt))[0];
+    if (!oldest) break;
+    oldest.session.events = oldest.session.events.filter(event => event !== oldest.event);
+    oldest.session.omitted++;
+    raw = serialize();
+  }
+  return raw;
+}
 const seedDate = new Date().toISOString();
 const FIXTURES: ResearchSession[] = [
   {
@@ -171,6 +256,7 @@ export function createSessionStore(
   let actualStorage = storage;
   let snapshot: SessionSnapshot;
   let storageError: string | undefined;
+  let migrateStorage = false;
   if (!actualStorage && typeof window !== "undefined") {
     try {
       actualStorage = window.localStorage;
@@ -191,6 +277,7 @@ export function createSessionStore(
               events: s.events.map((e) => ({ ...e })),
             })),
           };
+      migrateStorage = !!raw && raw.length > PAYLOAD_LIMIT;
     } catch (error) {
       snapshot = {
         version: 1,
@@ -223,15 +310,18 @@ export function createSessionStore(
       try {
         actualStorage.setItem(
           STORAGE_KEY,
-          JSON.stringify({
-            version: next.version,
-            activeId: next.activeId,
-            sessions: next.sessions,
-          }),
+          serializeSessionSnapshot(next),
         );
         error = undefined;
       } catch (caught) {
-        error = `Session history could not be saved: ${caught instanceof Error ? caught.message : String(caught)}. Your current changes remain available until this page closes.`;
+        error = storageError ?? `Session history could not be saved: ${caught instanceof Error ? caught.message : String(caught)}. Your current changes remain available until this page closes.`;
+        for (const budget of [64 * 1024, 8 * 1024]) {
+          try {
+            actualStorage.setItem(STORAGE_KEY, serializeSessionSnapshot(next, budget));
+            error = undefined;
+            break;
+          } catch { /* Keep full receipts in memory; do not append another event. */ }
+        }
       }
     }
     storageError = error;
@@ -370,6 +460,7 @@ export function createSessionStore(
       });
     },
   };
+  if (migrateStorage) commit(snapshot);
   return api;
 }
 

@@ -13,7 +13,7 @@ import type {
   ResearchSession,
   SessionEvent,
 } from "./lib/session-contract";
-import { useSessionSnapshot } from "./lib/session-store";
+import { resultOmitted, useSessionSnapshot } from "./lib/session-store";
 import { downloadCompleteSession } from "./lib/session-export";
 import {
   filterTrajectoryEvents,
@@ -178,7 +178,7 @@ function DataBlock({ label, value }: { label: string; value: unknown }) {
         <strong>{label}</strong>
         <CopyButton value={value} />
       </div>
-      <pre>{jsonText(value)}</pre>
+      <pre>{resultOmitted(value) ? "Result not saved (large)" : jsonText(value)}</pre>
     </section>
   );
 }

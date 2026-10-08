@@ -73,7 +73,7 @@ import {
   toolLabels,
 } from "../lib/chat-jobs";
 import { commandPrompts, consideredCompanies } from "../lib/chat-policy";
-import { sessionStore, useSessionSnapshot } from "../lib/session-store";
+import { resultOmitted, sessionStore, useSessionSnapshot } from "../lib/session-store";
 import { formatDateTime, formatTime } from "../lib/format";
 import ArtifactCard from "./ArtifactCard";
 import MarkdownMessage from "./MarkdownMessage";
@@ -190,7 +190,7 @@ function ToolCall(part: ToolPart) {
         <pre>
           {part.result === undefined
             ? "Waiting for the tool…"
-            : JSON.stringify(part.result, null, 2)}
+            : resultOmitted(part.result) ? "Result not saved (large)" : JSON.stringify(part.result, null, 2)}
         </pre>
       </div>
     </details>

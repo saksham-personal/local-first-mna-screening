@@ -10,7 +10,7 @@ import {
   updateChatState,
 } from "./chat-store";
 import { sessionStore } from "./session-store";
-import { companyFromRust, type SearchRow } from "./tool-client";
+import { companyFromEntry } from "./company-mapper";
 import { nextStepOptions, nextStepRecommendations } from "./chat-policy";
 import { plural } from "./format";
 
@@ -181,11 +181,7 @@ function finishJob(
   if (job.state === "completed" && job.result) {
     const companies = job.result.companies.map(
       ({ row, detail, sourceRows }) => {
-        const company = companyFromRust(row as SearchRow, detail, state.companies.find(item => item.pk === String(row.company.company_id)));
-        const source = sourceRows.find((row) => row.source === "MID");
-        if (source && source.row && typeof source.row === "object")
-          company.rawMid = source.row as Record<string, string | number>;
-        return company;
+        return companyFromEntry({ row, detail, sourceRows }, state.companies.find(item => item.pk === String(row.company.company_id)));
       },
     );
     const counts = job.result.counts as unknown as {
