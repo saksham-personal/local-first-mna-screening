@@ -82,7 +82,7 @@ test("fetchScreeningGrid pages all companies and preserves the selection revisio
     const result = await fetchScreeningGrid("run-insurance", "run-1");
     assert.equal(requests.length, 2);
     assert.equal(requests[0].include_hidden, true);
-    assert.equal(requests[0].limit, 2000);
+    assert.equal(requests[0].limit, 1000);
     assert.equal(requests[1].after_company_id, "company-1");
     assert.deepEqual(result.rows.map((row) => row.company_id), ["company-1", "company-2"]);
     assert.equal(result.total, 2);

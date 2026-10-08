@@ -40,6 +40,10 @@ import { consideredCompanies } from "./lib/chat-policy";
 import {
   applyGridReview,
   fetchScreeningGrid,
+  fetchScreeningGridPage,
+  appendGridPage,
+  fetchGridDescriptions,
+  type GridDescription,
   fetchScreeningRounds,
   hideIds,
   hiddenReasonLabel,
@@ -51,6 +55,9 @@ import {
 } from "./lib/grid-client";
 import type { DataGridProps } from "./grid/DataGrid";
 import { buildCompanyColumns } from "./workspace/company-columns";
+import { readColumnChoice, requestedCatalogIds, visibleCatalogIds, type ColumnChoice } from "./workspace/company-catalog";
+import { loadingProgress } from "./workspace/company-pager";
+import DescriptionTooltip from "./workspace/DescriptionTooltip";
 import { formatTime, plural } from "./lib/format";
 import { emptyFilterState } from "./grid/grid-filter";
 import type { FilterState } from "./grid/grid-types";
@@ -422,6 +429,7 @@ function Overview({
 
 const emptyGridRows: GridCompany[] = [];
 const emptyRounds: ScreeningGrid["rounds"] = [];
+const emptyCatalog: ScreeningGrid["columns"] = [];
 
 function SimulatedBanner() {
   return <p className="ws-simulated-banner" role="status">Simulated data — for development only. Exports are blocked unless allowed.</p>;
@@ -441,27 +449,30 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
   const [sourceTab, setSourceTab] = useState<CompanyTab>("All");
   const [filtersByTab, setFiltersByTab] = useState<Record<CompanyTab, FilterState>>(() => ({ All: emptyFilterState(), MID: emptyFilterState(), ISCC: emptyFilterState() }));
   const rounds = gridData?.rounds ?? emptyRounds;
-  const columns = useMemo(() => buildCompanyColumns(rounds), [rounds]);
+  const catalog = gridData?.columns ?? emptyCatalog;
+  const columns = useMemo(() => buildCompanyColumns(catalog), [catalog]);
+  const [streaming, setStreaming] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [descriptions, setDescriptions] = useState(new Map<string, GridDescription>());
+  const descriptionCache = useRef(new Map<string, GridDescription>());
+  const descriptionPending = useRef(new Set<string>());
+  const [descriptionError, setDescriptionError] = useState("");
+  const descriptionBlocked = useRef(false);
+  const catalogByTab = useRef<Partial<Record<CompanyTab, ScreeningGrid["columns"]>>>({});
   const filterState = filtersByTab[sourceTab];
   const changeFilters = useCallback((next: FilterState) => setFiltersByTab((current) => ({ ...current, [sourceTab]: next })), [sourceTab]);
-  const [columnPreferences, setColumnPreferences] = useState<Partial<Record<CompanyTab, { visible: string[]; known: string[] }>>>(() => {
-    const saved: Partial<Record<CompanyTab, { visible: string[]; known: string[] }>> = {};
+  const [columnPreferences, setColumnPreferences] = useState<Partial<Record<CompanyTab, ColumnChoice>>>(() => {
+    const saved: Partial<Record<CompanyTab, ColumnChoice>> = {};
     for (const tab of ["All", "MID", "ISCC"] as const) {
-      try {
-        const value = JSON.parse(localStorage.getItem(`ws-company-columns:${tab}`) ?? "null");
-        if (value && Array.isArray(value.visible) && Array.isArray(value.known) && [...value.visible, ...value.known].every((id) => typeof id === "string")) saved[tab] = value;
-      } catch { /* use default visibility */ }
+      try { saved[tab] = readColumnChoice(localStorage.getItem(`ws-company-columns-v3:${tab}`)); } catch { /* optional storage */ }
     }
     return saved;
   });
-  const visibleColumnIds = useMemo(() => {
-    const saved = columnPreferences[sourceTab];
-    return saved ? columns.filter((column) => saved.visible.includes(column.id) || (!saved.known.includes(column.id) && !column.hidden)).map((column) => column.id) : columns.filter((column) => !column.hidden).map((column) => column.id);
-  }, [columns, columnPreferences, sourceTab]);
+  const visibleColumnIds = useMemo(() => visibleCatalogIds(catalog, columnPreferences[sourceTab]), [catalog, columnPreferences, sourceTab]);
   const changeVisibleColumns = useCallback((visible: string[]) => {
     const next = { visible, known: columns.map((column) => column.id) };
     setColumnPreferences((current) => ({ ...current, [sourceTab]: next }));
-    try { localStorage.setItem(`ws-company-columns:${sourceTab}`, JSON.stringify(next)); } catch { /* storage may be disabled */ }
+    try { localStorage.setItem(`ws-company-columns-v3:${sourceTab}`, JSON.stringify(next)); } catch { /* storage may be disabled */ }
   }, [columns, sourceTab]);
   const gridRequest = useRef(0);
   const hasGridData = useRef(false);
@@ -509,36 +520,82 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
       setGridData(null);
     }
     if (!hasGridData.current) setLoading(true);
+    else setRefreshing(true);
+    setStreaming(false);
+    descriptionCache.current = new Map(); descriptionPending.current = new Set();
+    descriptionBlocked.current = false;
+    setDescriptions(new Map()); setDescriptionError("");
     setGridError("");
     try {
-      const data = await fetchScreeningGrid(state.sessionId, runId);
-      if (request === gridRequest.current) hasGridData.current = true;
-      if (request === gridRequest.current) setGridData(data);
+      // Read the catalog without heavy values the first time this view opens.
+      // Every data page, including page 1, then projects the picker choice.
+      const known = catalogByTab.current[sourceTab] ?? (await fetchScreeningGridPage(state.sessionId, runId, {
+        view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 1, columns: [],
+      })).columns;
+      if (request !== gridRequest.current) return null;
+      const saved = columnPreferences[sourceTab];
+      let data = await fetchScreeningGridPage(state.sessionId, runId, {
+        view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 100,
+        columns: requestedCatalogIds(known, saved),
+      });
+      if (request !== gridRequest.current) return null;
+      catalogByTab.current[sourceTab] = data.columns;
+      hasGridData.current = true;
+      setGridData(data); setLoading(false); setRefreshing(false);
+      setStreaming(Boolean(data.nextCursor));
+      while (data.nextCursor && request === gridRequest.current) {
+        // Yield between bounded pages so typing and first-page rendering stay responsive.
+        await new Promise(resolve => setTimeout(resolve, 16));
+        const page = await fetchScreeningGridPage(state.sessionId, runId, {
+          view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 1000,
+          columns: requestedCatalogIds(data.columns, saved), cursor: data.nextCursor,
+        });
+        if (request !== gridRequest.current) return null;
+        data = appendGridPage(data, page); setGridData(data);
+      }
+      if (request === gridRequest.current && data.rows.length !== data.total) throw new Error("The company list changed while it was being read. Please open it again.");
       return data;
     } catch (caught) {
       if (request === gridRequest.current) setGridError(caught instanceof Error ? caught.message : "Companies could not be loaded.");
       throw caught;
     } finally {
-      if (request === gridRequest.current) setLoading(false);
+      if (request === gridRequest.current) { setLoading(false); setRefreshing(false); setStreaming(false); }
     }
-  }, [state.backendRunId, state.sessionId]);
+  }, [state.backendRunId, state.sessionId, sourceTab, columnPreferences]);
   useEffect(() => {
     void loadGrid().catch(() => {});
+    return () => { ++gridRequest.current; };
   }, [loadGrid, state.selectionRevision, resultsKey]);
+  const loadDescriptions = useCallback((page: GridCompany[]) => {
+    if (!state.backendRunId || descriptionBlocked.current) return;
+    const ids = page.map(row => row.company_id).filter(id => !descriptionCache.current.has(id) && !descriptionPending.current.has(id));
+    if (!ids.length) return;
+    const request = gridRequest.current;
+    for (const id of ids) descriptionPending.current.add(id);
+    void fetchGridDescriptions(state.sessionId, state.backendRunId, ids).then(items => {
+      if (request !== gridRequest.current) return;
+      for (const item of items) descriptionCache.current.set(item.company_id, item);
+      for (const id of ids) if (!descriptionCache.current.has(id)) descriptionCache.current.set(id, { company_id: id, sources: [] });
+      setDescriptions(new Map(descriptionCache.current));
+    }).catch(error => {
+      if (request !== gridRequest.current) return;
+      descriptionBlocked.current = true; setDescriptionError(error instanceof Error ? error.message : String(error));
+    }).finally(() => { if (request === gridRequest.current) for (const id of ids) descriptionPending.current.delete(id); });
+  }, [state.backendRunId, state.sessionId]);
   useEffect(() => {
     const visibleIds = new Set(rows.map((row) => row.company_id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
   }, [rows]);
   const onVisibleRowsChange = useCallback((next: GridCompany[]) => setVisibleRows(next), []);
   const openRow = useCallback((row: GridCompany) => setDrawerId(row.company_id), []);
-  const runReview = useCallback(async (keepCompanyIds: string[], reason: string) => {
+  const runReview = useCallback(async (selection: (all: GridCompany[]) => string[], reason: string) => {
     if (!state.backendRunId || !gridData) return;
     setBusy(true);
     setWriteError("");
     setNotice("");
     try {
-      // The new selection revision triggers the grid reload effect.
-      await applyGridReview(state.sessionId, state.backendRunId, keepCompanyIds, gridData.selectionRevision, reason);
+      const complete = await fetchScreeningGrid(state.sessionId, state.backendRunId, { columns: [] });
+      await applyGridReview(state.sessionId, state.backendRunId, selection(complete.rows), complete.selectionRevision, reason);
       setSelectedIds([]);
       setNotice("Company review saved.");
     } catch (caught) {
@@ -549,10 +606,10 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
     }
   }, [gridData, loadGrid, state.backendRunId, state.sessionId]);
   const restoreOne = useCallback((row: GridCompany) => {
-    void runReview(restoreIds(allRows, [row.company_id]), "Restored from Workspace");
+    void runReview(all => restoreIds(all, [row.company_id]), "Restored from Workspace");
   }, [allRows, runReview]);
   const restoreAll = useCallback(() => {
-    void runReview(restoreIds(allRows, hiddenRows.map((row) => row.company_id)), "Restored from Workspace");
+    void runReview(all => restoreIds(all, all.filter(row => !row.considered).map(row => row.company_id)), "Restored from Workspace");
   }, [allRows, hiddenRows, runReview]);
   const hiddenPanel = useMemo(() => [{
     id: "hidden-companies",
@@ -597,12 +654,14 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
         {notice && <p className="ws-grid-notice" role="status">{notice}</p>}
         <div className="ws-source-tabs" role="group" aria-label="Company sources">
           {(["All", "MID", "ISCC"] as const).map((tab) => <button type="button" key={tab} aria-pressed={sourceTab === tab} className={sourceTab === tab ? "is-active" : ""} onClick={() => { setSourceTab(tab); setSelectedIds([]); }}>
-            {tab} <span>{allRows.filter((row) => belongsToTab(row.source, tab) && (showHidden || row.considered)).length.toLocaleString()}</span>
+            {tab} <span>{streaming ? "≥ " : ""}{allRows.filter((row) => belongsToTab(row.source, tab) && (showHidden || row.considered)).length.toLocaleString()}</span>
           </button>)}
         </div>
+        {loadingProgress(allRows.length, gridData?.total ?? 0, streaming) && <p className="ws-grid-progress" role="status">{loadingProgress(allRows.length, gridData?.total ?? 0, streaming)}</p>}
+        {descriptionError && <p className="ws-grid-progress" role="status">Descriptions unavailable: {descriptionError}</p>}
         <ScoreDistribution key={sourceTab} rows={rows} columns={columns} rounds={rounds} tab={sourceTab} filterState={filterState} onFilterStateChange={changeFilters} loading={loading} />
         <Suspense fallback={<div className="ws-grid-loading"><Skeleton variant="table" rows={8} cols={6} label="Opening companies" /></div>}>
-          <DataGrid
+          <DescriptionTooltip cache={descriptions} error={descriptionError}><DataGrid
             key={sourceTab}
             rows={rows}
             columns={columns}
@@ -613,8 +672,12 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
             getRowId={(row) => row.company_id}
             label="Companies in the current screening"
             loading={loading}
+            updating={busy || refreshing}
+            pagination
+            groupHeaders
+            onPageRowsChange={loadDescriptions}
             emptyText={state.backendRunId ? "No companies match the current filters." : "Approve criteria and run discovery to load companies."}
-            storageKey={`ws-companies-v2:${sourceTab}`}
+            storageKey={`ws-companies-v3:${sourceTab}`}
             rowHeight={62}
             selectable
             selectedIds={selectedIds}
@@ -635,12 +698,12 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
             )}
             actionBar={(ids) => (
               <>
-                <button type="button" className="ws-grid-action" disabled={busy || !ids.length} onClick={() => void runReview(hideIds(allRows, ids), "Hidden from Workspace")}>Hide selected</button>
-                <button type="button" className="ws-grid-action" disabled={busy || !ids.length} onClick={() => void runReview(keepOnlyIds(allRows, ids), "Hidden from Workspace")}>Keep only selected</button>
-                <button type="button" className="ws-grid-action" disabled={busy || !ids.some((id) => hiddenRows.some((row) => row.company_id === id))} onClick={() => void runReview(restoreIds(allRows, ids), "Restored from Workspace")}>Restore selected</button>
+                <button type="button" className="ws-grid-action" disabled={busy || !ids.length} onClick={() => void runReview(all => hideIds(all, ids), "Hidden from Workspace")}>Hide selected</button>
+                <button type="button" className="ws-grid-action" disabled={busy || !ids.length} onClick={() => void runReview(all => keepOnlyIds(all, ids), "Hidden from Workspace")}>Keep only selected</button>
+                <button type="button" className="ws-grid-action" disabled={busy || !ids.some((id) => hiddenRows.some((row) => row.company_id === id))} onClick={() => void runReview(all => restoreIds(all, ids), "Restored from Workspace")}>Restore selected</button>
               </>
             )}
-          />
+          /></DescriptionTooltip>
         </Suspense>
       </section>
       {selected && <Suspense fallback={null}>
@@ -655,7 +718,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
           onClose={() => setDrawerId(null)}
           onNavigate={(row) => setDrawerId(row.company_id)}
           onReview={(company, action) => void runReview(
-            action === "hide" ? hideIds(allRows, [company.company_id]) : restoreIds(allRows, [company.company_id]),
+            all => action === "hide" ? hideIds(all, [company.company_id]) : restoreIds(all, [company.company_id]),
             action === "hide" ? "Hidden from Workspace" : "Restored from Workspace",
           )}
         />

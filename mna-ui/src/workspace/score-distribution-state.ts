@@ -9,9 +9,9 @@ export function belongsToTab(source: GridSource | null, tab: CompanyTab): boolea
 export function defaultMetric<Row>(tab: CompanyTab, columns: GridColumnSpec<Row>[], rounds: RoundColumns[], availability?: { has_semantic: boolean; has_iscc: boolean }): string | undefined {
   const scores = columns.filter((column) => column.kind === "score");
   const latest = [...rounds].sort((a, b) => b.round_no - a.round_no).find((round) => round.score_columns.length);
-  const latestId = latest ? `round:${latest.key}:score:${latest.score_columns[0]}` : undefined;
-  const preferences = tab === "MID" ? ["mid_semantic_score"] : tab === "ISCC" ? ["iscc_relevancy"] : [latestId, availability?.has_semantic === false ? undefined : "mid_semantic_score", availability?.has_iscc === false ? undefined : "iscc_relevancy"];
-  return preferences.find((id) => scores.some((column) => column.id === id)) ?? scores[0]?.id;
+  const latestId = latest ? `${latest.key} ${latest.provider_label} ${latest.score_columns[0]}` : undefined;
+  const preferences = tab === "MID" ? ["MID Score", "MID Semantic Score", "mid_semantic_score"] : tab === "ISCC" ? ["ISCC Score", "iscc_relevancy"] : [latestId, "MID_Keyword Score", "MID Score", availability?.has_semantic === false ? undefined : "MID_Semantic Score", availability?.has_semantic === false ? undefined : "mid_semantic_score", availability?.has_iscc === false ? undefined : "ISCC_Score", availability?.has_iscc === false ? undefined : "iscc_relevancy"];
+  return preferences.find(id => scores.some(column => column.id === id)) ?? scores[0]?.id;
 }
 
 export function toggleScoreBucket(filter: ColumnFilter | undefined, key: BucketKey, scheme: BucketScheme): ColumnFilter {

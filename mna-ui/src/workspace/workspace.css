@@ -1213,3 +1213,7 @@
 .ws-rounds-timeline li > div { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ws-rounds-timeline p { margin: 6px 0; color: var(--text-muted); line-height: 1.6; }
 .ws-round-progress { color: var(--text-muted); font-size: 11px; }
+
+.ws-company-main > .dg-shell { border: 0; border-radius: 0; }
+.ws-company-main .ws-distribution { border-radius: 0; border-left: 0; border-right: 0; }
+.ws-grid-progress { flex-shrink: 0; padding: 6px 14px; margin: 0; color: var(--text-muted); font-size: 12px; border-bottom: 1px solid var(--border); }
