@@ -42,7 +42,7 @@ const PAGE_CTE: &str = "WITH page AS (
     SELECT company_id AS current_id,company_id AS alias_id FROM page
     UNION
     SELECT p.company_id,ci.identifier FROM page p
-    JOIN company_identifiers ci ON ci.company_id=p.company_id AND ci.kind='PK'
+    CROSS JOIN company_identifiers ci ON ci.company_id=p.company_id AND ci.kind='PK'
 ) ";
 
 #[derive(Default)]
@@ -616,26 +616,30 @@ const RUN_ALIASES: &str = "WITH members AS (
 ), aliases AS (
     SELECT company_id AS current_id,company_id AS alias_id FROM members
     UNION SELECT m.company_id,ci.identifier FROM members m
-    JOIN company_identifiers ci ON ci.company_id=m.company_id AND ci.kind='PK'
+    CROSS JOIN company_identifiers ci ON ci.company_id=m.company_id AND ci.kind='PK'
 )";
 type SourceRecords = HashMap<(String, String), Vec<Value>>;
 
 /// Read the same bounded source history once for a page, descriptions, or a drawer.
 /// Source rows win over the active bundle fallback; promoted PK aliases remain readable.
+// CROSS JOIN keeps SQLite driving from the page's ids; otherwise it walks every MID
+// source row or PK identifier in the store, which took seconds on a 150k-row store.
 fn source_records(conn: &Connection, run_id: &str, ids: &[String]) -> Result<SourceRecords> {
     let mut statement = conn.prepare(
         "WITH ids AS (SELECT value AS company_id FROM json_each(?2)), aliases AS (
             SELECT company_id AS current_id,company_id AS alias_id FROM ids
             UNION SELECT i.company_id,ci.identifier FROM ids i
-            JOIN company_identifiers ci ON ci.company_id=i.company_id AND ci.kind='PK'
+            CROSS JOIN company_identifiers ci ON ci.company_id=i.company_id AND ci.kind='PK'
         ), raw AS (
             SELECT a.current_id,s.source,s.row_json,s.imported_at,s.source_row_id
-            FROM aliases a JOIN source_rows s ON s.company_id=a.alias_id
-            WHERE s.source='MID' OR (s.source='ISCC' AND s.run_scope=?1)
+            FROM aliases a CROSS JOIN source_rows s ON s.company_id=a.alias_id AND s.source='MID'
+            UNION ALL
+            SELECT a.current_id,s.source,s.row_json,s.imported_at,s.source_row_id
+            FROM aliases a CROSS JOIN source_rows s ON s.company_id=a.alias_id AND s.source='ISCC' AND s.run_scope=?1
             UNION ALL
             SELECT a.current_id,'MID',m.row_json,'',CAST(m.row_no AS TEXT)
-            FROM aliases a JOIN mid_rows m ON m.company_id=a.alias_id
-            JOIN mid_bundles b ON b.bundle_id=m.bundle_id AND b.status='active'
+            FROM aliases a CROSS JOIN mid_rows m ON m.company_id=a.alias_id
+              AND m.bundle_id=(SELECT bundle_id FROM mid_bundles WHERE status='active')
         ), ranked AS (
             SELECT *,ROW_NUMBER() OVER(PARTITION BY current_id,source
               ORDER BY imported_at DESC,source_row_id DESC) AS rn FROM raw
@@ -1172,7 +1176,7 @@ fn grid_page(conn: &Connection, args: &GridArgs, limit: usize) -> Result<Value> 
             SELECT company_id AS current_id,company_id AS alias_id FROM page
             UNION
             SELECT p.company_id,ci.identifier FROM page p
-            JOIN company_identifiers ci ON ci.company_id=p.company_id AND ci.kind='PK'
+            CROSS JOIN company_identifiers ci ON ci.company_id=p.company_id AND ci.kind='PK'
         ),
         src AS (
             SELECT a.current_id AS company_id,
