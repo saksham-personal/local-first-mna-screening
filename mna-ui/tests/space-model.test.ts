@@ -17,7 +17,8 @@ test("chip removal/edit preserves expression ids and prevents duplicate edits", 
 test("expression buttons insert at caret or replace selection and preserve parentheses", () => {
   assert.deepEqual(insertExpression("k1 k2", "AND", 3), { value: "k1 AND k2", cursor: 7 });
   assert.deepEqual(insertExpression("k1 OR k2", "AND", 3, 5), { value: "k1 AND k2", cursor: 6 });
-  assert.equal(insertExpression("", "NOT").value, "NOT");
+  assert.equal(insertExpression("", "NOT").value, "NOT ");
+  assert.deepEqual(insertExpression("k1", "AND"), { value: "k1 AND ", cursor: 7 });
   assert.equal(insertExpression("(k1", ")").value, "(k1)");
   assert.equal(insertExpression("k1 OR ", "(").value, "k1 OR (");
 });

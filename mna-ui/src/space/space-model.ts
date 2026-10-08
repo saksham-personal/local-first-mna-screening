@@ -24,7 +24,7 @@ export function editKeyword(current: Keyword[], id: string, text: string): Keywo
 }
 export function insertExpression(value: string, token: string, start = value.length, end = start) {
   const before = value.slice(0, start), after = value.slice(end);
-  const inserted = `${before && !/\s$|\($/.test(before) && token !== ")" ? " " : ""}${token}${token !== "(" && after && !/^\s|\)/.test(after) ? " " : ""}`;
+  const inserted = `${before && !/\s$|\($/.test(before) && token !== ")" ? " " : ""}${token}${token !== "(" && ((!after && token !== ")") || (after && !/^\s|\)/.test(after))) ? " " : ""}`;
   return { value: before + inserted + after, cursor: before.length + inserted.length };
 }
 export function searchRequest(search: SpaceSearch, offset: number, limit: number) {

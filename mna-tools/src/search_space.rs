@@ -357,8 +357,13 @@ impl SearchSpace {
         )
     }
     async fn sync(&self, bundle: &Bundle) -> Result<Value> {
-        if self.sync_running.swap(true, std::sync::atomic::Ordering::AcqRel) {
-            return Err(Error::Conflict("Search Space sync is already running.".into()));
+        if self
+            .sync_running
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Err(Error::Conflict(
+                "Search Space sync is already running.".into(),
+            ));
         }
         let _running = SyncRunning(self.sync_running.clone());
         self.request(Method::GET, "/health", None).await?;
@@ -366,7 +371,9 @@ impl SearchSpace {
         {
             let _lock = self.sync_lock.lock().await;
             if active(&self.store)?.id != bundle.id {
-                return Err(Error::Conflict("Active MID bundle changed; retry sync.".into()));
+                return Err(Error::Conflict(
+                    "Active MID bundle changed; retry sync.".into(),
+                ));
             }
             write_sync(&state)?;
         }
@@ -503,9 +510,17 @@ impl SearchSpace {
             let _lock = self.sync_lock.lock().await;
             sync_state()?
         };
-        let stats = self.request(Method::GET, &format!("/indexes/{}/stats", bundle.index), None).await;
-        if state["bundle_id"] != bundle.id || state["task_status"] != "succeeded"
-            || !stats.is_ok_and(|s| s["numberOfDocuments"].as_u64().is_some_and(|n| n > 0)) {
+        let stats = self
+            .request(
+                Method::GET,
+                &format!("/indexes/{}/stats", bundle.index),
+                None,
+            )
+            .await;
+        if state["bundle_id"] != bundle.id
+            || state["task_status"] != "succeeded"
+            || !stats.is_ok_and(|s| s["numberOfDocuments"].as_u64().is_some_and(|n| n > 0))
+        {
             return Err(Error::ProviderUnavailable(
                 "Search Space index is not synced yet".into(),
             ));
@@ -562,7 +577,9 @@ impl SearchSpace {
         {
             let _lock = self.sync_lock.lock().await;
             if sync_state()? != state || active(&self.store)?.id != bundle.id {
-                return Err(Error::Conflict("Search Space index changed; retry the search.".into()));
+                return Err(Error::Conflict(
+                    "Search Space index changed; retry the search.".into(),
+                ));
             }
         }
         Ok(LexicalResults {
@@ -783,7 +800,10 @@ impl SearchSpace {
         prune_exports()?;
         let file = format!("space-{}.xlsx", uuid::Uuid::new_v4());
         let path = export_dir().join(&file);
-        let mut cleanup = ExportCleanup { path: path.clone(), keep: false };
+        let mut cleanup = ExportCleanup {
+            path: path.clone(),
+            keep: false,
+        };
         let mut workbook = rust_xlsxwriter::Workbook::new();
         workbook
             .set_tempdir(export_dir())
@@ -801,13 +821,20 @@ impl SearchSpace {
                     let ids = self.sorted_ids(bundle, sort)?;
                     for id in ids {
                         written += 1;
-                        write_row(sheet, written, &columns, &hydrate(&self.store, bundle, &id)?)?;
+                        write_row(
+                            sheet,
+                            written,
+                            &columns,
+                            &hydrate(&self.store, bundle, &id)?,
+                        )?;
                     }
                 } else {
                     let mut cursor = 0;
                     loop {
                         let rows = row_page(&self.store, bundle, cursor, 200)?;
-                        if rows.is_empty() { break; }
+                        if rows.is_empty() {
+                            break;
+                        }
                         cursor = rows.last().expect("rows").0;
                         for (_, row) in rows {
                             written += 1;
@@ -902,8 +929,14 @@ impl SearchSpace {
         }
         let key = if bundle.numbers.contains(&sort.column) {
             "CAST(json_extract(r.row_json, ?) AS REAL)"
-        } else { "json_extract(r.row_json, ?) COLLATE NOCASE" };
-        let direction = if matches!(sort.direction, Direction::Asc) { "ASC" } else { "DESC" };
+        } else {
+            "json_extract(r.row_json, ?) COLLATE NOCASE"
+        };
+        let direction = if matches!(sort.direction, Direction::Asc) {
+            "ASC"
+        } else {
+            "DESC"
+        };
         let path = format!("$.{}", serde_json::to_string(&sort.column)?);
         self.store.with_connection(|c| {
             let mut stmt = c.prepare(&format!("SELECT r.company_id FROM mid_rows r JOIN companies c USING(company_id) WHERE r.bundle_id=? ORDER BY {key} {direction},c.name COLLATE NOCASE,r.company_id"))?;
@@ -914,12 +947,19 @@ impl SearchSpace {
 }
 struct SyncRunning(std::sync::Arc<std::sync::atomic::AtomicBool>);
 impl Drop for SyncRunning {
-    fn drop(&mut self) { self.0.store(false, std::sync::atomic::Ordering::Release); }
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
 }
-struct ExportCleanup { path: PathBuf, keep: bool }
+struct ExportCleanup {
+    path: PathBuf,
+    keep: bool,
+}
 impl Drop for ExportCleanup {
     fn drop(&mut self) {
-        if !self.keep { let _ = std::fs::remove_file(&self.path); }
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 fn prune_exports() -> Result<()> {
@@ -930,7 +970,13 @@ fn prune_exports() -> Result<()> {
         let name = name.to_string_lossy();
         if name.starts_with("space-") && name.ends_with(".xlsx") {
             let meta = entry.metadata()?;
-            if meta.is_file() && meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age > Duration::from_secs(7 * 24 * 60 * 60)) {
+            if meta.is_file()
+                && meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| now.duration_since(m).ok())
+                    .is_some_and(|age| age > Duration::from_secs(7 * 24 * 60 * 60))
+            {
                 std::fs::remove_file(entry.path())?;
             }
         }
@@ -938,12 +984,16 @@ fn prune_exports() -> Result<()> {
     Ok(())
 }
 fn xlsx_text(value: &str) -> String {
-    if value.encode_utf16().count() <= 32767 { return value.to_owned(); }
+    if value.encode_utf16().count() <= 32767 {
+        return value.to_owned();
+    }
     let mut units = 0;
     let mut result = String::new();
     for ch in value.chars() {
         units += ch.len_utf16();
-        if units > 32766 { break; }
+        if units > 32766 {
+            break;
+        }
         result.push(ch);
     }
     result.push('…');

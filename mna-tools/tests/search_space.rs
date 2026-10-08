@@ -803,13 +803,28 @@ fn stale_sync_metadata_refuses_missing_or_empty_meili_index() {
     let rt = rt();
     let (server, state) = rt.block_on(fake());
     let space = SearchSpace::new(f.store.clone()).unwrap();
-    let synced = rt.block_on(space.execute("space_sync", &json!({}))).unwrap();
+    let synced = rt
+        .block_on(space.execute("space_sync", &json!({})))
+        .unwrap();
     let index = synced["index"].as_str().unwrap();
     for absent in [false, true] {
-        if absent { state.lock().unwrap().docs.remove(index); }
-        else { state.lock().unwrap().docs.get_mut(index).unwrap().clear(); }
-        let error = rt.block_on(space.execute("space_search_lexical", &json!({"keywords":[{"text":"claims"}]}))).unwrap_err();
-        assert!(error.to_string().contains("Search Space index is not synced yet"), "{error}");
+        if absent {
+            state.lock().unwrap().docs.remove(index);
+        } else {
+            state.lock().unwrap().docs.get_mut(index).unwrap().clear();
+        }
+        let error = rt
+            .block_on(space.execute(
+                "space_search_lexical",
+                &json!({"keywords":[{"text":"claims"}]}),
+            ))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Search Space index is not synced yet"),
+            "{error}"
+        );
         assert!(state.lock().unwrap().queries.is_empty());
     }
     server.abort();
@@ -824,12 +839,24 @@ fn sorted_export_over_multiple_pages_preserves_numeric_order_and_count() {
     for direction in ["asc", "desc"] {
         let result = rt.block_on(space.execute("space_export", &json!({"search":{"sort":{"column":"Annual Revenue","direction":direction},"offset":200,"limit":100},"format":"xlsx"}))).unwrap();
         assert_eq!(result["rows"], 425);
-        let mut workbook: Xlsx<_> = open_workbook(f.dir.path().join("export").join(result["file"].as_str().unwrap())).unwrap();
+        let mut workbook: Xlsx<_> = open_workbook(
+            f.dir
+                .path()
+                .join("export")
+                .join(result["file"].as_str().unwrap()),
+        )
+        .unwrap();
         let range = workbook.worksheet_range_at(0).unwrap().unwrap();
         assert_eq!(range.height(), 426);
-        let actual = range.rows().skip(1).map(|r| r[0].to_string()).collect::<Vec<_>>();
+        let actual = range
+            .rows()
+            .skip(1)
+            .map(|r| r[0].to_string())
+            .collect::<Vec<_>>();
         let mut expected = (1..=425).map(|i| format!("E{i}-C{i}")).collect::<Vec<_>>();
-        if direction == "desc" { expected.reverse(); }
+        if direction == "desc" {
+            expected.reverse();
+        }
         assert_eq!(actual, expected);
     }
 }
@@ -849,19 +876,36 @@ fn export_truncates_long_cells_and_cleans_failed_and_expired_files() {
     let other = export_dir.join("other-export.xlsx");
     for path in [&expired, &other] {
         let file = std::fs::File::create(path).unwrap();
-        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60)).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60))
+            .unwrap();
     }
     let rt = rt();
     let space = SearchSpace::new(f.store.clone()).unwrap();
-    let result = rt.block_on(space.execute("space_export", &json!({"search":{},"format":"xlsx"}))).unwrap();
-    assert!(!expired.exists()); assert!(other.exists());
-    let mut workbook: Xlsx<_> = open_workbook(export_dir.join(result["file"].as_str().unwrap())).unwrap();
+    let result = rt
+        .block_on(space.execute("space_export", &json!({"search":{},"format":"xlsx"})))
+        .unwrap();
+    assert!(!expired.exists());
+    assert!(other.exists());
+    let mut workbook: Xlsx<_> =
+        open_workbook(export_dir.join(result["file"].as_str().unwrap())).unwrap();
     let range = workbook.worksheet_range_at(0).unwrap().unwrap();
-    let col = range.rows().next().unwrap().iter().position(|v| v.to_string() == "Arbitrary Flag").unwrap();
+    let col = range
+        .rows()
+        .next()
+        .unwrap()
+        .iter()
+        .position(|v| matches!(v, calamine::Data::String(value) if value == "Arbitrary Flag"))
+        .unwrap();
     let cell = range.rows().nth(1).unwrap()[col].to_string();
-    assert!(cell.ends_with('…')); assert_eq!(cell.encode_utf16().count(), 32767);
+    assert!(cell.ends_with('…'));
+    assert_eq!(cell.encode_utf16().count(), 32767);
     let before = std::fs::read_dir(&export_dir).unwrap().count();
-    assert!(rt.block_on(space.execute("space_export", &json!({"search":{"sort":{"column":"absent","direction":"asc"}},"format":"xlsx"}))).is_err());
+    assert!(rt
+        .block_on(space.execute(
+            "space_export",
+            &json!({"search":{"sort":{"column":"absent","direction":"asc"}},"format":"xlsx"})
+        ))
+        .is_err());
     assert_eq!(std::fs::read_dir(&export_dir).unwrap().count(), before);
 }
 #[test]
