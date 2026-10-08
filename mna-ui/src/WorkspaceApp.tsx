@@ -455,6 +455,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
   const [streaming, setStreaming] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [descriptions, setDescriptions] = useState(new Map<string, GridDescription>());
+  const knownCatalogs = useRef(new Map<string, ScreeningGrid["columns"]>());
   const descriptionCache = useRef(new Map<string, GridDescription>());
   const descriptionPending = useRef(new Set<string>());
   const [descriptionError, setDescriptionError] = useState("");
@@ -534,7 +535,9 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
     try {
       // Read the current catalog without heavy values, including newly added sources/rounds.
       // Every data page, including page 1, then projects the picker choice.
-      const known = (await fetchScreeningGridPage(state.sessionId, runId, {
+      // The catalog of a view seen before is reused, so a refetch costs one round trip.
+      const catalogKey = `${runId}:${sourceTab}`;
+      const known = knownCatalogs.current.get(catalogKey) ?? (await fetchScreeningGridPage(state.sessionId, runId, {
         view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 1, columns: [],
       })).columns;
       if (request !== gridRequest.current) return null;
@@ -544,6 +547,15 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
         columns: requestedCatalogIds(known, saved),
       });
       if (request !== gridRequest.current) return null;
+      knownCatalogs.current.set(catalogKey, data.columns);
+      if (data.columns.map(column => column.id).join("|") !== known.map(column => column.id).join("|")) {
+        // A new source or round changed the catalog: request page 1 again with the current defaults.
+        data = await fetchScreeningGridPage(state.sessionId, runId, {
+          view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 100,
+          columns: requestedCatalogIds(data.columns, saved),
+        });
+        if (request !== gridRequest.current) return null;
+      }
       if (descriptionSourceHash.current !== data.sourceHash) {
         descriptionSourceHash.current = data.sourceHash;
         descriptionCache.current = new Map(); setDescriptions(new Map());

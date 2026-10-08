@@ -687,7 +687,7 @@ export default function ArtifactCard({ artifact, onAction, context }: Props) {
       <div className="ca-artifact-body">
         {context?.storageNotice && context.artifacts[0]?.id === artifact.id && <p role="status" className="ca-note">{context.storageNotice}</p>}
         {artifact.type === "companies" && context?.companiesLoading ? <Skeleton variant="table" rows={5} cols={4} label="Loading companies…" /> : artifact.type === "companies" && context?.companiesLoadError ? <><p role="alert" className="ca-note">Companies could not be loaded: {context.companiesLoadError}</p><button type="button" className="ca-secondary-action" onClick={() => void restoreChatCompanies(context.sessionId)}>Retry loading companies</button></> : artifact.type === "companies" && artifact.dataTrimmed && context?.backendRunId !== artifact.backendRunId ? <p className="ca-note">Company data is saved in the local service for this earlier run.</p> : <ArtifactBody artifact={artifact} onAction={onAction} context={context} />}
-        {artifact.type === "companies" && <div className="ca-action-row"><button type="button" className="ca-primary-action" onClick={openWorkspaceCompanies}><ArrowRight size={14} />Open in Workspace</button></div>}
+        {artifact.type === "companies" && !context?.companiesLoading && !context?.companiesLoadError && <div className="ca-action-row"><button type="button" className="ca-primary-action" onClick={openWorkspaceCompanies}><ArrowRight size={14} />Open in Workspace</button></div>}
       </div>
     </article>
   );

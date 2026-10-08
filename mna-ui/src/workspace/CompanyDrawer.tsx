@@ -156,7 +156,7 @@ export default function CompanyDrawer({
                           <div className="company-drawer-phase-scores"><span>MID semantic score</span><SemanticBar value={detail ? detail.mid_semantic?.score ?? null : company.mid_semantic_score} /><span>ISCC relevancy</span><strong>{(detail ? detail.iscc?.relevancy : company.iscc_relevancy)?.toFixed(2) ?? "—"}</strong></div>
                         </section>
                         <section className="company-drawer-section">
-                          <h3>MID keyword match · {(detail?.mid_keyword ?? company.mid_keyword)?.best_match_pct == null ? "—" : `${(detail?.mid_keyword ?? company.mid_keyword)!.best_match_pct!.toFixed(0)}%`}</h3>
+                          <h3>MID keyword evidence</h3>
                           {(detail?.mid_keyword ?? company.mid_keyword) ? <KeywordEvidence data={(detail?.mid_keyword ?? company.mid_keyword)!} /> : <p className="company-drawer-muted">No keyword matches are available.</p>}
                         </section>
                         {Object.entries(detail?.rounds ?? company.rounds).sort(([a], [b]) => Number(b.slice(1)) - Number(a.slice(1))).map(([key, round]) => <section className="company-drawer-section" key={key}>

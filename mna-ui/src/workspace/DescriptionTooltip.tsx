@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { GridCompany, GridDescription } from "../lib/grid-client";
 import { descriptionPreview, descriptionSections } from "./description-content";
@@ -49,7 +49,9 @@ export default function DescriptionTooltip({ cache, error, children }: { cache: 
   }, [company, cache, position]);
   useEffect(() => () => { cancelAnimationFrame(frame.current); clearTimeout(hideTimer.current); }, []);
   const sections = company ? descriptionSections(cache.get(company.company_id)) : [];
-  return <DescriptionContext.Provider value={{ cache, error, show, move, hide }}>{children}
+  // A stable value keeps every Description cell from re-rendering on hover.
+  const value = useMemo(() => ({ cache, error, show, move, hide }), [cache, error, show, move, hide]);
+  return <DescriptionContext.Provider value={value}>{children}
     {company && createPortal(<div ref={element} className="ws-description-tooltip" role="tooltip"
       onPointerEnter={() => clearTimeout(hideTimer.current)} onPointerLeave={() => setCompany(null)}
       onKeyDown={event => { if (event.key === "Escape") setCompany(null); }}>
