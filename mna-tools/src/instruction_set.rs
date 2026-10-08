@@ -1,10 +1,19 @@
 //! Tolerant Markdown instruction parsing. This module never executes or approves a tool.
+//! Expression operators are uppercase `AND`, `OR` and `NOT`; lowercase words
+//! remain part of keyword text. Parsing is capped at 50 instructions, 200 fields
+//! per instruction and 100 MID keywords (conversion rejects more than 50).
 use crate::runtime::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Number, Value};
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 const MAX_BYTES: usize = 512 * 1024;
 const MAX_DEPTH: usize = 32;
+const MAX_INSTRUCTIONS: usize = 50;
+const MAX_FIELDS: usize = 200;
+const MAX_KEYWORDS: usize = 100;
+const KEYWORD_CAP_WARNING: &str = "more than 100 keywords; extra ignored";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ParsedReply {
@@ -175,7 +184,7 @@ fn action(s: &str) -> (String, Option<String>, Vec<(String, String)>) {
     if let Some(open) = s.find('(') {
         if let Some(close) = s.rfind(')') {
             if close > open && s[open + 1..close].contains('=') {
-                let fields = split_values(&s[open + 1..close])
+                let fields = split_values_with_assignments(&s[open + 1..close], true)
                     .iter()
                     .filter_map(|v| assignment(v))
                     .collect();
@@ -224,42 +233,23 @@ fn synonym(name: &str) -> Option<&'static str> {
     }
 }
 
-fn recognizable(s: &str) -> bool {
+fn recognizable(s: &str, single_token: bool) -> bool {
     let (name, _, _) = action(s);
+    if single_token && name.chars().any(char::is_whitespace) {
+        return false;
+    }
     let name = normalize(&name);
-    synonym(&name).is_some()
-        || [
-            "search_",
-            "score_",
-            "get_",
-            "find_",
-            "add_",
-            "list_",
-            "propose_",
-            "export_",
-            "prepare_",
-            "rerank_",
-            "read_",
-            "hide_",
-            "restore_",
-            "update_",
-            "record_",
-            "bing_",
-            "m365_",
-            "build_",
-            "compare_",
-            "label_",
-            "fetch_",
-            "extract_",
-            "save_",
-            "resolve_",
-            "inspect_",
-            "import_",
-            "embed_",
-            "complete_",
-        ]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
+    static NAMES: OnceLock<HashSet<String>> = OnceLock::new();
+    let names = NAMES.get_or_init(|| {
+        crate::runtime::tool_definitions()
+            .into_iter()
+            .map(|tool| normalize(tool.name).trim_end_matches('s').to_owned())
+            .collect()
+    });
+    names.contains(name.trim_end_matches('s'))
+        || synonym(&name)
+            .or_else(|| synonym(name.trim_end_matches('s')))
+            .is_some_and(|target| names.contains(target.trim_end_matches('s')))
 }
 
 fn append_text(target: &mut Option<String>, line: &str) {
@@ -270,25 +260,76 @@ fn append_text(target: &mut Option<String>, line: &str) {
     value.push_str(line);
 }
 
-fn add_field(
-    reply: &mut ParsedReply,
-    instruction: &mut RawInstruction,
-    key: String,
-    value: String,
-) {
-    let normalized = normalize(&key);
-    if let Some(i) = instruction
-        .fields
-        .iter()
-        .position(|(k, _)| normalize(k) == normalized)
-    {
-        instruction.fields.remove(i);
-        reply.warnings.push(format!(
-            "Instruction {}: duplicate field '{key}'; last value wins",
-            instruction.index
-        ));
+// Index each normalized key once. Retain last-write order for schema aliases,
+// without shifting the field vector every time a duplicate arrives.
+struct PendingInstruction {
+    instruction: RawInstruction,
+    field_indices: HashMap<String, usize>,
+    field_order: Vec<usize>,
+    writes: usize,
+    last_field: Option<usize>,
+    fields_capped: bool,
+}
+
+impl PendingInstruction {
+    fn new(instruction: RawInstruction) -> Self {
+        Self {
+            instruction,
+            field_indices: HashMap::new(),
+            field_order: vec![],
+            writes: 0,
+            last_field: None,
+            fields_capped: false,
+        }
     }
-    instruction.fields.push((key, value));
+
+    fn add_field(&mut self, reply: &mut ParsedReply, key: String, value: String) {
+        let normalized = normalize(&key);
+        self.writes += 1;
+        if let Some(&i) = self.field_indices.get(&normalized) {
+            self.instruction.fields[i] = (key.clone(), value);
+            self.field_order[i] = self.writes;
+            self.last_field = Some(i);
+            reply.warnings.push(format!(
+                "Instruction {}: duplicate field '{key}'; last value wins",
+                self.instruction.index
+            ));
+        } else if self.instruction.fields.len() < MAX_FIELDS {
+            let i = self.instruction.fields.len();
+            self.field_indices.insert(normalized, i);
+            self.instruction.fields.push((key, value));
+            self.field_order.push(self.writes);
+            self.last_field = Some(i);
+        } else {
+            self.last_field = None;
+            if !self.fields_capped {
+                reply.warnings.push(format!(
+                    "Instruction {}: more than 200 fields; extra ignored",
+                    self.instruction.index
+                ));
+                self.fields_capped = true;
+            }
+        }
+    }
+
+    fn continue_field(&mut self, line: &str) {
+        if let Some(i) = self.last_field {
+            let value = &mut self.instruction.fields[i].1;
+            value.push('\n');
+            value.push_str(line);
+        }
+    }
+
+    fn finish(mut self) -> RawInstruction {
+        let mut ordered: Vec<_> = self
+            .field_order
+            .into_iter()
+            .zip(self.instruction.fields)
+            .collect();
+        ordered.sort_unstable_by_key(|(order, _)| *order);
+        self.instruction.fields = ordered.into_iter().map(|(_, field)| field).collect();
+        self.instruction
+    }
 }
 
 // Collect once, and deserialize once, rather than reparsing an ever-growing
@@ -363,7 +404,7 @@ impl<'de> Deserialize<'de> for JsonFields {
 
 fn finish_instruction(
     reply: &mut ParsedReply,
-    current: &mut Option<RawInstruction>,
+    current: &mut Option<PendingInstruction>,
     body: &mut Vec<String>,
 ) {
     let Some(mut instruction) = current.take() else {
@@ -386,7 +427,7 @@ fn finish_instruction(
                         .as_str()
                         .map(str::to_owned)
                         .unwrap_or_else(|| value.to_string());
-                    add_field(reply, &mut instruction, key, value);
+                    instruction.add_field(reply, key, value);
                 }
             } else {
                 reply.unparsed.push(buffer.trim().to_owned());
@@ -410,7 +451,7 @@ fn finish_instruction(
                     i += 1;
                     continue;
                 }
-                add_field(reply, &mut instruction, key.to_owned(), cells[1].to_owned());
+                instruction.add_field(reply, key.to_owned(), cells[1].to_owned());
                 field_indent = Some(indent(line));
                 i += 1;
                 continue;
@@ -418,25 +459,19 @@ fn finish_instruction(
         }
         let deeper = field_indent.is_some_and(|depth| indent(line) > depth);
         if deeper {
-            if let Some((_, value)) = instruction.fields.last_mut() {
-                value.push('\n');
-                value.push_str(line);
-            }
+            instruction.continue_field(line);
         } else if let Some((key, value)) = assignment(trimmed) {
-            add_field(reply, &mut instruction, key, value);
+            instruction.add_field(reply, key, value);
             field_indent = Some(indent(line));
         } else if field_indent.is_some_and(|depth| indent(line) >= depth && depth > 0) {
-            if let Some((_, value)) = instruction.fields.last_mut() {
-                value.push('\n');
-                value.push_str(line);
-            }
+            instruction.continue_field(line);
         } else {
             reply.unparsed.push(line.to_owned());
         }
         i += 1;
     }
     body.clear();
-    reply.instructions.push(instruction);
+    reply.instructions.push(instruction.finish());
 }
 
 fn fence(s: &str) -> bool {
@@ -459,16 +494,22 @@ pub fn parse_reply(text: &str) -> ParsedReply {
         .trim_start_matches('\u{feff}')
         .replace("\r\n", "\n")
         .replace('\r', "\n");
+    let has_instruction_heading = text
+        .lines()
+        .any(|line| section(line) == Some(Section::Instructions));
     let mut active = Section::Context;
+    let mut explicit_section = false;
     let mut sections = 0;
-    let mut current: Option<RawInstruction> = None;
+    let mut current: Option<PendingInstruction> = None;
     let mut body = vec![];
     let mut item_indent = 0;
+    let mut skipping_instruction = false;
+    let mut instructions_capped = false;
     for line in text.lines() {
         if fence(line.trim()) {
             if let Some(instruction) = &mut current {
-                instruction.raw.push('\n');
-                instruction.raw.push_str(line);
+                instruction.instruction.raw.push('\n');
+                instruction.instruction.raw.push_str(line);
                 body.push(line.to_owned());
             }
             continue;
@@ -477,6 +518,8 @@ pub fn parse_reply(text: &str) -> ParsedReply {
         if (current.is_none() || indent(line) <= item_indent) && section(line).is_some() {
             finish_instruction(&mut reply, &mut current, &mut body);
             active = section(line).unwrap_or(Section::Context);
+            explicit_section = true;
+            skipping_instruction = false;
             if active == Section::Instructions {
                 sections += 1;
                 if sections > 1 {
@@ -487,6 +530,9 @@ pub fn parse_reply(text: &str) -> ParsedReply {
             }
             continue;
         }
+        if skipping_instruction {
+            continue;
+        }
         let candidate = list_item(line);
         let new_item = candidate.is_some_and(|s| {
             let bullet_field = current.is_some()
@@ -494,31 +540,45 @@ pub fn parse_reply(text: &str) -> ParsedReply {
                     .iter()
                     .any(|m| line.trim_start().starts_with(m))
                 && assignment(s).is_some()
-                && !recognizable(s)
+                && !recognizable(s, false)
                 && !s.to_lowercase().starts_with("action:");
             (current.is_none() || indent(line) <= item_indent)
-                && (active == Section::Instructions || recognizable(s))
+                && (if has_instruction_heading {
+                    active == Section::Instructions
+                } else {
+                    !explicit_section && recognizable(s, true)
+                })
                 && !bullet_field
         });
         if new_item {
             finish_instruction(&mut reply, &mut current, &mut body);
+            if reply.instructions.len() >= MAX_INSTRUCTIONS {
+                if !instructions_capped {
+                    reply
+                        .warnings
+                        .push("only the first 50 instructions were read".into());
+                    instructions_capped = true;
+                }
+                skipping_instruction = true;
+                continue;
+            }
             let (name_text, title, fields) = action(candidate.unwrap_or_default());
             active = Section::Instructions;
             item_indent = indent(line);
-            let mut instruction = RawInstruction {
+            let mut instruction = PendingInstruction::new(RawInstruction {
                 index: reply.instructions.len() + 1,
                 name_text,
                 title,
                 fields: vec![],
                 raw: line.to_owned(),
-            };
+            });
             for (key, value) in fields {
-                add_field(&mut reply, &mut instruction, key, value);
+                instruction.add_field(&mut reply, key, value);
             }
             current = Some(instruction);
         } else if let Some(instruction) = &mut current {
-            instruction.raw.push('\n');
-            instruction.raw.push_str(line);
+            instruction.instruction.raw.push('\n');
+            instruction.instruction.raw.push_str(line);
             body.push(line.to_owned());
         } else {
             match active {
@@ -629,14 +689,60 @@ fn types(schema: &Value) -> Vec<&str> {
     }
 }
 
+// The last unescaped closer makes quote checks constant-time even for many
+// unmatched marks. Apostrophes within words never open a quoted token.
+fn quote_slot(c: char) -> Option<usize> {
+    match c {
+        '"' => Some(0),
+        '\'' => Some(1),
+        '`' => Some(2),
+        _ => None,
+    }
+}
+
+fn quote_closers(s: &str) -> [Option<usize>; 3] {
+    let mut closers = [None; 3];
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if let Some(slot) = quote_slot(c) {
+            closers[slot] = Some(i);
+        }
+    }
+    closers
+}
+
+fn opens_quote(
+    c: char,
+    i: usize,
+    previous: Option<char>,
+    closers: &[Option<usize>; 3],
+    inline_assignments: bool,
+) -> bool {
+    quote_slot(c).is_some_and(|slot| closers[slot].is_some_and(|end| end > i))
+        && previous.is_none_or(|c| {
+            c.is_whitespace() || ['(', ',', ';'].contains(&c) || inline_assignments && c == '='
+        })
+}
+
 /// Split Markdown lists while preserving quoted text and parenthesized annotations.
 fn split_values(s: &str) -> Vec<String> {
+    split_values_with_assignments(s, false)
+}
+
+fn split_values_with_assignments(s: &str, inline_assignments: bool) -> Vec<String> {
     let mut output = vec![];
     let mut start = 0;
     let mut quote = None;
     let mut depth = 0usize;
     let mut escaped = false;
+    let closers = quote_closers(s);
+    let mut previous = None;
     for (i, c) in s.char_indices() {
+        let prior = previous.replace(c);
         if escaped {
             escaped = false;
             continue;
@@ -652,7 +758,9 @@ fn split_values(s: &str) -> Vec<String> {
             continue;
         }
         match c {
-            '\"' | '\'' | '`' => quote = Some(c),
+            '\"' | '\'' | '`' if opens_quote(c, i, prior, &closers, inline_assignments) => {
+                quote = Some(c)
+            }
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
             ';' | ',' | '\n' if depth == 0 => {
@@ -1062,8 +1170,17 @@ fn keyword(raw: &str, index: usize) -> Value {
     json!({"id":format!("k{index}"),"text":unquote(&text),"weight":weight,"match":mode})
 }
 
-fn keyword_values(raw: &Value) -> Vec<Value> {
-    let values = raw
+fn warn_keyword_cap(warnings: &mut Vec<String>) {
+    if !warnings
+        .iter()
+        .any(|warning| warning == KEYWORD_CAP_WARNING)
+    {
+        warnings.push(KEYWORD_CAP_WARNING.into());
+    }
+}
+
+fn keyword_values(raw: &Value, warnings: &mut Vec<String>) -> Vec<Value> {
+    let mut values = raw
         .as_array()
         .cloned()
         .or_else(|| {
@@ -1076,6 +1193,10 @@ fn keyword_values(raw: &Value) -> Vec<Value> {
                 .map(Value::String)
                 .collect()
         });
+    if values.len() > MAX_KEYWORDS {
+        warn_keyword_cap(warnings);
+        values.truncate(MAX_KEYWORDS);
+    }
     values
         .into_iter()
         .enumerate()
@@ -1083,23 +1204,29 @@ fn keyword_values(raw: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn rewrite_expression(expression: &str, keywords: &mut Vec<Value>) -> String {
+fn rewrite_expression(
+    expression: &str,
+    keywords: &mut Vec<Value>,
+    warnings: &mut Vec<String>,
+) -> String {
     // Boolean operators and parentheses delimit terms; quotes may contain spaces/operators.
     let mut tokens = vec![];
     let mut term = String::new();
     let mut quote = None;
     let mut escaped = false;
     let mut word = String::new();
+    let closers = quote_closers(expression);
+    let mut previous = None;
     let flush_word = |word: &mut String, term: &mut String, tokens: &mut Vec<String>| {
         if word.is_empty() {
             return;
         }
-        if ["AND", "OR", "NOT"].contains(&word.to_uppercase().as_str()) {
+        if ["AND", "OR", "NOT"].contains(&word.as_str()) {
             if !term.trim().is_empty() {
                 tokens.push(term.trim().to_owned());
                 term.clear();
             }
-            tokens.push(word.to_uppercase());
+            tokens.push(word.clone());
         } else {
             if !term.is_empty() {
                 term.push(' ');
@@ -1108,7 +1235,8 @@ fn rewrite_expression(expression: &str, keywords: &mut Vec<Value>) -> String {
         }
         word.clear();
     };
-    for c in expression.chars() {
+    for (i, c) in expression.char_indices() {
+        let prior = previous.replace(c);
         if escaped {
             word.push(c);
             escaped = false;
@@ -1124,7 +1252,7 @@ fn rewrite_expression(expression: &str, keywords: &mut Vec<Value>) -> String {
             continue;
         }
         match c {
-            '\"' | '\'' | '`' => {
+            '\"' | '\'' | '`' if opens_quote(c, i, prior, &closers, false) => {
                 quote = Some(c);
                 word.push(c);
             }
@@ -1144,15 +1272,29 @@ fn rewrite_expression(expression: &str, keywords: &mut Vec<Value>) -> String {
     if !term.trim().is_empty() {
         tokens.push(term.trim().to_owned());
     }
+    let mut by_text = HashMap::new();
+    let mut by_id = HashMap::new();
+    for value in keywords.iter() {
+        if let Some(id) = value.get("id").and_then(Value::as_str) {
+            by_id
+                .entry(id.to_lowercase())
+                .or_insert_with(|| id.to_owned());
+            if let Some(text) = value.get("text").and_then(Value::as_str) {
+                by_text
+                    .entry(text.to_lowercase())
+                    .or_insert_with(|| id.to_owned());
+            }
+        }
+    }
+    let mut index = keywords.len() + 1;
     for token in &mut tokens {
         if ["AND", "OR", "NOT", "(", ")"].contains(&token.as_str()) {
             continue;
         }
         let text = unquote(token);
-        if keywords
-            .iter()
-            .any(|v| v.get("id").and_then(Value::as_str) == Some(text))
-        {
+        let normal = text.to_lowercase();
+        if let Some(id) = by_id.get(&normal) {
+            *token = id.clone();
             continue;
         }
         // Unknown id-shaped terms are left for the tool's expression validator.
@@ -1162,28 +1304,28 @@ fn rewrite_expression(expression: &str, keywords: &mut Vec<Value>) -> String {
         {
             continue;
         }
-        if let Some(id) = keywords
-            .iter()
-            .find(|v| {
-                v.get("text")
-                    .and_then(Value::as_str)
-                    .is_some_and(|s| s.eq_ignore_ascii_case(text))
-            })
-            .and_then(|v| v.get("id"))
-            .and_then(Value::as_str)
-        {
-            *token = id.to_owned();
+        if let Some(id) = by_text.get(&normal) {
+            *token = id.clone();
         } else {
-            let mut index = keywords.len() + 1;
-            while keywords
-                .iter()
-                .any(|v| v.get("id").and_then(Value::as_str) == Some(&format!("k{index}")))
-            {
+            if keywords.len() >= MAX_KEYWORDS {
+                warn_keyword_cap(warnings);
+                continue;
+            }
+            while by_id.contains_key(&format!("k{index}")) {
                 index += 1;
             }
             let value = keyword(text, index);
-            *token = format!("k{index}");
+            let id = format!("k{index}");
+            if let Some(text) = value.get("text").and_then(Value::as_str) {
+                by_text
+                    .entry(text.to_lowercase())
+                    .or_insert_with(|| id.clone());
+            }
+            by_text.insert(normal, id.clone());
+            by_id.insert(id.clone(), id.clone());
+            *token = id;
             keywords.push(value);
+            index += 1;
         }
     }
     tokens.join(" ").replace("( ", "(").replace(" )", ")")
@@ -1260,12 +1402,15 @@ fn convert(
         }
     }
     if tool.name == "search_mid" && fields.contains_key("keywords") {
-        let mut keywords = keyword_values(&fields["keywords"]);
+        let mut keywords = keyword_values(&fields["keywords"], warnings);
         if let Some(expression) = fields.get("expression").and_then(Value::as_str) {
             if !["none", "null"].contains(&unquote(expression).to_lowercase().as_str()) {
-                let rewritten = rewrite_expression(unquote(expression), &mut keywords);
+                let rewritten = rewrite_expression(unquote(expression), &mut keywords, warnings);
                 fields.insert("expression".into(), Value::String(rewritten));
             }
+        }
+        if keywords.len() > 50 {
+            return Err("keywords must contain 1..50 entries".into());
         }
         fields.insert("keywords".into(), Value::Array(keywords));
     }
@@ -1284,14 +1429,10 @@ fn convert(
 
 fn bounded_feedback(lines: &[String]) -> String {
     let text = lines.join("\n");
-    if text.len() <= 1200 {
+    if text.chars().count() <= 1200 {
         return text;
     }
-    let mut end = 1197;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut result = text[..end].to_owned();
+    let mut result: String = text.chars().take(1197).collect();
     result.push_str("...");
     result
 }
@@ -1305,8 +1446,26 @@ pub fn to_tool_calls(
 ) -> ConversionReport {
     let mut report = ConversionReport::default();
     let mut feedback = vec![];
+    let unused: Vec<_> = reply
+        .unparsed
+        .iter()
+        .map(|fragment| {
+            format!(
+                "Unused fragment: {}",
+                fragment.chars().take(160).collect::<String>()
+            )
+        })
+        .collect();
+    let mut warning_feedback = vec![];
     for instruction in &reply.instructions {
-        let mut warnings = vec![];
+        let prefix = format!("Instruction {}: ", instruction.index);
+        let mut warnings: Vec<_> = reply
+            .warnings
+            .iter()
+            .filter(|warning| !warning.starts_with("Instruction ") || warning.starts_with(&prefix))
+            .cloned()
+            .collect();
+        warnings.extend(unused.iter().cloned());
         let matched = match_action(&instruction.name_text, allowed);
         // Exact catalog names that are disallowed may not fuzzy-match a different tool.
         let disallowed = catalog.iter().any(|t| {
@@ -1333,8 +1492,11 @@ pub fn to_tool_calls(
                 allowed.join(", ")
             ))
         };
-        for warning in warnings.iter().filter(|s| s.starts_with("Dropped field")) {
-            feedback.push(format!("Instruction {}: {warning}.", instruction.index));
+        for warning in warnings
+            .iter()
+            .filter(|s| s.starts_with("Dropped field") || s.as_str() == KEYWORD_CAP_WARNING)
+        {
+            warning_feedback.push(format!("Instruction {}: {warning}.", instruction.index));
         }
         match result {
             Ok(call) => report.calls.push(call),
@@ -1352,13 +1514,16 @@ pub fn to_tool_calls(
             }
         }
     }
-    for fragment in &reply.unparsed {
-        feedback.push(format!(
-            "Unused fragment: {}",
-            fragment.chars().take(160).collect::<String>()
-        ));
+    if !report.rejected.is_empty() {
+        feedback.insert(
+            1,
+            "Expression hint: only uppercase AND, OR and NOT are operators; lowercase words remain keyword text."
+                .into(),
+        );
+        feedback.extend(warning_feedback);
+        feedback.extend(unused);
+        report.feedback = bounded_feedback(&feedback);
     }
-    report.feedback = bounded_feedback(&feedback);
     report
 }
 
@@ -1396,5 +1561,61 @@ mod tests {
     fn fractional_integer_is_rejected() {
         assert!(numeric("1.2", true).is_err());
         assert!(numeric("NaN", false).is_err());
+    }
+
+    #[test]
+    fn quote_openers_require_token_start_and_closer() {
+        assert_eq!(
+            split_values("Lloyd's; vendor`s; a\"b; 'unclosed; last"),
+            ["Lloyd's", "vendor`s", "a\"b", "'unclosed", "last"]
+        );
+        assert_eq!(
+            split_values("'a,b'; `c;d`; \"e,f\""),
+            ["'a,b'", "`c;d`", "\"e,f\""]
+        );
+    }
+
+    #[test]
+    fn keyword_cap_applies_to_json_and_shorthand() {
+        for raw in [
+            Value::String("term;".repeat(101)),
+            json!(vec!["term"; 101]),
+            Value::String(serde_json::to_string(&vec!["term"; 101]).unwrap()),
+        ] {
+            let mut warnings = vec![];
+            assert_eq!(keyword_values(&raw, &mut warnings).len(), 100);
+            assert_eq!(warnings, [KEYWORD_CAP_WARNING]);
+        }
+    }
+
+    #[test]
+    fn expression_cap_and_lookup_reuse_are_bounded() {
+        let mut keywords = vec![json!({"id":"k2","text":"Claims","weight":1,"match":"stem"})];
+        let mut warnings = vec![];
+        assert_eq!(
+            rewrite_expression(
+                "claims OR CLAIMS OR K2 OR policy OR POLICY",
+                &mut keywords,
+                &mut warnings
+            ),
+            "k2 OR k2 OR k2 OR k3 OR k3"
+        );
+        assert_eq!(keywords.len(), 2);
+        let expression = (0..1_000)
+            .map(|i| format!("term{i}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        rewrite_expression(&expression, &mut keywords, &mut warnings);
+        assert_eq!(keywords.len(), 100);
+        assert_eq!(warnings, [KEYWORD_CAP_WARNING]);
+    }
+
+    #[test]
+    fn feedback_truncates_by_characters() {
+        let short = "保".repeat(1_200);
+        assert_eq!(bounded_feedback(std::slice::from_ref(&short)), short);
+        let long = bounded_feedback(&["😀".repeat(1_201)]);
+        assert_eq!(long.chars().count(), 1_200);
+        assert!(long.ends_with("..."));
     }
 }
