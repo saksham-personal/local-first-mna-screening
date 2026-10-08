@@ -11,6 +11,7 @@ import {
   type WindowRect,
 } from "./document-window-geometry";
 import "./document-window.css";
+import { useMovableWindow } from "../intake/use-movable-window";
 
 const LazyPdfPreview = lazy(() => import("./PdfPreview"));
 
@@ -47,23 +48,7 @@ export default function DocumentWindow({ file, url, title, onClose }: Props) {
     }
   };
 
-  const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (maximized || event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
-    drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, rect };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-  const moveDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const current = drag.current;
-    if (!current || current.pointerId !== event.pointerId) return;
-    setRect(clampWindowRect({
-      ...current.rect,
-      left: current.rect.left + event.clientX - current.x,
-      top: current.rect.top + event.clientY - current.y,
-    }, viewportSize()));
-  };
-  const stopDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (drag.current?.pointerId === event.pointerId) drag.current = null;
-  };
+  const movable = useMovableWindow("document", true, setRect, maximized);
 
   const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (maximized || event.button !== 0) return;
@@ -79,6 +64,7 @@ export default function DocumentWindow({ file, url, title, onClose }: Props) {
     if (drag.current?.pointerId === event.pointerId) drag.current = null;
   };
   const resizeByKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.altKey) return;
     const delta = event.shiftKey ? 40 : 12;
     if (event.key === "ArrowRight") setRect((current) => resizeWindowRect(current, { x: delta, y: 0 }, viewportSize()));
     else if (event.key === "ArrowLeft") setRect((current) => resizeWindowRect(current, { x: -delta, y: 0 }, viewportSize()));
@@ -88,6 +74,7 @@ export default function DocumentWindow({ file, url, title, onClose }: Props) {
     event.preventDefault();
   };
   const onWindowKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    movable.onKeyDown(event);
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
@@ -102,8 +89,8 @@ export default function DocumentWindow({ file, url, title, onClose }: Props) {
     height: rect.height,
   };
   return createPortal(
-    <div className={`document-window${maximized ? " is-maximized" : ""}`} style={style} role="region" aria-label={title ?? file.name} tabIndex={0} onKeyDown={onWindowKeyDown}>
-      <div className="document-window__titlebar" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag}>
+    <div ref={movable.windowRef} className={`document-window${maximized ? " is-maximized" : ""}`} style={style} role="region" aria-label={title ?? file.name} tabIndex={0} onKeyDown={onWindowKeyDown}>
+      <div className="document-window__titlebar" title="Drag to move; double-click to reset; Alt+Arrow keys move 16px" {...movable.titlebarHandlers}>
         <span className="document-window__title" title={title ?? file.name}>{title ?? file.name}</span>
         <div className="document-window__actions">
           <button type="button" aria-label={maximized ? "Restore document window" : "Maximize document window"} title={maximized ? "Restore" : "Maximize"} onClick={toggleMaximized}>{maximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>

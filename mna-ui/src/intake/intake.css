@@ -216,3 +216,6 @@ body:has(.if-dialog) .document-window {
     transform: translateY(-50%);
   }
 }
+
+.if-header { cursor: grab; touch-action: none; user-select: none; }
+.if-header:active { cursor: grabbing; }

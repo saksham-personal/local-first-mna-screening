@@ -58,6 +58,14 @@ type Props = {
   onDismissSearch?: (jobId: string) => void;
 };
 
+const ACTIVITY_KEY = "screening-activity-open-v1";
+export function readActivityOpen(storage?: Pick<Storage, "getItem">): boolean {
+  try { return (storage ?? window.localStorage).getItem(ACTIVITY_KEY) === "true"; } catch { return false; }
+}
+export function writeActivityOpen(open: boolean, storage?: Pick<Storage, "setItem">): void {
+  try { (storage ?? window.localStorage).setItem(ACTIVITY_KEY, String(open)); } catch { /* Storage may be disabled. */ }
+}
+
 const providerNames = { llm_suite: "LLM Suite", copilot: "M365 Copilot" };
 const stateNames = {
   queued: "Queued",
@@ -79,6 +87,8 @@ function percent(job: BackgroundRunView) {
 }
 
 export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismissIndex, jobs, searches = [], expanded, onExpandedChange, layoutKey, onAction, onDismiss, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => { if (expanded) setDismissed(false); }, [expanded]);
   const [builds, setBuilds] = useState<SetupBuild[]>([]);
   const [reviewBuild, setReviewBuild] = useState<SetupBuild>();
   const [buildError, setBuildError] = useState("");
@@ -127,7 +137,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     return () => { disposed = true; clearTimeout(timer); window.removeEventListener(exportJobsEvent, started); };
   }, []);
   const items = indexBuilds.length + searches.length + jobs.length + exports.length + builds.length;
-  const visible = items > 0 || expanded || !!exportError;
+  const visible = !dismissed && (items > 0 || expanded || !!exportError);
   useLayoutEffect(() => {
     const host = hostRef.current, main = host?.parentElement;
     if (!host || !main) return;
@@ -147,7 +157,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
       const value = `${room}px`;
       if (value !== previous) { host.style.setProperty("--br-available-room", value); previous = value; }
       // On phones the closed dock is a pill that floats just above the composer.
-      const offset = `${composerShown ? Math.max(0, Math.round(mainRect.bottom - composer!.getBoundingClientRect().top)) : 0}px`;
+      const offset = `${composerShown ? Math.max(0, Math.round(window.innerHeight - composer!.getBoundingClientRect().top)) : 0}px`;
       if (offset !== previousOffset) { host.style.setProperty("--br-composer-offset", offset); previousOffset = offset; }
     };
     measure();
@@ -165,9 +175,10 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
   return (
     <div className="br-host" ref={hostRef}>
     <aside className={`br-dock${expanded ? " is-expanded" : ""}`} aria-label="Activity">
-      <button
+      <div className="br-dock-heading"><button
         className="br-dock-toggle"
         type="button"
+        aria-label={`Activity, ${plural(items, "item")}, ${summary}`}
         aria-expanded={expanded}
         aria-controls="activity-details"
         onClick={() => onExpandedChange(!expanded)}
@@ -178,9 +189,9 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
           <small>{summary}</small>
           {totalBatches > 0 && <span className="br-dock-progress" role="progressbar" aria-label="All background screening progress" aria-valuemin={0} aria-valuemax={totalBatches} aria-valuenow={Math.min(completedBatches, totalBatches)}><i style={{ width: `${aggregatePercent}%` }} /></span>}
         </span>
-        {items > 0 && <span className="br-dock-badge" aria-hidden="true">{activeCount || items}</span>}
+        {items > 0 && <span className="br-dock-badge" aria-hidden="true">{items}</span>}
         {expanded ? <ChevronDown size={17} aria-hidden="true" /> : <ChevronUp size={17} aria-hidden="true" />}
-      </button>
+      </button><button className="br-icon-button br-dismiss" type="button" aria-label="Dismiss Activity panel" onClick={() => { setDismissed(true); onExpandedChange(false); }}><X size={16} /></button></div>
       {expanded && (
         <div className="br-dock-details" id="activity-details">
           {builds.length > 0 && <section className="br-group" aria-label="Input table preparation">

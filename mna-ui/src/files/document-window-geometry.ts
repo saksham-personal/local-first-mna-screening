@@ -48,3 +48,28 @@ export function defaultDocumentWindowRect(viewport: ViewportSize): WindowRect {
   }, viewport);
   return rect;
 }
+
+export function moveWindowRect(rect: WindowRect, delta: { x: number; y: number }, viewport: ViewportSize): WindowRect {
+  return clampWindowRect({ ...rect, left: rect.left + delta.x, top: rect.top + delta.y }, viewport, { width: 1, height: 1 });
+}
+
+// Different documents share the document-window position for this tab session.
+export const windowPositions = new Map<string, { left: number; top: number }>();
+
+export function readWindowPosition(type: string, storage?: Pick<Storage, "getItem">) {
+  const cached = windowPositions.get(type);
+  if (cached) return cached;
+  try {
+    const position = JSON.parse((storage ?? window.sessionStorage).getItem(`screening-window-${type}`) ?? "null");
+    if (position && Number.isFinite(position.left) && Number.isFinite(position.top)) {
+      return { left: position.left as number, top: position.top as number };
+    }
+  } catch { /* Session storage may be disabled or contain an older value. */ }
+  return undefined;
+}
+
+export function rememberWindowPosition(type: string, rect: WindowRect, storage?: Pick<Storage, "setItem">) {
+  const position = { left: rect.left, top: rect.top };
+  windowPositions.set(type, position);
+  try { (storage ?? window.sessionStorage).setItem(`screening-window-${type}`, JSON.stringify(position)); } catch { /* In-memory fallback remains available. */ }
+}

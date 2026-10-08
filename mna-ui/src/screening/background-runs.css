@@ -1,15 +1,15 @@
 .br-host {
-  display: flex;
-  justify-content: flex-end;
-  flex: none;
-  min-width: 0;
-  padding: 6px max(20px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  position: fixed;
+  z-index: 80;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(var(--br-composer-offset, 0px) + 12px);
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
 }
 .br-dock {
   position: relative;
-  width: min(360px, 100%);
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: auto;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -50,7 +50,7 @@
 .br-dock-progress { display: block; height: 3px; margin-top: 4px; overflow: hidden; border-radius: 4px; background: var(--surface-muted); }
 .br-dock-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
 .br-dock-badge {
-  display: none;
+  display: inline-block;
   min-width: 20px;
   padding: 1px 6px;
   border-radius: 10px;
@@ -117,52 +117,14 @@
 .br-updated { display: block; margin-top: 6px; color: var(--text-faint); font-size: 10px; }
 .br-dock button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @keyframes br-pulse { 50% { opacity: .45; } }
-@media (max-width: 760px) {
-  /* Phones: closed, the dock is a small pill that floats above the composer so it
-     never covers a primary action. Open, it is a sheet the analyst dismisses. */
-  .br-host {
-    position: absolute;
-    z-index: 40;
-    inset: auto 0 calc(var(--br-composer-offset, 0px) + 8px);
-    justify-content: flex-start;
-    padding: 0 12px;
-    border: 0;
-    background: transparent;
-    pointer-events: none;
-  }
-  .br-dock { width: auto; max-width: 100%; pointer-events: auto; border-radius: 999px; }
-  .br-dock.is-expanded { width: 100%; border-radius: 14px; box-shadow: 0 8px 28px var(--shadow-color); }
-  .br-dock:not(.is-expanded) .br-dock-toggle { width: auto; min-height: 38px; gap: 8px; padding: 5px 13px 5px 12px; }
-  .br-dock:not(.is-expanded) .br-dock-summary small,
-  .br-dock:not(.is-expanded) .br-dock-progress,
-  .br-dock:not(.is-expanded) .br-dock-toggle > svg { display: none; }
-  .br-dock:not(.is-expanded) .br-dock-badge { display: inline-block; }
-  .br-dock-details { max-height: min(46dvh, 380px, var(--br-available-room, 380px)); }
-  /* Keep the last row of content clear of the pill. */
-  .ct-main:has(.br-host) .ct-viewport { padding-bottom: 58px; }
-  .ct-main:has(.br-host) .ws-content { padding-bottom: 68px; }
-}
-@media (max-height: 540px) {
-  .ct-main:has(.br-host) .ct-header { height: 56px; min-height: 56px; }
-  .br-dock-toggle { min-height: 48px; padding-block: 6px; }
-  .br-dock-details { max-height: min(28dvh, max(0px, calc(100dvh - 280px)), var(--br-available-room, 300px)); }
-  .ct-main:has(.br-host) .ct-viewport { padding-block: 4px; }
-  .ct-main:has(.br-host) .ct-composer > textarea { min-height: 42px; max-height: 42px; padding-block: 8px; }
-  .ct-main:has(.br-host) .ct-composer-wrap { padding-top: 0; padding-bottom: 6px; }
-  .ct-main:has(.br-host) .ct-docked-head { min-height: 36px; height: 36px; padding: 2px 12px; }
-  .ct-main:has(.br-host) .ct-composer-note { display: none; }
-  .ct-main:has(.br-host) .ct-composer-context { display: none; }
-  .ct-main:has(.br-host) .ct-attachment-list { max-height: 40px; overflow-y: auto; }
-}
-@media (max-width: 760px) and (max-height: 540px) {
-  .ct-main:has(.br-host) .ct-header { height: 56px; min-height: 56px; flex-wrap: nowrap; padding-block: 5px; gap: 6px; }
-  .ct-main:has(.br-host) .ct-header-title { flex: 1 1 auto; min-width: 0; }
-  .ct-main:has(.br-host) .ct-header-actions { flex: none; width: auto; }
-  .ct-main:has(.br-host) .ct-header-title > div > span,
-  .ct-main:has(.br-host) .ct-header-actions .theme-control { display: none; }
-  .ct-main:has(.br-host) .ct-view-switch { margin-right: 0; }
-  .ct-main:has(.br-host) .ct-view-switch > button { width: 28px; gap: 0; font-size: 0; }
-}
+.br-dock-heading { display: flex; align-items: center; }
+.br-dismiss { margin-right: 7px; }
+.br-dock:not(.is-expanded) { width: auto; border-radius: 999px; }
+.br-dock:not(.is-expanded) .br-dock-toggle { min-height: 38px; gap: 8px; padding: 5px 10px 5px 12px; }
+.br-dock:not(.is-expanded) .br-dock-summary small,
+.br-dock:not(.is-expanded) .br-dock-progress { display: none; }
+.br-dock-details { max-height: min(420px, 50dvh, var(--br-available-room, 420px)); }
+@media (max-height: 540px) { .br-dock-details { max-height: min(200px, var(--br-available-room, 200px)); } }
 @media (prefers-reduced-motion: reduce) { .br-dock-mark.is-running { animation: none; } .br-progress > span { transition: none; } }
 .br-index { border-left: 3px solid var(--info); padding-left: 10px; margin-top: 8px; }
 .br-index-open { border: 0; background: transparent; text-align: left; padding: 0; font: inherit; cursor: pointer; }

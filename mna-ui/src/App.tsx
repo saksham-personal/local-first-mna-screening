@@ -56,7 +56,6 @@ import Skeleton from "./ui/Skeleton";
 import { promptTemplates } from "./lib/prompt-library";
 import type { ComposerControls } from "./chat/ChatThread";
 import type { StagedFile } from "./lib/chat-contract";
-const PdfPreview = lazy(() => import("./files/PdfPreview"));
 import type { ArtifactAction } from "./lib/chat-contract";
 import {
   approved,
@@ -87,7 +86,7 @@ import type {
 import PrepareMenu from "./screening/PrepareMenu";
 const SetupController = lazy(() => import("./screening/SetupController"));
 const BingResearchDialog = lazy(() => import("./screening/BingResearchDialog"));
-import BackgroundRuns, { type SearchRunView } from "./screening/BackgroundRuns";
+import BackgroundRuns, { readActivityOpen, writeActivityOpen, type SearchRunView } from "./screening/BackgroundRuns";
 import ScreeningInspector from "./chat/ScreeningInspector";
 import { ASK_ASSISTANT_EVENT, OPEN_WORKSPACE_EVENT } from "./lib/grid-client";
 import IntakeFormDialog from "./intake/IntakeForm";
@@ -226,7 +225,6 @@ function CriteriaEditor({
     [error, setError] = useState("");
   return (
     <Modal title="Edit screening criteria" onClose={close}>
-      <button type="button" className="ct-ghost-button" onClick={fillIntake}>Fill Intake Form</button>
       <form
         className="ct-criteria-editor"
         onSubmit={(event) => {
@@ -257,6 +255,7 @@ function CriteriaEditor({
           })();
         }}
       >
+        <div className="ct-criteria-toolbar"><button type="button" className="ct-ghost-button" onClick={fillIntake}><Pencil size={14} />Edit / Fill Intake Form</button></div>
         <label>
           Screening brief
           <textarea
@@ -519,7 +518,8 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   const openIndex = (buildId?: string, file?: File) => {
     setSelectedIndexBuildId(buildId); setIndexFile(file); setIndexOpen(true);
   };
-  const [activityOpen, setActivityOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(() => readActivityOpen());
+  useEffect(() => { writeActivityOpen(activityOpen); }, [activityOpen]);
   const [dismissedSearches, setDismissedSearches] = useState<ReadonlySet<string>>(new Set());
   const dock = useDock(sidebar && window.innerWidth > 760 ? navigationWidth : 0);
   const dockRail = mode === "workspace" && !compact && dock.state.mode === "rail";
@@ -1312,7 +1312,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
             </button>
           </div>
         </header>}
-        <div className={`ct-body ct-body-${mode}${preview ? " ct-preview-open" : ""}`}>
+        <div className={`ct-body ct-body-${mode}`}>
           {mode === "space" && <SearchSpace />}
           {mode === "workspace" && (
             <section
@@ -1370,24 +1370,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
             />
           </section>}
           {dockRail && <DockRail busy={chatBusy} onOpen={dock.open} />}
-          {preview && (
-            <aside className="ct-pdf-pane" aria-label="Document preview">
-              <Suspense
-                fallback={
-                  <div className="ct-preview-loading">
-                    <Skeleton variant="drawer" label="Opening PDF preview" />
-                  </div>
-                }
-              >
-                <PdfPreview
-                  key={preview.file.id}
-                  file={preview.file}
-                  url={preview.url}
-                  onClose={closePreview}
-                />
-              </Suspense>
-            </aside>
-          )}
+          {preview && <DocumentWindow key={preview.file.id} file={preview.file} url={preview.url} onClose={closePreview} />}
           {panel && (
             <aside className="ct-inspector" aria-label="Context">
               <div
