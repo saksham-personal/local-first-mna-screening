@@ -8,6 +8,7 @@ pub mod gateway;
 pub mod grid;
 pub mod identity;
 pub mod index_build;
+pub mod instruction_set;
 pub mod mid_config;
 pub mod mid_search;
 pub mod projection;
