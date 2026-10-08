@@ -147,6 +147,8 @@ export default function ScreeningSetup({
     return config;
   });
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The number box keeps what the analyst types (even empty) until it is valid or loses focus.
+  const [batchDraft, setBatchDraft] = useState<string | null>(null);
   const [pickerSource, setPickerSource] = useState<DataSource>("MID");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploadError, setUploadError] = useState("");
@@ -473,17 +475,20 @@ export default function ScreeningSetup({
                     max={batchLimit(provider)}
                     step={1}
                     value={config.batchSize}
-                    onChange={(event) => edit({ ...config, batchSize: syncBatchSize(provider, event.target.value) })}
+                    onChange={(event) => { setBatchDraft(null); edit({ ...config, batchSize: syncBatchSize(provider, event.target.value) }); }}
                   /><input
                     id="ss-batch-size"
                     type="number"
                     min={1}
                     max={batchLimit(provider)}
                     step={1}
-                    value={config.batchSize}
-                    onChange={(event) =>
-                      edit({ ...config, batchSize: syncBatchSize(provider, event.target.value) })
-                    }
+                    value={batchDraft ?? config.batchSize}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setBatchDraft(value);
+                      if (value.trim()) edit({ ...config, batchSize: syncBatchSize(provider, value) });
+                    }}
+                    onBlur={() => setBatchDraft(null)}
                   /></div>
                   {batchWarning(provider, config.batchSize) && <small className="ss-batch-warning" role="status">{batchWarning(provider, config.batchSize)}</small>}
                 </div>

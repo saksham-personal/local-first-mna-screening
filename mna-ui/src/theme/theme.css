@@ -12,8 +12,10 @@
   --text: #252a30;
   --text-muted: #676c73;
   --text-faint: #636b75;
-  --border: #7a8490;
-  --border-strong: #717d8a;
+  /* Hairlines stay calm; form controls use --border-control (3:1 against surfaces). */
+  --border: #dde1e6;
+  --border-strong: #c4cbd3;
+  --border-control: #7a8490;
   --brand: #315c91;
   --accent: #315c91;
   --accent-hover: #244873;
@@ -47,10 +49,10 @@
   --source-iscc-soft: var(--violet-soft);
   --source-pb: var(--success);
   --source-pb-soft: var(--success-soft);
-  --source-rogo: var(--warning);
-  --source-rogo-soft: var(--warning-soft);
-  --source-bing: var(--info);
-  --source-bing-soft: var(--info-soft);
+  --source-rogo: #0f6e6e;
+  --source-rogo-soft: #e6f4f3;
+  --source-bing: #a33d6b;
+  --source-bing-soft: #fbedf3;
   color-scheme: light;
   background: var(--canvas);
   color: var(--text);
@@ -66,8 +68,9 @@
   --text: #edf2f8;
   --text-muted: #becbdc;
   --text-faint: #aebdd0;
-  --border: #73849b;
-  --border-strong: #8394ab;
+  --border: #2e3b4d;
+  --border-strong: #42526a;
+  --border-control: #73849b;
   --accent: #9fc4ff;
   --accent-hover: #bed7ff;
   --accent-soft: #273c59;
@@ -104,10 +107,10 @@
   --source-iscc-soft: var(--violet-soft);
   --source-pb: var(--success);
   --source-pb-soft: var(--success-soft);
-  --source-rogo: var(--warning);
-  --source-rogo-soft: var(--warning-soft);
-  --source-bing: var(--info);
-  --source-bing-soft: var(--info-soft);
+  --source-rogo: #7fd6cf;
+  --source-rogo-soft: #1d3a3a;
+  --source-bing: #f0a3c4;
+  --source-bing-soft: #3e2833;
   color-scheme: dark;
 }
 html,
@@ -884,4 +887,9 @@ dd {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* Text-like controls get the higher-contrast boundary. */
+input[type="text"], input[type="search"], input[type="number"], input[type="email"], input:not([type]), select, textarea {
+  border-color: var(--border-control);
 }

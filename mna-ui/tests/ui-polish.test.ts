@@ -92,7 +92,7 @@ for (const [index, palette] of palettes.entries()) {
     };
     for (const surface of ["--canvas", "--surface", "--surface-raised", "--surface-muted", "--sidebar"]) {
       for (const text of ["--text", "--text-muted", "--text-faint"]) check(text, surface, 4.5);
-      for (const border of ["--border", "--border-strong", "--accent"]) check(border, surface, 3);
+      for (const border of ["--border-control", "--accent"]) check(border, surface, 3);
     }
     for (const state of ["success", "warning", "danger", "info", "violet", "source-mid", "source-iscc", "source-pb", "source-rogo", "source-bing", "accent"]) check(`--${state}`, `--${state}-soft`, 4.5);
     check("--on-accent", "--accent", 4.5);
