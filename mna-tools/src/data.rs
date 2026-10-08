@@ -2021,6 +2021,9 @@ fn write_full_export(
         |r| r.get(0),
     )?;
     let mut workbook = Workbook::new();
+    workbook
+        .set_tempdir(path.parent().unwrap_or_else(|| Path::new(".")))
+        .map_err(xlsx_error)?;
     if simulated {
         write_simulated_note(&mut workbook)?;
     }
@@ -2138,6 +2141,9 @@ pub(crate) fn write_export_stream(
         return Err(Error::Validation("Excel sheet row limit exceeded".into()));
     }
     let mut workbook = rust_xlsxwriter::Workbook::new();
+    workbook
+        .set_tempdir(path.parent().unwrap_or_else(|| Path::new(".")))
+        .map_err(xlsx_error)?;
     let sheet = workbook.add_worksheet_with_constant_memory();
     sheet.set_name(kind).map_err(xlsx_error)?;
     write_company_headers(sheet, kind, simulated)?;

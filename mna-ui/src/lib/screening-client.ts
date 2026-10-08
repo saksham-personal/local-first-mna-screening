@@ -240,7 +240,7 @@ export async function listExports(runId: string): Promise<ExportJob[]> {
 export function exportActivity(job: ExportJob) {
   const kind = { pitchbook: "PitchBook", llm: "LLM Suite", full: "Full data" }[job.kind];
   return {
-    title: `Export ? ${kind}`,
+    title: `Export · ${kind}`,
     label: { running: "Running", done: "Completed", failed: "Failed" }[job.state],
     state: { running: "running", done: "completed", failed: "error" }[job.state],
     percent: job.rows_total > 0 ? Math.min(100, Math.max(0, job.rows_done / job.rows_total * 100)) : job.state === "done" ? 100 : 0,
