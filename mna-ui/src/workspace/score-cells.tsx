@@ -28,10 +28,10 @@ export function KeywordEvidence({ data }: { data: MidKeyword }) {
 
 export function KeywordTooltip({ data, children }: { data: MidKeyword | null; children: ReactNode }) {
   if (!data) return <span className="ws-score-missing">—</span>;
-  return <Tooltip.Provider delayDuration={200}>
+  return <Tooltip.Provider delayDuration={0}>
     <Tooltip.Root>
       <Tooltip.Trigger asChild><button type="button" className="ws-keyword-trigger" aria-label={`MID keyword match ${data.best_match_pct ?? "unavailable"} percent; show matched keywords and queries`} onClick={(event) => event.stopPropagation()}>{children}</button></Tooltip.Trigger>
-      <Tooltip.Portal><Tooltip.Content className="ws-keyword-tooltip" side="top" sideOffset={6} collisionPadding={12}><strong>Matched keywords</strong><KeywordEvidence data={data} /></Tooltip.Content></Tooltip.Portal>
+      <Tooltip.Portal><Tooltip.Content className="ws-keyword-tooltip" side="top" sideOffset={6} collisionPadding={12}><strong>Matched keywords</strong><p>Match strength: {data.best_match_pct == null ? "?" : `${data.best_match_pct.toFixed(0)}%`} ? {data.hit_count} hits</p><KeywordEvidence data={data} /></Tooltip.Content></Tooltip.Portal>
     </Tooltip.Root>
   </Tooltip.Provider>;
 }

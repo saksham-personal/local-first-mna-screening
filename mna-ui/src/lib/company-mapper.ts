@@ -37,7 +37,7 @@ export function companyFromGridRow(candidate: ToolResult): Company {
 export async function readRunCompanies(runId: string): Promise<Company[]> {
   const companies: Company[] = [];
   let cursor: string | undefined, signature: string | undefined, total: number | undefined;
-  let limit = 2000;
+  let limit = 1000;
   let more = true; // `continue` inside do…while would test `cursor` and quit on the first page
   while (more) {
     let page: ToolResult;

@@ -2,6 +2,8 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
+  useSyncExternalStore,
   useMemo,
   useRef,
   useState,
@@ -12,17 +14,18 @@ import {
   AllCommunityModule,
   themeQuartz,
   type ColDef,
+  type ColGroupDef,
+  type GridApi,
   type GetRowIdParams,
   type ICellRendererParams,
   type IHeaderParams,
 } from "ag-grid-community";
 import { AgGridProvider, AgGridReact } from "ag-grid-react";
-import { Columns3, Search, X } from "lucide-react";
+import { Columns3, LoaderCircle, Search, X } from "lucide-react";
 import {
   defaultFilter,
   emptyFilterState,
   filterRows,
-  isFilterActive,
   sortRows,
 } from "./grid-filter";
 import {
@@ -33,7 +36,8 @@ import {
   serializeGridPreferences,
   setFilteredSelection,
 } from "./grid-state";
-import GridHeader from "./GridHeader";
+import GridHeader, { type GridHeaderSnapshot } from "./GridHeader";
+import { createGridRuntime } from "./grid-runtime";
 import SidePanel from "./SidePanel";
 import Skeleton from "../ui/Skeleton";
 import type {
@@ -63,6 +67,10 @@ export type DataGridProps<Row> = {
   label: string;
   height?: number | "fill";
   loading?: boolean;
+  updating?: boolean;
+  pagination?: boolean;
+  groupHeaders?: boolean;
+  onPageRowsChange?: (rows: Row[]) => void;
   emptyText?: string;
   filterState?: FilterState;
   onFilterStateChange?: (state: FilterState) => void;
@@ -87,9 +95,11 @@ export type DataGridProps<Row> = {
 type SelectionHeaderParams<Row> = IHeaderParams<Row> & {
   getStatus: () => { checked: boolean; indeterminate: boolean; disabled: boolean };
   onToggle: (selected: boolean) => void;
+  runtime: ReturnType<typeof createGridRuntime<GridHeaderSnapshot<Row>>>;
 };
 
-function SelectionHeader<Row>({ getStatus, onToggle }: SelectionHeaderParams<Row>) {
+function SelectionHeader<Row>({ getStatus, onToggle, runtime }: SelectionHeaderParams<Row>) {
+  useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
   const inputRef = useRef<HTMLInputElement>(null);
   const status = getStatus();
   useEffect(() => {
@@ -164,15 +174,6 @@ function cleanColumnFilter<Row>(column: DataGridColumn<Row>, filter: ColumnFilte
   }
 }
 
-function quickFilterValue<Row>(column: DataGridColumn<Row>, filter: ColumnFilter | undefined): string {
-  if (!filter || filter.kind !== column.kind) return "";
-  if (filter.kind === "text" || filter.kind === "category") return filter.contains ?? "";
-  if (filter.kind === "number" || filter.kind === "score") {
-    return filter.op === "gte" && filter.a !== undefined ? String(filter.a) : "";
-  }
-  return filter.op === "on" ? filter.a ?? "" : "";
-}
-
 function displayCellValue(value: unknown, kind: GridColumnSpec<unknown>["kind"]): string {
   if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
     return "—";
@@ -200,6 +201,10 @@ export function DataGrid<Row>({
   label,
   height = "fill",
   loading = false,
+  updating = false,
+  pagination = false,
+  groupHeaders = false,
+  onPageRowsChange,
   emptyText = "No rows match the current filters.",
   filterState: controlledFilterState,
   onFilterStateChange,
@@ -371,7 +376,6 @@ export function DataGrid<Row>({
     const api = gridRef.current?.api;
     if (api && selectable) {
       api.refreshCells({ columns: ["__dg_select"], force: true });
-      api.refreshHeader();
     }
   }, [selectedIds, displayedRows, selectable]);
 
@@ -389,104 +393,75 @@ export function DataGrid<Row>({
     ? { flex: "1 1 auto", minHeight: 420 }
     : { height };
 
-  const columnDefs = useMemo<ColDef<Row>[]>(() => {
+  const headerRuntime = useMemo(() => createGridRuntime<GridHeaderSnapshot<Row>>({ rows, columns, filterState, sortState: sort, openFilterColumn, selectedIds }), []);
+  useLayoutEffect(() => {
+    headerRuntime.publish({ rows, columns, filterState, sortState: sort, openFilterColumn, selectedIds });
+  }, [headerRuntime, rows, columns, filterState, sort, openFilterColumn, selectedIds]);
+  const actionsRef = useRef({ updateSort, setColumnFilter, setQuickFilter, toggleFilteredSelection, toggleSingleSelection });
+  actionsRef.current = { updateSort, setColumnFilter, setQuickFilter, toggleFilteredSelection, toggleSingleSelection };
+  const columnDefs = useMemo<(ColDef<Row> | ColGroupDef<Row>)[]>(() => {
     const definitions: ColDef<Row>[] = [];
-    if (selectable) {
-      definitions.push({
-        colId: "__dg_select",
-        headerName: "Select rows",
-        pinned: "left",
-        width: 48,
-        minWidth: 48,
-        maxWidth: 48,
-        resizable: false,
-        sortable: false,
-        filter: false,
-        suppressMovable: true,
-        lockPosition: "left",
-        headerComponent: SelectionHeader,
-        headerComponentParams: {
-          getStatus: () => ({
-            checked: areFilteredRowsSelected(selectedIdsRef.current, displayedRowsRef.current, (row) => getRowIdRef.current(row)),
-            indeterminate: displayedRowsRef.current.some((row) => selectedIdsRef.current.includes(getRowIdRef.current(row)))
-              && !areFilteredRowsSelected(selectedIdsRef.current, displayedRowsRef.current, (row) => getRowIdRef.current(row)),
-            disabled: displayedRowsRef.current.length === 0,
-          }),
-          onToggle: (selected: boolean) => toggleFilteredSelection(selected),
-        },
-        cellRenderer: (params: ICellRendererParams<Row>) => {
-          if (!params.data) return null;
-          const id = getRowIdRef.current(params.data);
-          return (
-            <label className="dg-selection-cell" aria-label={`Select row ${id}`}>
-              <input
-                type="checkbox"
-                checked={selectedIdsRef.current.includes(id)}
-                aria-label={`Select row ${id}`}
-                onChange={(event) => toggleSingleSelection(params.data as Row, event.target.checked)}
-                onClick={(event) => event.stopPropagation()}
-              />
-            </label>
-          );
-        },
-      });
-    }
-    for (const column of visibleColumns) {
-      const filter = filterState.columns[column.id];
-      definitions.push({
-        colId: column.id,
-        headerName: column.header,
-        width: column.width,
-        minWidth: column.minWidth ?? 116,
-        pinned: column.pinned,
-        sortable: false,
-        filter: false,
-        resizable: true,
-        suppressHeaderMenuButton: true,
-        headerComponent: GridHeader,
-        headerComponentParams: {
-          gridColumn: column,
-          rows,
-          columns: columns,
-          filterState,
-          columnFilter: filter,
-          sortState: sort,
-          filterOpen: openFilterColumn === column.id,
-          activeFilterCount: isFilterActive(filter) ? 1 : 0,
-          quickFilterValue: quickFilterValue(column, filter),
-          onSortChange: updateSort,
-          onFilterChange: (next: ColumnFilter | undefined) => setColumnFilter(column.id, next),
-          onFilterOpenChange: (columnId: string, open: boolean) => setOpenFilterColumn(open ? columnId : null),
-          onQuickFilterChange: (value: string) => setQuickFilter(column, value),
-        },
-        valueGetter: ({ data }) => data ? column.value(data) : undefined,
-        cellRenderer: (params: ICellRendererParams<Row>) => {
-          if (!params.data) return null;
-          const content = column.render
-            ? column.render(params.data)
-            : displayCellValue(column.value(params.data), column.kind);
-          return <div className="dg-cell-content">{content}</div>;
-        },
-        tooltipValueGetter: ({ data }) => data ? column.tooltip?.(data) : undefined,
-        wrapText: false,
-        autoHeight: false,
-      });
-    }
-    return definitions;
-  }, [
-    selectable,
-    visibleColumns,
-    filterState,
-    rows,
-    columns,
-    sort,
-    openFilterColumn,
-    updateSort,
-    setColumnFilter,
-    setQuickFilter,
-    toggleFilteredSelection,
-    toggleSingleSelection,
-  ]);
+    if (selectable) definitions.push({
+      colId: "__dg_select", headerName: "Select rows", pinned: "left", width: 48, minWidth: 48, maxWidth: 48,
+      resizable: false, suppressMovable: true, lockPosition: "left", headerComponent: SelectionHeader,
+      headerComponentParams: {
+        runtime: headerRuntime,
+        getStatus: () => ({
+          checked: areFilteredRowsSelected(selectedIdsRef.current, displayedRowsRef.current, row => getRowIdRef.current(row)),
+          indeterminate: displayedRowsRef.current.some(row => selectedIdsRef.current.includes(getRowIdRef.current(row))) && !areFilteredRowsSelected(selectedIdsRef.current, displayedRowsRef.current, row => getRowIdRef.current(row)),
+          disabled: displayedRowsRef.current.length === 0,
+        }),
+        onToggle: (selected: boolean) => actionsRef.current.toggleFilteredSelection(selected),
+      },
+      cellRenderer: (params: ICellRendererParams<Row>) => {
+        if (!params.data) return null;
+        const id = getRowIdRef.current(params.data);
+        return <label className="dg-selection-cell"><input type="checkbox" checked={selectedIdsRef.current.includes(id)} aria-label={`Select row ${id}`} onChange={event => actionsRef.current.toggleSingleSelection(params.data as Row, event.target.checked)} onClick={event => event.stopPropagation()} /></label>;
+      },
+    });
+    for (const column of visibleColumns) definitions.push({
+      colId: column.id, headerName: column.header, initialWidth: column.width, minWidth: column.minWidth ?? 116,
+      initialPinned: column.pinned, sortable: false, filter: false, resizable: true, suppressHeaderMenuButton: true,
+      headerComponent: GridHeader,
+      headerComponentParams: {
+        gridColumn: column, runtime: headerRuntime,
+        onSortChange: (next: SortState) => actionsRef.current.updateSort(next),
+        onFilterChange: (next: ColumnFilter | undefined) => actionsRef.current.setColumnFilter(column.id, next),
+        onFilterOpenChange: (id: string, open: boolean) => setOpenFilterColumn(open ? id : null),
+        onQuickFilterChange: (value: string) => actionsRef.current.setQuickFilter(column, value),
+      },
+      valueGetter: ({ data }) => data ? column.value(data) : undefined,
+      cellRenderer: (params: ICellRendererParams<Row>) => params.data ? <div className="dg-cell-content">{column.render ? column.render(params.data) : displayCellValue(column.value(params.data), column.kind)}</div> : null,
+      tooltipValueGetter: ({ data }) => data ? column.tooltip?.(data) : undefined,
+    });
+    if (!groupHeaders) return definitions;
+    const grouped: (ColDef<Row> | ColGroupDef<Row>)[] = selectable ? [definitions[0]] : [];
+    const groups = new Map<string, ColGroupDef<Row>>();
+    visibleColumns.forEach((column, index) => {
+      const name = column.group ?? "Columns";
+      let group = groups.get(name);
+      if (!group) { group = { groupId: name, headerName: name, marryChildren: true, children: [] }; groups.set(name, group); grouped.push(group); }
+      group.children.push(definitions[index + Number(selectable)]);
+    });
+    return grouped;
+  }, [selectable, visibleColumns, groupHeaders, headerRuntime]);
+
+  const pageCallbackRef = useRef(onPageRowsChange);
+  pageCallbackRef.current = onPageRowsChange;
+  const notifyPage = useCallback(({ api }: { api: GridApi<Row> }) => {
+    const size = pagination ? api.paginationGetPageSize() : displayedRowsRef.current.length;
+    const start = pagination ? api.paginationGetCurrentPage() * size : 0;
+    pageCallbackRef.current?.(displayedRowsRef.current.slice(start, start + size));
+  }, [pagination]);
+  const resetLayout = useCallback(() => {
+    updateVisibleColumnIds(defaultVisibleColumnIds(columns));
+    gridRef.current?.api.resetColumnState();
+    try { if (storageKey) localStorage.removeItem(`${storageKey}:layout`); } catch { /* optional storage */ }
+  }, [columns, storageKey, updateVisibleColumnIds]);
+  const saveLayout = useCallback(({ api, finished }: { api: GridApi<Row>; finished?: boolean }) => {
+    if (finished === false || !storageKey) return;
+    try { localStorage.setItem(`${storageKey}:layout`, JSON.stringify(api.getColumnState())); } catch { /* optional storage */ }
+  }, [storageKey]);
 
   const isRowMutedRef = useRef(isRowMuted);
   isRowMutedRef.current = isRowMuted;
@@ -519,6 +494,18 @@ export function DataGrid<Row>({
         defaultColDef={defaultGridColDef}
         getRowId={getGridRowId}
         theme={gridTheme}
+        pagination={pagination}
+        paginationPageSize={100}
+        paginationPageSizeSelector={pagination ? [100, 250, 500] : false}
+        onPaginationChanged={notifyPage}
+        onRowDataUpdated={notifyPage}
+        onGridReady={({ api }) => {
+          try { const saved = storageKey && JSON.parse(localStorage.getItem(`${storageKey}:layout`) ?? "null"); if (Array.isArray(saved)) api.applyColumnState({ state: saved, applyOrder: true }); } catch { /* optional storage */ }
+          notifyPage({ api });
+        }}
+        onColumnResized={saveLayout}
+        onColumnMoved={saveLayout}
+        groupHeaderHeight={groupHeaders ? 28 : undefined}
         rowHeight={rowHeight}
         headerHeight={70}
         rowBuffer={10}
@@ -614,11 +601,14 @@ export function DataGrid<Row>({
               activeTabId={activeSideTab}
               onActiveTabChange={setActiveSideTab}
               idPrefix={sidePanelId}
+              onResetLayout={resetLayout}
+              onClose={() => setPanelOpen(false)}
             />
           </div>
         )}
         <div className="dg-grid-host" role="region" aria-label={`${label} results`}>
           {gridElement}
+          {updating && <div className="dg-updating" aria-busy="true"><Skeleton variant="table" rows={8} cols={6} label="Updating companies" /><p role="status"><LoaderCircle className="ui-spin" size={16} />Updating companies, please wait?</p></div>}
         </div>
       </div>
     </section>

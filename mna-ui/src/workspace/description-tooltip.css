@@ -1,0 +1,6 @@
+.ws-description-tooltip { position: fixed; z-index: 1200; top: 0; left: 0; width: min(640px, calc(100vw - 16px)); max-height: min(640px, calc(100vh - 16px)); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.ws-description-tooltip p { margin: 0 0 8px; }
+.ws-description-tooltip p:last-child { margin-bottom: 0; }
+.ws-description-tooltip h4 { margin: 0 0 8px; font-size: 11px; color: var(--text-muted); letter-spacing: .05em; }
+.ws-description-tooltip hr { margin: 12px 0; border: 0; border-top: 1px solid var(--border); }
+.ws-grid-description:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

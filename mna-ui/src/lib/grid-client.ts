@@ -8,6 +8,18 @@ export const OPEN_WORKSPACE_EVENT = "screening:open-workspace";
 export const ASK_ASSISTANT_EVENT = "screening:ask-assistant";
 
 export type GridSource = "MID" | "ISCC" | "both";
+export type GridView = "all" | "mid" | "iscc";
+export type GridCatalogColumn = {
+  id: string; label: string;
+  group: "identity" | "scores" | "coverage" | "hydration" | "mid" | "iscc" | "rounds" | "status";
+  source: string;
+  type: "text" | "number" | "date" | "category" | "score";
+  default_visible: boolean;
+};
+export type GridDescription = {
+  company_id: string;
+  sources: { source: "MID" | "ISCC"; items: { label: string; text: string }[] }[];
+};
 
 export type MidKeyword = {
   best_match_pct: number | null;
@@ -40,6 +52,7 @@ export type ScreeningRound = Omit<RoundColumns, "key"> & {
 };
 
 export type GridCompany = {
+  values?: Record<string, unknown>;
   company_id: string;
   name: string;
   website: string | null;
@@ -71,6 +84,8 @@ export type GridCompany = {
 };
 
 export type CompanyDetail = {
+  columns?: GridCatalogColumn[];
+  values?: Record<string, unknown>;
   run_id: string;
   company_id: string;
   company: Record<string, unknown>;
@@ -93,6 +108,9 @@ export type CompanyDetail = {
 };
 
 export type ScreeningGrid = {
+  columns: GridCatalogColumn[];
+  nextCursor?: string;
+  sourceHash: string;
   rows: GridCompany[];
   total: number;
   consideredCount: number;
@@ -191,6 +209,7 @@ function asGridCompany(value: unknown): GridCompany {
   const nullablePbString = (key: string) => typeof pb[key] === "string" ? pb[key] as string : null;
   const source = row.source === "MID" || row.source === "ISCC" || row.source === "both" ? row.source : null;
   return {
+    values: object(row.values),
     company_id: row.company_id,
     name: row.name,
     website: nullableString("website"),
@@ -222,61 +241,50 @@ function asGridCompany(value: unknown): GridCompany {
   };
 }
 
-export async function fetchScreeningGrid(sessionId: string, runId: string): Promise<ScreeningGrid> {
-  const rows: GridCompany[] = [];
-  let cursor: string | undefined;
-  let total: number | undefined;
-  let consideredCount: number | undefined;
-  let hiddenCount: number | undefined;
-  let selectionRevision: number | undefined;
-  let sourceHash: unknown;
-  let rounds: RoundColumns[] = [];
-  let flags = { has_mid_keyword: false, has_semantic: false, has_iscc: false };
+export type GridPageOptions = { view?: GridView; columns?: string[]; limit?: number; cursor?: string };
 
-  do {
-    const page = await traced(sessionId, "get_screening_grid", {
-      run_id: runId,
-      include_hidden: true,
-      limit: 2000,
-      ...(cursor ? { after_company_id: cursor } : {}),
-    });
-    if (!Array.isArray(page.rows)) throw new Error("The company grid could not be read.");
-    const pageTotal = asCount(page.total, "total count");
-    const pageConsidered = asCount(page.considered_count, "considered count");
-    const pageHidden = asCount(page.hidden_count, "hidden count");
-    const pageRevision = asCount(page.selection_revision, "selection revision");
-    const pageRounds = roundColumns(page.rounds);
-    const pageFlags = { has_mid_keyword: page.has_mid_keyword === true, has_semantic: page.has_semantic === true, has_iscc: page.has_iscc === true };
-    if (typeof page.source_hash !== "string") throw new Error("The company grid is missing its source revision.");
-    if (total !== undefined && (total !== pageTotal || consideredCount !== pageConsidered || hiddenCount !== pageHidden || selectionRevision !== pageRevision || sourceHash !== page.source_hash || JSON.stringify(rounds) !== JSON.stringify(pageRounds) || JSON.stringify(flags) !== JSON.stringify(pageFlags))) {
-      throw new Error("The company list changed while it was being read. Please open it again.");
-    }
-    total = pageTotal;
-    consideredCount = pageConsidered;
-    hiddenCount = pageHidden;
-    selectionRevision = pageRevision;
-    sourceHash = page.source_hash;
-    rounds = pageRounds;
-    flags = pageFlags;
-    rows.push(...page.rows.map(asGridCompany));
-
-    const next = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
-    if (next && (next === cursor || page.rows.length === 0)) {
-      throw new Error("Company grid paging did not advance.");
-    }
-    cursor = next;
-  } while (cursor);
-
-  if (rows.length !== total) throw new Error("The company list changed while it was being read. Please open it again.");
+export async function fetchScreeningGridPage(sessionId: string, runId: string, options: GridPageOptions = {}): Promise<ScreeningGrid> {
+  const page = await traced(sessionId, "get_screening_grid", {
+    run_id: runId, view: options.view ?? "all", include_hidden: true,
+    limit: Math.max(1, Math.min(1000, options.limit ?? 100)),
+    ...(options.columns ? { columns: options.columns } : {}),
+    ...(options.cursor ? { after_company_id: options.cursor } : {}),
+  });
+  if (!Array.isArray(page.rows)) throw new Error("The company grid could not be read.");
+  if (typeof page.source_hash !== "string") throw new Error("The company grid is missing its source revision.");
+  const nextCursor = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
+  if (nextCursor && (nextCursor === options.cursor || page.rows.length === 0)) throw new Error("Company grid paging did not advance.");
   return {
-    rows,
-    total: total ?? 0,
-    consideredCount: consideredCount ?? 0,
-    hiddenCount: hiddenCount ?? 0,
-    selectionRevision: selectionRevision ?? 0,
-    rounds,
-    ...flags,
+    rows: page.rows.map(asGridCompany), columns: Array.isArray(page.columns) ? page.columns as GridCatalogColumn[] : [],
+    total: asCount(page.total, "total count"), consideredCount: asCount(page.considered_count, "considered count"),
+    hiddenCount: asCount(page.hidden_count, "hidden count"), selectionRevision: asCount(page.selection_revision, "selection revision"),
+    sourceHash: page.source_hash, nextCursor, rounds: roundColumns(page.rounds),
+    has_mid_keyword: page.has_mid_keyword === true, has_semantic: page.has_semantic === true, has_iscc: page.has_iscc === true,
   };
+}
+
+export function appendGridPage(current: ScreeningGrid, page: ScreeningGrid): ScreeningGrid {
+  const signature = (grid: ScreeningGrid) => JSON.stringify([grid.total, grid.consideredCount, grid.hiddenCount, grid.selectionRevision, grid.sourceHash, grid.rounds, grid.columns, grid.has_mid_keyword, grid.has_semantic, grid.has_iscc]);
+  if (signature(current) !== signature(page)) throw new Error("The company list changed while it was being read. Please open it again.");
+  const ids = new Set(current.rows.map(row => row.company_id));
+  if (page.rows.some(row => ids.has(row.company_id))) throw new Error("Company grid paging did not advance.");
+  // Keep the catalog reference stable while rows stream; grid headers must not remount.
+  return { ...current, rows: [...current.rows, ...page.rows], nextCursor: page.nextCursor };
+}
+
+export async function fetchScreeningGrid(sessionId: string, runId: string, options: GridPageOptions = {}): Promise<ScreeningGrid> {
+  let grid = await fetchScreeningGridPage(sessionId, runId, { ...options, limit: options.limit ?? 1000 });
+  while (grid.nextCursor) grid = appendGridPage(grid, await fetchScreeningGridPage(sessionId, runId, { ...options, limit: options.limit ?? 1000, cursor: grid.nextCursor }));
+  if (grid.rows.length !== grid.total) throw new Error("The company list changed while it was being read. Please open it again.");
+  return grid;
+}
+
+export async function fetchGridDescriptions(sessionId: string, runId: string, companyIds: string[]): Promise<GridDescription[]> {
+  if (!companyIds.length) return [];
+  if (companyIds.length > 500) throw new Error("Description pages must contain at most 500 companies.");
+  const result = await traced(sessionId, "get_grid_descriptions", { run_id: runId, company_ids: companyIds });
+  if (!Array.isArray(result.companies)) throw new Error("Company descriptions could not be read.");
+  return result.companies as GridDescription[];
 }
 
 export async function fetchCompanyDetail(
