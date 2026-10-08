@@ -81,7 +81,7 @@ fn rust_prompt_engine_matches_shared_conformance_fixtures() {
             );
         } else {
             let rendered = result.unwrap_or_else(|error| panic!("{name}: {error}"));
-            assert!(!rendered.is_empty() && !rendered.contains("{{"), "{name}");
+            assert_eq!(rendered, case["expected"].as_str().unwrap(), "{name}");
         }
     }
 

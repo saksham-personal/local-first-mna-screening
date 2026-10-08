@@ -3,7 +3,7 @@
 **ID:** bing-query-writer
 **Description:** Draft Bing search templates for a business fit check.
 **What it does:** Turns criteria into short queries about a company's products and customers. Preserves single-brace company placeholders.
-**Context:** The bridge supplies analyst criteria for Bing template generation. Send in the continuing LLM Suite conversation id, or start a new id if none exists.
+**Context:** `POST /api/conversation/generate` purpose `bing-templates` calls `provider-conversation.mjs` `generate` with analyst criteria. Send on the continuing LLM Suite conversation id, or a new id if none exists.
 **Inputs:** `{{definition}}` (required) – the business definition (the caller falls back to the analyst criteria or request when no definition exists); `{{criteria_text}}` (optional) – the analyst criteria as written, when different from the definition; `{{good_fits}}` (optional) – good-fit examples; `{{bad_fits}}` (optional) – bad-fit examples; `{{request}}` (optional) – an additional analyst request.
 **Output:** Exactly BEGIN_QUERIES, one to five lines starting with QUERY:, END_QUERIES and nothing else (the gateway format query_templates).
 **Version:** 2

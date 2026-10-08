@@ -3,7 +3,7 @@
 **ID:** screening-question
 **Description:** Build an editable question prompt.
 **What it does:** Asks an analyst question directly or per company. Uses criteria and examples as context without creating a fit score.
-**Context:** The bridge supplies analyst inputs in screening setup; the analyst approves the draft. Send in the continuing LLM Suite screening conversation id or M365 Copilot request.
+**Context:** `POST /api/prompts/screening-draft` calls `renderScreeningPrompt` for question mode with analyst inputs; the analyst approves the draft. Send on the continuing LLM Suite screening conversation id or M365 Copilot request.
 **Inputs:** `{{request}}` (required) – the analyst question; `{{definition}}` (optional) – the approved core-business criteria, as context; `{{good_fits}}` (optional) – good-fit examples, one per line; `{{bad_fits}}` (optional) – bad-fit examples, one per line; `{{deferred}}` (optional) – deferred conditions, one per line, context only; `{{input_glossary}}` (optional) – one line per input column explaining what it holds; `{{output_columns}}` (required) – the requested output names after index, comma-separated.
 **Output:** The text of the question prompt. With company rows the model answers with one Markdown table (index plus the requested output columns). Without company rows it answers in Markdown sections, without an index.
 **Version:** 2

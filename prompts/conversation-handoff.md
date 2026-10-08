@@ -3,7 +3,7 @@
 **ID:** conversation-handoff
 **Description:** Carry screening state into a new controller conversation.
 **What it does:** Summarizes the run state and recent decisions compactly. Distinguishes approved facts from unverified leads and work still pending.
-**Context:** Sent when rotating to a new LLM Suite controller conversation id before context fills; the caller supplies saved state and decisions, then seeds the new conversation with the summary.
+**Context:** Reserved for the future LLM Suite controller loop during conversation rotation; no caller sends it yet. The future controller supplies saved run state and decisions; its summary seeds a new conversation id.
 **Inputs:** `{{run_summary}}` (required) – criteria revision, approvals, counts, recent results, and pending work; `{{recent_decisions}}` (required) – recent analyst decisions and controller outcomes.
 **Output:** A concise Markdown state summary for the new conversation.
 **Version:** 1

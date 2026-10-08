@@ -3,7 +3,7 @@
 **ID:** screening-scored
 **Description:** Build an editable scored screening prompt.
 **What it does:** Scores each company's core business against approved criteria. Includes the shared score rule and strict index-only table shape.
-**Context:** The bridge supplies analyst inputs in screening setup; the analyst approves the draft. Send in the continuing LLM Suite screening conversation id or M365 Copilot request.
+**Context:** `POST /api/prompts/screening-draft` calls `renderScreeningPrompt` for scored screening with analyst inputs; the analyst approves the draft. Send on the continuing LLM Suite screening conversation id or M365 Copilot request.
 **Inputs:** `{{definition}}` (required) – the approved core-business criteria; `{{good_fits}}` (optional) – good-fit examples, one per line; `{{bad_fits}}` (optional) – bad-fit examples, one per line; `{{deferred}}` (optional) – deferred conditions (geography, size, ownership and similar), one per line, shown for context only; `{{input_glossary}}` (required) – one line per input column explaining what it holds; `{{request}}` (required) – the analyst request; `{{output_columns}}` (required) – the requested output columns after index, comma-separated; `{{score_columns}}` (optional) – the requested score columns, comma-separated; when present the unified score rule is included.
 **Output:** The text of the screening prompt. The model's answer to that prompt is one Markdown table with index plus the requested output columns.
 **Version:** 2

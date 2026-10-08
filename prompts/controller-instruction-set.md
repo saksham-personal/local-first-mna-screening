@@ -3,7 +3,7 @@
 **ID:** controller-instruction-set
 **Description:** Guide the screening controller to write Markdown instructions.
 **What it does:** Gives LLM Suite the current allowed actions and screening rules. Requests a compact, readable instruction set for deterministic validation.
-**Context:** Sent as the system prompt when starting a new LLM Suite controller conversation id; a continuing id retains it. The caller supplies the action guide, run state, and any analyst message.
+**Context:** Reserved for the future LLM Suite controller loop as its system prompt on a new conversation id; no caller sends it yet. The future controller supplies allowed actions, run state, and the analyst message; a continuing id retains the prompt.
 **Inputs:** `{{action_guide}}` (required) – allowed actions and their fields in natural language; `{{run_summary}}` (optional) – criteria version, counts, and recent results; `{{analyst_message}}` (optional) – latest analyst request.
 **Output:** Markdown Context, Reasoning, and Instruction set sections, with optional Notes for the analyst.
 **Version:** 1

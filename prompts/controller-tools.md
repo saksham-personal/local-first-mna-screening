@@ -3,7 +3,7 @@
 **ID:** controller-tools
 **Description:** Specify the legacy controller command grammar.
 **What it does:** Provides the allowed command syntax and discovery limits. The caller supplies the current allowed commands.
-**Context:** Rust agent commands supply allowed command definitions to the controller. Send in its continuing LLM Suite conversation id, or start a new id if none exists.
+**Context:** `mna-tools/src/agent_commands.rs` `prompt` supplies allowed command definitions for the legacy controller. Send on its continuing LLM Suite conversation id, or a new id if none exists.
 **Inputs:** `{{tool_definitions}}` (required) – the generated list of allowed tools, each with its description and its fields marked required or optional.
 **Output:** Exactly one BEGIN TOOL v1 block per step, with no prose and no JSON.
 **Version:** 2

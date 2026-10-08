@@ -125,7 +125,7 @@ test("Rust-side prompts retain their response contracts", () => {
   );
   assert.equal(
     renderPrompt("format-repair", { prompt: "Original prompt", format_error: "Return only BEGIN_PROMPT and END_PROMPT" }),
-    "Original prompt\n\nFix the output format: Return only BEGIN_PROMPT and END_PROMPT",
+    "Original prompt\n\nCorrect the output format: Return only BEGIN_PROMPT and END_PROMPT",
   );
   assert.equal(
     renderPrompt("batch-repair", { error: "missing index 2", table_answer: "yes", original_response: "| index |" }),
@@ -301,6 +301,9 @@ const CONFORMANCE: { name: string; id: string; vars: Record<string, string> }[] 
   { name: "Intake Form extraction", id: "intake-form-extraction", vars: { document_text: "Submitter: Ada Lovelace\nIndustry: Financials" } },
   { name: "MID search planner with every optional section", id: "mid-search-planner", vars: { definition: "Claims software", good_fits: "- Guidewire", bad_fits: "- Brokers", exclusions: "- brokers", deferred: "- US only" } },
   { name: "MID search planner with the definition only", id: "mid-search-planner", vars: { definition: "Claims software" } },
+  { name: "controller instruction set with run context", id: "controller-instruction-set", vars: { action_guide: "search_mid: keywords", run_summary: "v2 approved, 100 considered", analyst_message: "Find claims software" } },
+  { name: "instruction feedback for rejected item", id: "instruction-feedback", vars: { feedback: "Unknown field: size", allowed_actions: "search_mid: keywords" } },
+  { name: "conversation hand-off with decisions", id: "conversation-handoff", vars: { run_summary: "v2 approved, 100 considered", recent_decisions: "Analyst approved v2" } },
 ];
 const conformancePath = fixturePath("prompt-conformance.json");
 if (process.env.UPDATE_PROMPT_FIXTURES === "1")
@@ -311,11 +314,9 @@ test("the conformance fixture inputs still render with the current prompt files"
   assert.deepEqual(fixture.map(({ name, id, vars }) => ({ name, id, vars })), CONFORMANCE,
     "the fixture inputs changed; run UPDATE_PROMPT_FIXTURES=1 pnpm test and review the diff");
   for (const entry of fixture) {
-    const rendered = renderPrompt(entry.id, entry.vars);
-    assert.ok(rendered.length > 0, entry.name);
-    assert.ok(!rendered.includes("{{"), `${entry.name} leaves no placeholder behind`);
+    assert.equal(renderPrompt(entry.id, entry.vars), entry.expected, entry.name);
   }
-  assert.deepEqual([...new Set(fixture.map((entry) => entry.id))].sort(), ALL_IDS.filter((id) => !["controller-instruction-set", "conversation-handoff", "instruction-feedback"].includes(id)), "every existing prompt has a fixture");
+  assert.deepEqual([...new Set(fixture.map((entry) => entry.id))].sort(), ALL_IDS, "every prompt has a fixture");
 });
 
 test("new instruction-set prompts render through the shared Node loader", () => {

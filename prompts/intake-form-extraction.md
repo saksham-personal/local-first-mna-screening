@@ -3,7 +3,7 @@
 **ID:** intake-form-extraction
 **Description:** Extract fields from an Intake Form PDF.
 **What it does:** Copies stated values into a fixed field block and marks missing values. This reserved prompt is not sent yet.
-**Context:** Reserved for a new LLM Suite conversation id after an Intake Form upload. A future extractor supplies redacted PDF text; no caller sends this yet.
+**Context:** Reserved for a future Intake Form extractor after PDF upload; no caller sends it yet. The extractor will supply redacted PDF text to a new LLM Suite conversation id.
 **Inputs:** `{{document_text}}` (required) – the text extracted from the Intake Form PDF (secrets already redacted by the caller).
 **Output:** Exactly BEGIN_INTAKE, one Label: value line per field (a single hyphen when the document does not state it), END_INTAKE and nothing else. The Rust text-format parser for this block is not written yet.
 **Version:** 2

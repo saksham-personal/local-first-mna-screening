@@ -3,7 +3,7 @@
 **ID:** mid-search-planner
 **Description:** Plan broad MID keyword searches.
 **What it does:** Plans several core-business keyword groups from approved criteria. Limits exclusion terms to approved core-business exclusions.
-**Context:** Reserved for a new or continuing LLM Suite planning conversation id. A future Rust caller supplies approved criteria; no caller sends this yet.
+**Context:** Reserved for a future Rust MID search planner; no caller sends it yet. The planner will supply approved criteria on a new or continuing LLM Suite planning conversation id.
 **Inputs:** `{{definition}}` (required) – the approved core-business criteria; `{{good_fits}}` (optional) – good-fit examples, one per line; `{{bad_fits}}` (optional) – bad-fit examples, one per line; `{{exclusions}}` (optional) – the approved core-business exclusions, one per line (the only terms allowed after AND NOT); `{{deferred}}` (optional) – deferred conditions, context only, never keywords.
 **Output:** Exactly BEGIN_SEARCHES, two to four SEARCH blocks (SEARCH, RATIONALE, KEYWORD lines, EXPRESSION), END_SEARCHES and nothing else. The Rust text-format parser for this block is not written yet.
 **Version:** 2

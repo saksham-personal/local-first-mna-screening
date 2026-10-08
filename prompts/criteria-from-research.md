@@ -3,7 +3,7 @@
 **ID:** criteria-from-research
 **Description:** Revise draft criteria from selected research.
 **What it does:** Uses an analyst-selected research lead to propose core-business criteria. Marks unsupported claims for review and leaves approval to the analyst.
-**Context:** The bridge supplies analyst-selected research and criteria for generation. Send in the continuing LLM Suite conversation id, or start a new id if none exists.
+**Context:** `POST /api/conversation/generate` purpose `criteria-from-research` calls `provider-conversation.mjs` `generate` with analyst-selected research and criteria. Send on the continuing LLM Suite conversation id, or a new id if none exists.
 **Inputs:** `{{definition}}` (required) – the current business definition draft; `{{research_question}}` (required) – the question that was researched; `{{research_result}}` (required) – the research answer the analyst selected; `{{criteria_text}}` (optional) – the analyst criteria as written, when different from the definition; `{{good_fits}}` (optional) – good-fit examples; `{{bad_fits}}` (optional) – bad-fit examples; `{{deferred}}` (optional) – deferred conditions, context only; `{{request}}` (optional) – an extra analyst instruction.
 **Output:** Exactly BEGIN_CRITERIA, the revised criteria prose, END_CRITERIA and nothing else (the gateway format criteria).
 **Version:** 2
@@ -43,7 +43,7 @@ Analyst request:
 {{request}}
 
 {{/request}}
-Draft core-business criteria from this analyst-selected lead. Treat unsupported claims as unverified and keep geography, revenue, ownership, size, and industry codes as review notes, never search filters.
+Draft core-business criteria from this analyst-selected lead. Research leads are not verified facts; keep unsupported claims and non-business conditions as review notes. Geography, revenue, ownership, size, and industry codes are review notes, never search filters.
 Return exactly:
 BEGIN_CRITERIA
 <criteria prose>

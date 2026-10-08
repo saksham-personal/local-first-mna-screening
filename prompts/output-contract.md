@@ -3,7 +3,7 @@
 **ID:** output-contract
 **Description:** Require index-only screening table output.
 **What it does:** Adds the strict Markdown table shape to approved batch prompts. Adds the shared fit score rule when score columns are selected.
-**Context:** Rust prepared plans supply approved columns and append this to screening batches. Send in the continuing LLM Suite conversation id or M365 Copilot request.
+**Context:** `mna-tools/src/gateway.rs` `compiled_prompt` appends this to prepared screening batches using approved columns. Send on the continuing LLM Suite conversation id or M365 Copilot request.
 **Inputs:** `{{output_columns}}` (required) – the selected output columns after index, comma-separated; `{{score_columns}}` (optional) – the selected score columns, comma-separated; when present the unified score rule is appended.
 **Output:** The contract text. It is appended to the screening prompt after one blank line.
 **Version:** 2

@@ -3,7 +3,7 @@
 **ID:** instruction-feedback
 **Description:** Repair rejected controller instructions.
 **What it does:** Provides validation feedback for rejected items. Requests corrected items in the same Markdown shape without repeating accepted work.
-**Context:** Sent to the same LLM Suite controller conversation id after validation rejects instructions; the caller supplies feedback and currently allowed actions.
+**Context:** Reserved for the future LLM Suite controller loop after instruction validation rejects items; no caller sends it yet. The future controller supplies feedback and allowed actions on the same continuing conversation id.
 **Inputs:** `{{feedback}}` (required) – parser or validator messages; `{{allowed_actions}}` (required) – valid action names and fields.
 **Output:** Corrected Markdown Context, Reasoning, and Instruction set sections for rejected items only.
 **Version:** 1
