@@ -21,6 +21,8 @@ const rustAddress = `http://127.0.0.1:${ports.rust}`;
 const admin = { start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
 const allowed = new Set(['get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
 for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'get_screening_rounds', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_company_detail', 'get_enrichment_report', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
+Object.assign(admin, { space_sync: '/admin/space-sync', space_add_to_run: '/admin/space-add-to-run', space_export: '/admin/space-export' });
+for (const tool of ['space_sync_status', 'space_browse', 'space_search_lexical', 'space_search_semantic', 'space_search_iscc', 'space_recent']) allowed.add(tool);
 const simulate = process.env.SCREENING_SIMULATE === '1';
 if (simulate) allowed.add('search_iscc');
 const origins = allowedOrigins;
@@ -101,6 +103,7 @@ async function sendStagedFile(res, record) {
 
 async function rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal) {
   if (typeof tool !== 'string' || (!Object.hasOwn(admin, tool) && !allowed.has(tool))) throw new Error('This tool is not enabled in the local example.');
+  if (tool === 'space_add_to_run' && analystApproved !== true) throw new Error('Approve adding the selected companies to the screening run.');
   if ((['start_index_build', 'cancel_index_build', 'activate_mid_bundle', 'delete_mid_bundle'].includes(tool) || tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'apply_enrichment_review' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
   if (tool === 'import_company_files' || tool === 'import_enrichment_files' || tool === 'inspect_enrichment_files') {
     if (!Array.isArray(args.files) || !args.files.length || !args.files.every(file => typeof file === 'string' && staged.has(file))) throw new Error('Select files through the upload controls.');
@@ -116,6 +119,15 @@ async function rustCall(apiKey, analystKey, controllerKey, staged, tool, args, a
   const value = Object.hasOwn(admin, tool) ? result : result?.result;
   if (!value || typeof value !== 'object') throw new Error('The Rust tool returned an unreadable result.');
   return value;
+}
+
+// Pure spawn decision; explicit local settings are restored AFTER provider scrubbing.
+export function managedMeiliConfig(env, dataRoot, masterKey) {
+  if (!env.SCREENING_MEILI_BIN) return null;
+  const port = Number(env.SCREENING_MEILI_PORT || 7700);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SCREENING_MEILI_PORT must be 1..65535.');
+  const url = `http://127.0.0.1:${port}`;
+  return { binary: env.SCREENING_MEILI_BIN, url, args: ['--http-addr', `127.0.0.1:${port}`, '--db-path', resolve(dataRoot, 'meili'), '--env', 'development', '--no-analytics'], masterKey };
 }
 
 export async function startBridge() {
@@ -161,6 +173,32 @@ export async function startBridge() {
   const env = { ...process.env, MNA_ENABLE_EXTERNAL: String(externalEnabled), MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_CONTROLLER_KEY: controllerKey, MNA_BIND: `127.0.0.1:${ports.rust}`, MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
   if (simulate) { env.MNA_SIMULATE = '1'; console.log('Simulated providers are ON (dev only). Data is labelled SIMULATED.'); } else { delete env.MNA_SIMULATE; }
   for (const key of Object.keys(env)) if (/(?:OPENAI|ANTHROPIC|AZURE_OPENAI|GOOGLE|GEMINI|COHERE|BING|M365|ISCC|MEILI|LLMSUITE|PROVIDER_(?:URL|ENDPOINT|API_KEY))/i.test(key) && !(externalEnabled && /^MNA_(?:LLMSUITE|M365|BING|ISCC)_/.test(key))) delete env[key];
+  let meili;
+  const meiliKey = randomBytes(32).toString('hex');
+  const meiliConfig = managedMeiliConfig(process.env, data, meiliKey);
+  if (meiliConfig) {
+    let meiliError = false;
+    try {
+      await access(meiliConfig.binary);
+      // The master key goes through the environment so it is not visible in the process list.
+      const meiliEnv = { ...Object.fromEntries(['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP'].filter(key => process.env[key]).map(key => [key, process.env[key]])), MEILI_MASTER_KEY: meiliConfig.masterKey };
+      meili = spawn(meiliConfig.binary, meiliConfig.args, { cwd: root, env: meiliEnv, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] });
+      meili.on('error', () => { meiliError = true; });
+      let healthy = false;
+      for (let attempt = 0; attempt < 100 && !meiliError && meili.exitCode === null; attempt++) {
+        try {
+          healthy = (await fetch(`${meiliConfig.url}/health`, { signal: AbortSignal.timeout(500) })).ok
+            && (await fetch(`${meiliConfig.url}/indexes`, { headers: { Authorization: `Bearer ${meiliKey}` }, signal: AbortSignal.timeout(500) })).ok;
+        } catch {}
+        if (healthy) break;
+        await new Promise(done => setTimeout(done, 100));
+      }
+      if (healthy && !meiliError && meili.exitCode === null) {
+        Object.assign(env, { MNA_MEILI_URL: meiliConfig.url, MNA_MEILI_API_KEY: meiliKey, MNA_MEILI_INDEX: 'companies' });
+      } else { meili.kill(); }
+    } catch { meili?.kill(); }
+    console.log(env.MNA_MEILI_URL ? 'Search Space Meilisearch is running locally.' : 'Meilisearch is not running; lexical Search Space is unavailable.');
+  }
   // Optional local embedding worker (Arctic-embed-m-v2 ONNX int8) for MID semantic scoring.
   // SCREENING_EMBED_MODEL_DIR points at the unpacked model folder (onnx/model_int8.onnx + tokenizer.json).
   let embedWorker;
@@ -194,17 +232,43 @@ export async function startBridge() {
     await new Promise(resolveWait => setTimeout(resolveWait, 100));
   }
   if (!ready) {
-    rust.kill(); embedWorker?.kill();
+    rust.kill(); embedWorker?.kill(); meili?.kill();
     throw new Error(launchError || `The Rust tool server did not start. Check that port ${ports.rust} is free.`);
   }
 
-  const call = (tool, args, analystApproved, signal) => {
+  // Search Space sync runs in the background; callers get its latest known state, never wait.
+  // A failed sync is retried at most every five minutes.
+  const syncs = new Map();
+  const syncResults = new Map();
+  const syncBundle = bundleId => {
+    if (!bundleId || !env.MNA_MEILI_URL) return null;
+    if (syncs.has(bundleId)) return { task_status: 'processing', bundle_id: bundleId };
+    const known = syncResults.get(bundleId);
+    if (known && (known.result.task_status !== 'failed' || Date.now() - known.at < 300_000)) return known.result;
+    const pending = (async () => {
+      let result;
+      try {
+        const status = await rustCall(apiKey, analystKey, controllerKey, staged, 'space_sync_status', {});
+        if (status.bundle_id !== bundleId) result = { task_status: 'skipped', bundle_id: bundleId };
+        else if (status.task_status === 'succeeded' && status.documents > 0) result = status;
+        else result = await rustCall(apiKey, analystKey, controllerKey, staged, 'space_sync', {});
+      } catch (error) { result = { task_status: 'failed', bundle_id: bundleId, error: error.message }; }
+      syncResults.set(bundleId, { at: Date.now(), result });
+      syncs.delete(bundleId);
+    })();
+    syncs.set(bundleId, pending);
+    return { task_status: 'processing', bundle_id: bundleId };
+  };
+  const call = async (tool, args, analystApproved, signal) => {
     // Index workbooks (up to 1 GiB) are only for Build Index; other uploads never build an index.
     const purposeOf = id => stagedFiles.get(id)?.purpose;
     if (['import_company_files', 'import_enrichment_files', 'inspect_enrichment_files'].includes(tool) && Array.isArray(args?.files) && args.files.some(id => purposeOf(id) === 'mid_index'))
       throw new Error('Use Build Index for MID workbooks.');
     if (tool === 'start_index_build' && purposeOf(args?.file) !== 'mid_index') throw new Error('Select a workbook through Build Index.');
-    return rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal);
+    const result = await rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal);
+    if (tool === 'activate_mid_bundle' || (tool === 'get_index_build' && result.status === 'succeeded' && result.bundle?.status === 'active')) result.space_sync = syncBundle(result.bundle_id);
+    if (tool === 'get_mid_index_status' && result.active) result.space_sync = syncBundle(result.active.bundle_id);
+    return result;
   };
   const jobs = createJobRegistry({ call, seedFile: seedId });
   const screening = createDurableScreeningPreparation({ call, deployment: provider => providerDeployment(provider) });
@@ -230,7 +294,7 @@ export async function startBridge() {
     return result;
   };
   const background = createBackgroundScreening({ call: controllerCall, dispatch: args => controllerCall('dispatch_execution_job', args), connected: providerReady, storeFile: resolve(data, 'background-runs.json') });
-  await background.init();
+  await background.init().catch(error => { rust.kill(); embedWorker?.kill(); meili?.kill(); throw error; });
   const research = createBingResearch({ call, connected: () => providerReady('bing') });
   const conversation = createProviderConversation({ dispatch: args => controllerCall('dispatch_provider_text', args), connected: externalReady,
     deployment: providerDeployment, stagedFiles, call });
@@ -243,6 +307,16 @@ export async function startBridge() {
       if (await handlePromptRoute(req, res, url, { respond, body })) return;
       if (await handleIntakeRoute(req, res, url, { respond, body, stagedFiles })) return;
       if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, simulated: simulatedProviders, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
+      // The existing file route serves staged uploads only. Exports use a separate
+      // basename-only route rooted in export/, never a caller-supplied path.
+      const exportMatch = url.pathname.match(/^\/api\/exports\/(space-[0-9a-f-]{36}\.xlsx)$/);
+      if (req.method === 'GET' && exportMatch) {
+        const path = resolve(data, 'export', exportMatch[1]);
+        let info;
+        try { info = await stat(path); } catch (error) { if (error.code === 'ENOENT') return respond(res, 404, { error: 'Export not found.' }); throw error; }
+        if (!info.isFile()) return respond(res, 404, { error: 'Export not found.' });
+        return sendStagedFile(res, { path, name: exportMatch[1], bytes: info.size, ...fileKinds.get('.xlsx') });
+      }
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
       if (req.method === 'GET' && url.pathname === '/api/jobs') return respond(res, 200, { jobs: jobs.list() });
       const jobMatch = url.pathname.match(/^\/api\/jobs\/([A-Za-z0-9-]+)$/);
@@ -365,8 +439,8 @@ export async function startBridge() {
   try {
     await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(ports.bridge, '127.0.0.1', resolveListen); });
   } catch (error) {
-    rust.kill(); embedWorker?.kill();
+    rust.kill(); embedWorker?.kill(); meili?.kill();
     throw error;
   }
-  return { close: () => { background.close(); server.close(); rust.kill(); embedWorker?.kill(); }, rust, jobs };
+  return { close: () => { background.close(); server.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); }, rust, jobs };
 }

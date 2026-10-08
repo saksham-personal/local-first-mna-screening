@@ -23,6 +23,7 @@ use tokio::sync::Semaphore;
 pub struct Runtime {
     store: Store,
     search: Arc<SearchEngine>,
+    space: Arc<crate::search_space::SearchSpace>,
     context: ContextService,
     concurrency: Arc<Semaphore>,
 }
@@ -51,6 +52,12 @@ pub struct ToolDefinition {
 
 pub fn tool_definitions() -> Vec<ToolDefinition> {
     let groups: &[(&str, &str, &str, bool)] = &[
+        ("space_sync_status", "Read active MID Meilisearch sync status", "search", false),
+        ("space_browse", "Browse all active MID companies without a run", "search", false),
+        ("space_search_lexical", "Search the MID population using keyword sets and Boolean expressions", "search", true),
+        ("space_search_semantic", "Search all compatible active MID vectors using free text", "search", true),
+        ("space_search_iscc", "Search ISCC and hydrate companies without a run", "search", true),
+        ("space_recent", "Read recent Search Space searches", "search", false),
         ("get_shortlist_context", "Read considered companies, hidden count, source coverage and chosen results for this screening run", "review", false),
         ("get_criteria_history", "Read every criteria revision with its Intake Form, exclusions, validity period (created_at to superseded_at) and analyst approval; last_criteria is the newest revision", "review", false),
         (
@@ -440,6 +447,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                             | "extract_url_context"
                     ),
                 input_schema: crate::store::input_schema(name)
+                    .or_else(|| crate::search_space::input_schema(name))
                     .or_else(|| crate::context::input_schema(name))
                     .or_else(|| crate::search::input_schema(name))
                     .or_else(|| crate::data::input_schema(name))
@@ -477,6 +485,7 @@ impl Runtime {
         crate::index_build::recover_interrupted(&store)?;
         Ok(Self {
             search: Arc::new(SearchEngine::new(store.clone())?),
+            space: Arc::new(crate::search_space::SearchSpace::new(store.clone())?),
             context: ContextService::new(store.clone()),
             store,
             concurrency: Arc::new(Semaphore::new(8)),
@@ -514,7 +523,10 @@ impl Runtime {
             .find(|d| d.name == tool)
             .map(|d| d.category);
         let workflow = WorkflowService::new(self.store.clone());
-        let authorization = if tool == "label_company" && !admin {
+        let authorization = if (tool == "label_company"
+            || matches!(tool, "space_sync" | "space_add_to_run" | "space_export"))
+            && !admin
+        {
             Err(Error::AnalystAuthRequired)
         } else if [
             "search_companies",
@@ -546,6 +558,8 @@ impl Runtime {
         };
         let mut result = if let Err(error) = authorization {
             Err(error)
+        } else if crate::search_space::input_schema(tool).is_some() {
+            self.space.execute(tool, &arguments).await
         } else if category == Some("search")
             || category == Some("provider")
             || tool == "sync_search_index"
@@ -909,6 +923,9 @@ async fn admin(
         "companies" => "ingest_companies",
         "runs" => "create_run",
         "index" => "sync_search_index",
+        "space-sync" => "space_sync",
+        "space-add-to-run" => "space_add_to_run",
+        "space-export" => "space_export",
         "labels" => "label_company",
         "company-files" => "import_company_files",
         "index-build-start" => "start_index_build",
@@ -994,6 +1011,7 @@ pub fn administrator_definitions() -> Vec<Value> {
     let tools: Vec<_> = [
         ("ingest_companies", "/admin/companies"), ("create_run", "/admin/runs"),
         ("approve_screening_profile", "/admin/profiles/approve"), ("sync_search_index", "/admin/index"),
+        ("space_sync", "/admin/space-sync"), ("space_add_to_run", "/admin/space-add-to-run"), ("space_export", "/admin/space-export"),
         ("import_company_files", "/admin/company-files"), ("approve_action_plan", "/admin/actions/approve"),
         ("approve_prepared_plan", "/admin/prepared-plan-approve"), ("cancel_prepared_plan", "/admin/prepared-plan-cancel"),
         ("review_evidence_claim", "/admin/evidence-review"),
@@ -1011,7 +1029,7 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("cancel_index_build", "/admin/index-build-cancel"),
         ("activate_mid_bundle", "/admin/mid-bundle-activate"),
         ("delete_mid_bundle", "/admin/mid-bundle-delete"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 
