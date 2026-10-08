@@ -36,6 +36,7 @@ import {
   X,
 } from "lucide-react";
 import WorkspaceApp from "./WorkspaceApp";
+import SearchSpace from "./space/SearchSpace";
 import ChatThread from "./chat/ChatThread";
 import { DockHead, DockRail, DockResizeHandle } from "./chat/DockRail";
 import { useDock } from "./chat/useDock";
@@ -123,11 +124,10 @@ function savedWidth(key: string, fallback: number, min: number, max: number) {
 function boundedWidth(value: number, min: number, max: number) {
   return Math.round(Math.min(Math.max(value, min), Math.max(min, max)));
 }
-function initialInterface(): "chat" | "workspace" {
+function initialInterface(): "chat" | "workspace" | "space" {
   try {
-    return localStorage.getItem(interfaceKey) === "workspace"
-      ? "workspace"
-      : "chat";
+    const saved = localStorage.getItem(interfaceKey);
+    return saved === "workspace" || saved === "space" ? saved : "chat";
   } catch {
     return "chat";
   }
@@ -490,7 +490,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
-  const changeMode = useCallback((value: "chat" | "workspace") => {
+  const changeMode = useCallback((value: "chat" | "workspace" | "space") => {
     setMode(value);
     setPanel(null);
     setPreview(undefined);
@@ -907,6 +907,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     [session.id, send, openLog, revealChat, changeMode, mode, openSetup],
   );
   const selectSession = (id: string) => {
+    if (mode === "space") changeMode("chat");
     sessionStore.selectSession(id);
     setMobileNav(false);
     setPanel(null);
@@ -921,6 +922,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     setBingSetup(undefined);
   };
   const newSession = (title: string) => {
+    if (mode === "space") changeMode("chat");
     sessionStore.createSession(title);
     setNewName(undefined);
     setMobileNav(false);
@@ -1130,6 +1132,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
           <Plus size={16} />
           New screening
         </button>
+        <button className="ct-space-navigation" type="button" aria-current={mode === "space" ? "page" : undefined} onClick={() => { changeMode("space"); setMobileNav(false); }}><Search size={16} />Search Space</button>
         <div className="ct-thread-search">
           <Search size={14} />
           <input
@@ -1151,8 +1154,8 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
               <button
                 type="button"
                 key={s.id}
-                className={s.id === session.id ? "ct-thread-selected" : ""}
-                aria-current={s.id === session.id ? "page" : undefined}
+                className={mode !== "space" && s.id === session.id ? "ct-thread-selected" : ""}
+                aria-current={mode !== "space" && s.id === session.id ? "page" : undefined}
                 onClick={() => selectSession(s.id)}
               >
                 <MessageSquare size={14} />
@@ -1208,7 +1211,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
         </div>
       </aside>
       <main className="ct-main">
-        <header className="ct-header">
+        {mode === "space" ? <header className="ct-header"><div className="ct-header-title"><button className="ct-icon-button ct-nav-toggle" type="button" aria-label="Open navigation" onClick={() => { setSidebar(true); setMobileNav(true); }}><Menu size={18} /></button><strong>Population explorer</strong></div><div className="ct-header-actions"><ThemeMenu /><button className="ct-log-button ct-index-button" type="button" onClick={() => openIndex()} aria-label="Build Index"><Database size={15} /><span>Build Index</span></button></div></header> : <header className="ct-header">
           <div className="ct-header-title">
             <button
               className="ct-icon-button ct-nav-toggle"
@@ -1308,8 +1311,9 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
               <span>Session log</span>
             </button>
           </div>
-        </header>
+        </header>}
         <div className={`ct-body ct-body-${mode}${preview ? " ct-preview-open" : ""}`}>
+          {mode === "space" && <SearchSpace />}
           {mode === "workspace" && (
             <section
               className="ct-workspace-surface"
@@ -1329,7 +1333,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
               />
             </section>
           )}
-          <section
+          {mode !== "space" && <section
             className={`ct-chat-surface ${mode === "workspace" ? "ct-chat-docked" : ""}${dockRail ? " is-rail" : ""}`}
             aria-label="Screening assistant"
             inert={mode === "workspace" && (compact || dockRail)}
@@ -1364,7 +1368,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
               previewFile={previewLocalFile}
               onBusyChange={setBusy}
             />
-          </section>
+          </section>}
           {dockRail && <DockRail busy={chatBusy} onOpen={dock.open} />}
           {preview && (
             <aside className="ct-pdf-pane" aria-label="Document preview">
