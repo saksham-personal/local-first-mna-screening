@@ -597,13 +597,46 @@ impl WorkflowService {
         if step.kind != ActionKind::BingResearch {
             return Err(Error::Validation("Step must be bing_research".into()));
         }
-        let ids = self.scope(&step, &args.company_ids, 500)?;
+        if args.company_ids.is_empty() || args.company_ids.len() > 500 {
+            return Err(Error::Validation(
+                "company_ids requires 1..=500 entries".into(),
+            ));
+        }
+        let approved: HashSet<&str> = step.company_ids.iter().map(String::as_str).collect();
+        let ids = if args
+            .company_ids
+            .iter()
+            .all(|id| approved.contains(id.as_str()))
+        {
+            args.company_ids.clone()
+        } else {
+            // Preserve typed/alias identity bridges without resolving the entire
+            // approved scope once for every requested company.
+            let approved = step
+                .company_ids
+                .iter()
+                .map(|id| self.store.resolve_company_id(id))
+                .collect::<Result<HashSet<_>>>()?;
+            let ids = args
+                .company_ids
+                .iter()
+                .map(|id| self.store.resolve_company_id(id))
+                .collect::<Result<Vec<_>>>()?;
+            if ids.iter().any(|id| !approved.contains(id)) {
+                return Err(Error::Validation(
+                    "Company is outside the approved step".into(),
+                ));
+            }
+            ids
+        };
         // Bing only needs name and website. Hydrating evidence and assessments for
         // every company made a single batch perform hundreds of redundant reads.
         let identities = self.store.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT c.company_id,COALESCE(NULLIF(TRIM(e.pb_name),''),c.name),COALESCE(NULLIF(TRIM(e.pb_website),''),c.website,'')
-                 FROM json_each(?1) ids JOIN companies c ON c.company_id=ids.value
+                 FROM json_each(?1) ids LEFT JOIN companies direct ON direct.company_id=ids.value
+                 LEFT JOIN company_identifiers alias ON direct.company_id IS NULL AND alias.kind='PK' AND alias.identifier=ids.value
+                 JOIN companies c ON c.company_id=COALESCE(direct.company_id,alias.company_id)
                  JOIN candidates x ON x.company_id=c.company_id AND x.run_id=?2
                  LEFT JOIN company_enrichment e ON e.company_id=c.company_id ORDER BY CAST(ids.key AS INTEGER)",
             )?;
@@ -613,6 +646,9 @@ impl WorkflowService {
             if rows.len() != ids.len() {
                 return Err(Error::NotFound("A company is not a candidate in this run".into()));
             }
+            if rows.iter().map(|(id, _, _)| id).collect::<HashSet<_>>().len() != rows.len() {
+                return Err(Error::Validation("Duplicate company_ids".into()));
+            }
             Ok(rows)
         })?;
         fn expand(template: &str, name: &str, website: &str) -> String {
@@ -620,11 +656,18 @@ impl WorkflowService {
             let mut rest = template;
             while !rest.is_empty() {
                 let token = [("{company}", name), ("{website}", website)]
-                    .into_iter().find(|(key, _)| rest.get(..key.len()).is_some_and(|v| v.eq_ignore_ascii_case(key)));
+                    .into_iter()
+                    .find(|(key, _)| {
+                        rest.get(..key.len())
+                            .is_some_and(|v| v.eq_ignore_ascii_case(key))
+                    });
                 if let Some((key, value)) = token {
                     out.push_str(value);
                     rest = &rest[key.len()..];
-                } else if rest.get(..9).is_some_and(|v| v.eq_ignore_ascii_case("<company>")) {
+                } else if rest
+                    .get(..9)
+                    .is_some_and(|v| v.eq_ignore_ascii_case("<company>"))
+                {
                     out.push_str(name);
                     out.push_str("; ");
                     out.push_str(website);

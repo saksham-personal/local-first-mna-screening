@@ -80,13 +80,39 @@ export async function previewScreening(
   sessionId: string,
   runId: string | undefined,
   config: ScreeningConfig,
-): Promise<ScreeningPreview> {
+): Promise<SetupBuild> {
   return (
-    await request<{ preview: ScreeningPreview }>(sessionId, "preview", {
+    await request<{ build: SetupBuild }>(sessionId, "preview", {
+      sessionId,
       runId,
       config,
     })
-  ).preview;
+  ).build;
+}
+
+export type SetupBuild = {
+  id: string; sessionId?: string; runId?: string; provider: ScreeningConfig["provider"];
+  config: ScreeningConfig; status: "building" | "ready" | "error" | "approved";
+  completed: number; total: number; preview: ScreeningPreview; error?: string; startedAt: string;
+  catalog?: ScreeningCatalog;
+};
+export const hasPitchBookData = (catalog: ScreeningCatalog) => catalog.sources.some(source => source.source === "PB" && source.hydrated && source.companyCount > 0);
+export async function listSetupBuilds(): Promise<SetupBuild[]> {
+  const response = await fetch("/api/screening/list", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? "Input table activity is unavailable.");
+  return body.builds;
+}
+const recordedBuilds = new Set<string>();
+export async function getSetupBuild(sessionId: string, id: string): Promise<SetupBuild> {
+  const response = await fetch("/api/screening/build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? "Input table preparation is unavailable.");
+  if (body.build.status !== "building" && !recordedBuilds.has(id)) {
+    recordCalls(sessionId, body.calls ?? []);
+    recordedBuilds.add(id);
+  }
+  return body.build;
 }
 export async function approveScreening(
   sessionId: string,

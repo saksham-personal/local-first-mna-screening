@@ -28,6 +28,7 @@ import type {
   ScreeningProvider,
 } from "../lib/screening-contract";
 import { defaultScreeningConfig } from "../lib/screening-data";
+import { hasPitchBookData, type SetupBuild } from "../lib/screening-client";
 import HelpTip from "../ui/HelpTip";
 import { plural } from "../lib/format";
 import ColumnChips from "./ColumnChips";
@@ -50,6 +51,8 @@ type Props = {
   onBuildPrompt?: (config: ScreeningConfig) => Promise<string>;
   onGeneratePrompt?: (config: ScreeningConfig) => Promise<{ executed: boolean; text?: string; message?: string }>;
   onClose: () => void;
+  build?: SetupBuild;
+  onInvalidateBuild?: () => void;
 };
 
 const SOURCES: DataSource[] = ["MID", "ISCC", "PB", "ROGO", "RESULTS", "BING"];
@@ -119,8 +122,11 @@ export default function ScreeningSetup({
   onBuildPrompt,
   onGeneratePrompt,
   onClose,
+  build,
+  onInvalidateBuild,
 }: Props) {
   const headingId = useId();
+  const offerLinkedIn = hasPitchBookData(catalog);
   const keepLinkedIn = provider === "copilot" && catalog.sources.some(source => source.source === "PB" && source.fields.some(field => /linkedin/i.test(field.id) && field.count > 0));
   const [config, setConfig] = useState<ScreeningConfig>(() => {
     const config = normalized(
@@ -134,6 +140,7 @@ export default function ScreeningSetup({
     );
     if (!initialConfig) config.inputColumns = [...config.inputColumns, ...catalog.sources.filter(source => source.source === "BING" || source.source === "RESULTS").flatMap(source => source.fields.map(field => field.id))];
     if (keepLinkedIn && !config.inputColumns.includes("LinkedIn URL")) config.inputColumns.push("LinkedIn URL");
+    if (!offerLinkedIn) config.inputColumns = config.inputColumns.filter(column => column !== "LinkedIn URL");
     return config;
   });
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -160,6 +167,7 @@ export default function ScreeningSetup({
   const catalogSignature = JSON.stringify(catalog);
 
   const edit = (next: ScreeningConfig) => {
+    onInvalidateBuild?.();
     if (keepLinkedIn && !next.inputColumns.includes("LinkedIn URL")) next = { ...next, inputColumns: [...next.inputColumns, "LinkedIn URL"] };
     version.current += 1;
     setConfig(normalized(next));
@@ -172,6 +180,11 @@ export default function ScreeningSetup({
     setPreview(null);
     if (keepLinkedIn) setConfig(current => current.inputColumns.includes("LinkedIn URL") ? current : { ...current, inputColumns: [...current.inputColumns, "LinkedIn URL"] });
   }, [catalogSignature]);
+
+  useEffect(() => {
+    if (build?.status === "ready") setPreview({ value: build.preview, version: version.current });
+    if (build?.status === "error") setError(build.error ?? "Input table preparation failed. Rebuild input table.");
+  }, [build]);
 
   // The prompt text is generated from the criteria, examples, columns and request. A manual edit is
   // never replaced automatically: only the analyst's "Rebuild from criteria" (or the AI button) does that.
@@ -191,6 +204,7 @@ export default function ScreeningSetup({
       const prompt = await onBuildPrompt(normalized(configRef.current));
       if (token !== buildToken.current) return;
       promptEdited.current = false;
+      onInvalidateBuild?.();
       version.current += 1;
       setPreview(null);
       setConfig((current) => normalized({ ...current, prompt }));
@@ -295,6 +309,8 @@ export default function ScreeningSetup({
       onClose();
     } catch (caught) {
       setError(errorMessage(caught));
+      setPreview(null);
+      onInvalidateBuild?.();
       setApproving(false);
     }
   };
@@ -334,7 +350,8 @@ export default function ScreeningSetup({
 
   const providerLabel = provider === "llm_suite" ? "LLM Suite" : "M365 Copilot";
   const validPreview =
-    preview?.version === version.current ? preview.value : null;
+    preview?.version === version.current && preview.value.fingerprint ? preview.value : null;
+  const samplePreview = validPreview ?? (build?.status === "building" ? build.preview : null);
   const batches = Math.max(
     config.mode === "question" ? 1 : 0,
     Math.ceil(catalog.total / config.batchSize),
@@ -524,43 +541,44 @@ export default function ScreeningSetup({
                   type="button"
                   className="ss-secondary"
                   onClick={runPreview}
-                  disabled={busy || uploading || buildingPrompt}
+                  disabled={busy || uploading || buildingPrompt || build?.status === "building"}
                 >
                   {previewing ? (
                     <>
                       <LoaderCircle className="ss-spin" size={15} /> Preparing…
                     </>
                   ) : (
-                    "Generate preview"
+                    build?.status === "building" ? "Building input table…" : preview || error ? "Rebuild input table" : "Prepare"
                   )}
                 </button>
               </div>
-              {validPreview ? (
+              {samplePreview ? (
                 <>
                   <div className="ss-preview-meta">
                     <span>
-                      <Check size={14} /> Current preview
+                      <Check size={14} /> {validPreview ? `Frozen input table · ${validPreview.fingerprint.slice(0, 12)}` : "Building input table… You can close setup and review it from Activity."}
                     </span>
                     <span>
-                      {validPreview.companyCount
-                        ? plural(validPreview.companyCount, "company", "companies")
+                      {samplePreview.companyCount
+                        ? plural(samplePreview.companyCount, "company", "companies")
                         : "General question"}{" "}
-                      · {plural(validPreview.batches, "batch", "batches")}
+                      · {plural(samplePreview.batches, "batch", "batches")}
                       {provider === "llm_suite" &&
-                        validPreview.estimatedMinimumMinutes > 0 &&
-                        ` · request time at least ${plural(validPreview.estimatedMinimumMinutes, "minute", "minutes")}`}
+                        samplePreview.estimatedMinimumMinutes > 0 &&
+                        ` · request time at least ${plural(samplePreview.estimatedMinimumMinutes, "minute", "minutes")}`}
                     </span>
                   </div>
-                  {validPreview.warnings.filter((warning) => !(/\b(?:PBId|LinkedIn)\b.*\b(?:blank|missing|empty|unavailable)\b|\b(?:blank|missing|empty|unavailable)\b.*\b(?:PBId|LinkedIn)\b/i.test(warning))).map((warning, index) => (
+                  {samplePreview.warnings.filter((warning) => !(/\b(?:PBId|LinkedIn)\b.*\b(?:blank|missing|empty|unavailable)\b|\b(?:blank|missing|empty|unavailable)\b.*\b(?:PBId|LinkedIn)\b/i.test(warning))).map((warning, index) => (
                     <p className="ss-warning" key={`${index}-${warning}`}>
                       {warning}
                     </p>
                   ))}
+                  <details><summary>Prompt preview</summary><textarea className="ss-prompt" readOnly rows={5} value={samplePreview.prompt} aria-label="Prepared prompt preview" /></details>
                   <div className="ss-table-wrap">
                     <table>
                       <thead>
                         <tr>
-                          {validPreview.columns.map((column) => (
+                          {samplePreview.columns.map((column) => (
                             <th key={column} scope="col">
                               {column}
                             </th>
@@ -568,9 +586,9 @@ export default function ScreeningSetup({
                         </tr>
                       </thead>
                       <tbody>
-                        {validPreview.rows.map((row, index) => (
+                        {samplePreview.rows.map((row, index) => (
                           <tr key={index}>
-                            {validPreview.columns.map((column) => (
+                            {samplePreview.columns.map((column) => (
                               <td key={column}>{row[column] ?? ""}</td>
                             ))}
                           </tr>
@@ -578,7 +596,7 @@ export default function ScreeningSetup({
                       </tbody>
                     </table>
                   </div>
-                  {validPreview.rows.length === 0 && (
+                  {samplePreview.rows.length === 0 && (
                     <p className="ss-empty">
                       No sample rows are available for the selected inputs.
                     </p>
@@ -586,8 +604,7 @@ export default function ScreeningSetup({
                 </>
               ) : (
                 <div className="ss-empty">
-                  Generate a preview to inspect actual source values and unlock
-                  approval.
+                  Prepare to count companies and build the input table in Activity. Review the frozen table before approval.
                 </div>
               )}
               {error && (
@@ -705,7 +722,7 @@ export default function ScreeningSetup({
                     <fieldset className="ss-fieldset">
                       <legend>Raw fields</legend>
                       <div className="ss-field-list">
-                        {selectedSource?.fields.map((field) => (
+                        {selectedSource?.fields.filter(field => offerLinkedIn || !/linkedin/i.test(field.id)).map((field) => (
                           <label key={field.id} className="ss-field-option">
                             <input
                               type="checkbox"
@@ -732,6 +749,7 @@ export default function ScreeningSetup({
                   )}
                   <fieldset className="ss-fieldset">
                     <legend>Company details <HelpTip label="How company details are built">Name and website use the first available PB, MID, then ISCC value. Descriptions combine selected sources in that order and label each source.</HelpTip></legend>
+                    {offerLinkedIn && <label className="ss-field-option"><input type="checkbox" checked={config.inputColumns.includes("LinkedIn URL")} disabled={keepLinkedIn} onChange={() => toggleInput("LinkedIn URL")} /><span>LinkedIn URL · PitchBook</span></label>}
                     <div className="ss-identity-grid">
                       {IDENTITY_LABELS.map(({ key, label }) => (
                         <div key={key}>

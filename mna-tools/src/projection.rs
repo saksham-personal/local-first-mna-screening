@@ -130,7 +130,13 @@ pub fn description_lines(
     iscc: &Value,
     identity: &IdentitySources,
 ) -> (Vec<(&'static str, String)>, bool) {
-    description_lines_with_columns(pb, mid, iscc, identity, &["Description", "Business Description", "Company Description"])
+    description_lines_with_columns(
+        pb,
+        mid,
+        iscc,
+        identity,
+        &["Description", "Business Description", "Company Description"],
+    )
 }
 
 fn description_lines_with_columns(
@@ -141,7 +147,10 @@ fn description_lines_with_columns(
     mid_columns: &[&str],
 ) -> (Vec<(&'static str, String)>, bool) {
     fn joined(source: &Value, columns: &[&str]) -> Option<String> {
-        let values = columns.iter().filter_map(|column| text_field(source, &[*column])).collect::<Vec<_>>();
+        let values = columns
+            .iter()
+            .filter_map(|column| text_field(source, &[*column]))
+            .collect::<Vec<_>>();
         (!values.is_empty()).then(|| values.join("; "))
     }
     let mut lines = Vec::new();
@@ -156,11 +165,25 @@ fn description_lines_with_columns(
         }
     }
     if identity.description.iter().any(|s| s == "ISCC") {
-        let text = joined(iscc, &["Company Description", "Pitchbook Description", "Factset Description",
-            "Demandbase Description", "Dealogic Description", "Offerings", "Pitchbook Keywords", "NAICS Description"])
-            .or_else(|| text_field(iscc, &["Description", "Business Description"]));
+        let text = joined(
+            iscc,
+            &[
+                "Company Description",
+                "Pitchbook Description",
+                "Factset Description",
+                "Demandbase Description",
+                "Dealogic Description",
+                "Offerings",
+                "Pitchbook Keywords",
+                "NAICS Description",
+            ],
+        )
+        .or_else(|| text_field(iscc, &["Description", "Business Description"]));
         if let Some(text) = text {
-            if !lines.iter().any(|(label, existing)| *label == MID_DESCRIPTION_LABEL && existing.trim().to_lowercase() == text.trim().to_lowercase()) {
+            if !lines.iter().any(|(label, existing)| {
+                *label == MID_DESCRIPTION_LABEL
+                    && existing.trim().to_lowercase() == text.trim().to_lowercase()
+            }) {
                 lines.push((ISCC_DESCRIPTION_LABEL, text));
             }
         }
@@ -414,13 +437,21 @@ pub fn snapshot_selected(
         .map(|s| (*s).to_owned())
         .collect();
     input_columns.extend(source_fields.iter().map(|(_, _, alias)| alias.clone()));
-    let active_config: Option<String> = connection.query_row(
-        "SELECT config_json FROM mid_bundles WHERE status='active'", [], |r| r.get(0),
-    ).optional()?;
+    let active_config: Option<String> = connection
+        .query_row(
+            "SELECT config_json FROM mid_bundles WHERE status='active'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
     let mid_columns: Vec<String> = if let Some(raw_config) = active_config {
         serde_json::from_str::<crate::mid_config::MidIndexConfig>(&raw_config)?.description_columns
     } else {
-        vec!["Description".into(), "Business Description".into(), "Company Description".into()]
+        vec![
+            "Description".into(),
+            "Business Description".into(),
+            "Company Description".into(),
+        ]
     };
     let mid_column_refs = mid_columns.iter().map(String::as_str).collect::<Vec<_>>();
     let mut rows = Vec::new();
@@ -457,7 +488,8 @@ pub fn snapshot_selected(
             &identity.website,
             &["PB_Website", "Website", "Websites", "Company Website"],
         );
-        let (mut descriptions, legacy_sources) = description_lines_with_columns(pb, mid, iscc, identity, &mid_column_refs);
+        let (mut descriptions, legacy_sources) =
+            description_lines_with_columns(pb, mid, iscc, identity, &mid_column_refs);
         let linkedin =
             text_field(pb, &["PB_LinkedIn URL", "LinkedIn URL"]).filter(|v| valid_pb_linkedin(v));
         if linkedin.is_some() {

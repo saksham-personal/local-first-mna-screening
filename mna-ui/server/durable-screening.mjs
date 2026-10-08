@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { buildCatalog, validateConfig } from "../shared/screening.mjs";
+import { buildCatalog, validateConfig, projectRows } from "../shared/screening.mjs";
 
 const MAX_PREVIEWS = 4;
 const PREVIEW_TTL = 15 * 60_000;
@@ -13,6 +13,8 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
   process.env[provider === "llm_suite" ? "MNA_LLMSUITE_DEPLOYMENT" : "MNA_M365_DEPLOYMENT"] ?? "" }) {
   const previews = new Map();
   const approvals = new Map();
+  const catalogs = new Map();
+  const builds = new Map();
 
   function runId(value) {
     if (value == null || value === "") return undefined;
@@ -48,7 +50,8 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
         approved: result.approved ?? result.status === "APPROVED",
         executed: result.executed,
       };
-      traces.push({ tool, args, result: summary, startedAt,
+      const traceArgs = tool === "propose_prepared_plan" ? { ...args, company_ids: undefined, company_count: args.company_ids.length } : args;
+      traces.push({ tool, args: traceArgs, result: summary, startedAt,
         finishedAt: new Date(now()).toISOString(), status: "success" });
       return result;
     } catch (error) {
@@ -58,7 +61,7 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
     }
   };
 
-  async function sourceSnapshot(id, traced) {
+  async function sourceSnapshot(id, traced, progress = () => {}) {
     if (!id) return { rows: [], catalog: buildCatalog([]) };
     const rows = [];
     let cursor, total, size = 100, bytes = 0;
@@ -90,6 +93,7 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
           throw new Error("This local setup exceeds the 64 MB preparation limit. A streaming preparation service is needed for this scope; no companies were removed.");
         rows.push(row);
       }
+      progress(rows.length, total);
       const next = page.next_cursor || undefined;
       if (next && (next === cursor || !page.rows.length))
         throw new Error("The source reader did not advance its cursor.");
@@ -138,9 +142,30 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
     const calls = [];
     try {
       const id = runId(input.runId);
-      const data = await sourceSnapshot(id, traceCall(calls, signal));
+      const traced = traceCall(calls, signal);
+      const page = id ? await traced("get_candidate_source_data", { run_id: id, limit: 5 }) : { rows: [], total: 0 };
+      const context = id ? await traced("get_shortlist_context", { run_id: id, include_hidden: false, limit: 1 }) : { considered_count: 0, coverage: {} };
+      const data = { rows: page.rows, catalog: buildCatalog(page.rows), expires: now() + PREVIEW_TTL };
+      data.catalog.total = context.considered_count;
+      // Coverage is run-wide: hydration need not be in the five sampled companies.
+      for (const source of data.catalog.sources) if (Number.isSafeInteger(context.coverage?.[source.source])) {
+        source.companyCount = context.coverage[source.source];
+        source.hydrated = source.companyCount > 0;
+      }
+      catalogs.set(id, data);
       return { catalog: data.catalog, calls };
     } catch (error) { error.calls = calls; throw error; }
+  }
+
+  const view = (job) => ({ id: job.id, sessionId: job.sessionId, runId: job.requestedRunId,
+    provider: job.config.provider, config: job.config, status: job.status, completed: job.completed,
+    total: job.total, preview: job.preview, error: job.error, startedAt: job.startedAt });
+
+  function list() { return { builds: [...builds.values()].map(view) }; }
+  function build(input) {
+    const job = builds.get(input.id);
+    if (!job) throw new Error("Input table preparation is unavailable. Prepare again.");
+    return { build: { ...view(job), ...(job.catalog ? { catalog: job.catalog } : {}) }, calls: job.status === "building" ? [] : job.calls };
   }
 
   async function preview(input, signal) {
@@ -148,9 +173,11 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
     try {
       const requestedRunId = runId(input.runId);
       let id = requestedRunId;
-      let data = await sourceSnapshot(id, traceCall(calls, signal));
+      let data = catalogs.get(id);
+      if (!data || data.expires <= now()) throw new Error("Source choices expired. Close and reopen setup before preparing.");
+      const context = id ? await traceCall(calls, signal)("get_shortlist_context", { run_id: id, include_hidden: false, limit: 1 }) : { considered_count: 0 };
       const config = validateConfig(input.config, data.catalog);
-      if (config.mode === "screening" && (!id || !data.rows.length))
+      if (config.mode === "screening" && (!id || !context.considered_count))
         throw new Error("Choose an approved screening run with companies before preparing scored screening.");
       if (!id) {
         id = `QUESTION-${randomUUID()}`;
@@ -160,19 +187,44 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
           original_criteria: { question: config.prompt, mode: "question" },
         }, true);
       }
+      for (const [key, job] of builds) if (job.status !== "building" && job.expires <= now()) builds.delete(key);
+      if ([...builds.values()].filter(job => job.status === "building").length >= MAX_PREVIEWS)
+        throw new Error("Wait for an input table to finish before preparing another.");
+      const batches = Math.max(1, Math.ceil(context.considered_count / config.batchSize));
+      const job = { id: randomUUID(), sessionId: input.sessionId, requestedRunId, runId: id, config,
+        status: "building", completed: 0, total: context.considered_count, calls: [], expires: now() + PREVIEW_TTL,
+        startedAt: new Date(now()).toISOString(), preview: {
+          columns: config.inputColumns, rows: projectRows(data.rows.slice(0, 5), config), prompt: config.prompt,
+          outputColumns: config.outputColumns, companyCount: context.considered_count, batches,
+          estimatedMinimumMinutes: config.provider === "llm_suite" ? Math.floor((batches - 1) / 7) : 0,
+          fingerprint: "", warnings: [],
+        } };
+      builds.set(job.id, job);
+      // This work belongs to the Activity job, not to the dialog HTTP request.
+      setImmediate(() => void freeze(job));
+      return { preview: job.preview, build: view(job), calls };
+    } catch (error) { error.calls = calls; throw error; }
+  }
+
+  async function freeze(job) {
+    try {
+      const { config, runId: id, requestedRunId } = job;
+      const data = requestedRunId ? await sourceSnapshot(id, traceCall(job.calls), (completed, total) => { job.completed = completed; job.total = total; }) : { rows: [], catalog: buildCatalog([]) };
+      validateConfig(config, data.catalog);
       const args = rustArgs(config, id, data.rows);
-      const proposed = await traceCall(calls, signal)("propose_prepared_plan", args);
+      const proposed = await traceCall(job.calls)("propose_prepared_plan", args);
       if (!proposed || typeof proposed.plan_id !== "string" || typeof proposed.digest !== "string" ||
           proposed.status !== "PROPOSED" || proposed.executed !== false || !proposed.snapshot ||
           !Array.isArray(proposed.snapshot.rows))
         throw new Error("The screening service returned an invalid immutable prepared plan.");
       const frozenRows = proposed.snapshot.rows;
       const columns = ["index", ...config.inputColumns.filter((column) => column !== "index")];
-      const rows = frozenRows.slice(0, 4).map((row, offset) => Object.fromEntries(
+      const rows = frozenRows.slice(0, 5).map((row, offset) => Object.fromEntries(
         columns.map((column) => [column, column === "index" ? (row.index ?? offset + 1) : row[column] ?? ""]),
       ));
       const batches = Math.max(1, Math.ceil(frozenRows.length / config.batchSize));
       const warnings = [];
+      if (frozenRows.length !== job.preview.companyCount) warnings.push(`Company count changed since Prepare: ${job.preview.companyCount} → ${frozenRows.length}. Review this frozen table before approving.`);
       if (!frozenRows.length) warnings.push("No company list is selected. This will be a single general question, without company results.");
       const publicPreview = {
         columns, rows, prompt: proposed.snapshot.compiled_prompt ?? config.prompt, outputColumns: config.outputColumns,
@@ -184,8 +236,11 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
       while (previews.size >= MAX_PREVIEWS) previews.delete(previews.keys().next().value);
       previews.set(proposed.digest, { planId: proposed.plan_id, runId: id, requestedRunId, args, config, catalog: data.catalog,
         preview: publicPreview, expires: now() + PREVIEW_TTL });
-      return { preview: publicPreview, calls };
-    } catch (error) { error.calls = calls; throw error; }
+      job.preview = publicPreview; job.total = frozenRows.length; job.completed = frozenRows.length;
+      job.catalog = data.catalog;
+      catalogs.set(requestedRunId, { ...data, rows: data.rows.slice(0, 5), expires: now() + PREVIEW_TTL });
+      job.status = "ready"; job.expires = now() + PREVIEW_TTL;
+    } catch (error) { job.status = "error"; job.error = error.message ?? String(error); }
   }
 
   async function approve(input, signal) {
@@ -222,11 +277,12 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
           status: "prepared", executed: false, config: { ...config, model: cached.args.deployment }, fingerprint: approved.digest,
           savedAt: new Date(now()).toISOString(), jobs: approved.jobs ?? [],
         };
+        for (const job of builds.values()) if (job.preview.fingerprint === input.fingerprint) job.status = "approved";
         return { prepared, calls };
       })();
       approvals.set(input.fingerprint, pending);
       try { return await pending; } catch (error) { approvals.delete(input.fingerprint); throw error; }
     } catch (error) { error.calls = calls; throw error; }
   }
-  return { catalog, preview, approve };
+  return { catalog, preview, approve, list, build };
 }

@@ -1,10 +1,11 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ClipboardEvent } from "react";
 import { Dialog } from "radix-ui";
 import { Check, LoaderCircle, Plus, Sparkles, X } from "lucide-react";
 import type { Company } from "../lib/contracts";
 import HelpTip from "../ui/HelpTip";
 import { plural } from "../lib/format";
+import { cancelBingResearch, getResearchProgress, subscribeResearch } from "../lib/research-client";
 import "./bing-research.css";
 
 type PreviewResult = {
@@ -52,12 +53,13 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
   const [includeInCriteria, setIncludeInCriteria] = useState(false);
   const [runNotice, setRunNotice] = useState<{ executed: boolean; message: string } | null>(null);
   const requestVersion = useRef(0);
-  const companyIds = useMemo(() => companies.map((company) => company.pk), [companies]);
+  const [progress, setProgress] = useState<{ processed: number; total: number }>();
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => subscribeResearch(() => { if (preview) setProgress(getResearchProgress(preview.token)); }), [preview]);
   const validQueryCount = queries.length >= 1 && queries.length <= 5 && queries.every((query) => query.trim());
   const validTemplates = mode !== "company" || queries.every((query) => /(\{company\}|\{website\}|<company>)/i.test(query));
-  const expectedCount = mode === "company" ? queries.length * companies.length : queries.length;
   const previewCount = preview?.queryCount ?? preview?.queries.length ?? 0;
-  const validPreview = Boolean(preview && preview.executed === false && previewCount === expectedCount && preview.queries.length <= 20 && expectedCount > 0);
+  const validPreview = Boolean(preview && preview.executed === false && previewCount > 0 && preview.queries.length === queries.length);
   const canPreview = !busy && validQueryCount && validTemplates && (mode === "general" || companies.length > 0);
 
   const invalidate = () => { requestVersion.current += 1; setPreview(null); setRunNotice(null); setError(""); setNotice(""); };
@@ -72,13 +74,10 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
     const current = ++requestVersion.current;
     setBusy(true); setError(""); setPreview(null); setRunNotice(null);
     try {
-      const result = await onPreview({ mode, queries: [...queries], companyIds: mode === "company" ? [...companyIds] : [] });
+      const result = await onPreview({ mode, queries: [...queries], companyIds: [] });
       if (current !== requestVersion.current) return;
       if (result.executed !== false) throw new Error("Preview must not execute research or send queries.");
-      const count = result.queryCount ?? result.queries.length;
-      if (count !== expectedCount) throw new Error(`Preview returned ${count} requests; expected ${expectedCount}.`);
-      if (mode === "company" && result.companyCount !== undefined && result.companyCount !== companies.length) throw new Error(`Preview considered ${result.companyCount} companies; expected ${companies.length}.`);
-      if (result.queries.length > 20) throw new Error("Preview returned more than 20 sample queries.");
+      if (result.queries.length !== queries.length || result.queries.some((item, index) => item.query !== queries[index])) throw new Error("Preview returned changed query templates.");
       setPreview(result);
     } catch (caught) { if (current === requestVersion.current) setError(messageFor(caught)); }
     finally { if (current === requestVersion.current) setBusy(false); }
@@ -98,6 +97,7 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
   const approve = async () => {
     if (!validPreview || busy || !preview) return;
     setBusy(true); setError(""); setRunNotice(null);
+    setStopping(false);
     try { setRunNotice(await onRun(preview.token, { includeInCriteria: mode === "general" && includeInCriteria })); }
     catch (caught) { setError(messageFor(caught)); }
     finally { setBusy(false); }
@@ -116,7 +116,7 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
     <Dialog.Portal>
       <Dialog.Overlay className="brd-overlay" />
       <Dialog.Content className="brd-dialog" aria-labelledby={headingId}>
-        <header className="brd-header"><div><span className="brd-eyebrow">Web research</span><Dialog.Title id={headingId}>Prepare Bing research</Dialog.Title><Dialog.Description>Review the query count and samples before approval.</Dialog.Description></div><Dialog.Close asChild><button className="brd-close" type="button" aria-label="Close research" disabled={busy || generating}><X size={17} /></button></Dialog.Close></header>
+        <header className="brd-header"><div><span className="brd-eyebrow">Web research</span><Dialog.Title id={headingId}>Prepare Bing research</Dialog.Title><Dialog.Description>Review query templates and the company count before approval.</Dialog.Description></div><Dialog.Close asChild><button className="brd-close" type="button" aria-label="Close research" disabled={busy || generating}><X size={17} /></button></Dialog.Close></header>
         <div className="brd-scroll">
           <div className="brd-mode" role="group" aria-label="Research type"><button type="button" className={mode === "company" ? "is-selected" : ""} aria-pressed={mode === "company"} disabled={!companyModeAvailable || busy} onClick={() => updateMode("company")}>Company research</button><button type="button" className={mode === "general" ? "is-selected" : ""} aria-pressed={mode === "general"} disabled={busy} onClick={() => updateMode("general")}>General query</button></div>
           {mode === "company" && <p className="brd-company-count">{plural(companies.length, "company", "companies")} will be included. <HelpTip label="About company research">Only companies still marked considered are included.</HelpTip></p>}
@@ -133,7 +133,8 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
           </section>
           {mode === "general" && <label className="brd-criteria-toggle"><input type="checkbox" checked={includeInCriteria} onChange={(event) => { invalidate(); setIncludeInCriteria(event.target.checked); }} disabled={busy} /><span><strong>Include findings in screening criteria</strong><small>Adds approved research findings to this screening's criteria.</small></span></label>}
           <aside className="brd-source-note"><strong>Source coverage</strong><span>Search results are external leads; coverage is unknown until they are reviewed and matched.</span> <HelpTip label="About source coverage">Research leads need analyst review before they are treated as evidence.</HelpTip></aside>
-          {validPreview && preview && <section className="brd-preview" aria-label="Research preview"><div><Check size={15} aria-hidden="true" /><strong>Preview ready</strong><span>{mode === "company" ? `${plural(preview.companyCount ?? companies.length, "company", "companies")} · ` : ""}{plural(previewCount, "exact query", "exact queries")} · Preview only; no queries sent</span></div><ul>{preview.queries.map((item, index) => <li key={`${item.company_id ?? "general"}-${index}`}><span>{item.company_id ? (companies.find((company) => company.pk === item.company_id)?.name ?? item.company_id) : "General"}</span><code>{item.query}</code></li>)}</ul>{preview.queries.length < previewCount && <small>Showing {plural(preview.queries.length, "query", "queries")} of {plural(previewCount, "query", "queries")}</small>}</section>}
+          {validPreview && preview && <section className="brd-preview" aria-label="Research preview"><div><Check size={15} aria-hidden="true" /><strong>Templates ready</strong><span>{mode === "company" ? `${plural(preview.companyCount ?? companies.length, "company", "companies")} ? ` : ""}{plural(queries.length, "query template")} ? No queries sent</span></div><small>Approval includes the considered companies at that moment. Queries are built when each batch is sent.</small></section>}
+          {busy && preview && <p role="status">{progress ? `${progress.processed.toLocaleString()} of ${progress.total.toLocaleString()} queries processed` : "Saving approved research?"}{stopping ? " ? Stopping after this batch" : connected && <button type="button" className="brd-secondary" onClick={() => { setStopping(true); void cancelBingResearch(preview.token).catch(error => { setStopping(false); setError(messageFor(error)); }); }}>Stop research</button>}</p>}
           {runNotice && <p className={`brd-result${runNotice.executed ? " is-executed" : ""}`} role="status"><strong>{runNotice.executed ? "Research started" : "Research saved"}</strong><span>{runNotice.message}</span></p>}
           {error && <p className="brd-error" role="alert">{error}</p>}
         </div>

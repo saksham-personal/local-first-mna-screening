@@ -17,6 +17,16 @@ export async function previewBingResearch(sessionId: string, input: { mode?: "co
   return request<ResearchPreview>(sessionId, "preview", { ...input, runId: getChatState(sessionId).backendRunId });
 }
 const running = new Set<string>();
+const progress = new Map<string, { processed: number; total: number }>();
+const listeners = new Set<() => void>();
+export const subscribeResearch = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+export const getResearchProgress = (token: string) => progress.get(token);
+export async function cancelBingResearch(token: string) {
+  const response = await fetch("/api/research/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? "Research could not be stopped.");
+  return body;
+}
 export async function runBingResearch(sessionId: string, token: string, options?: { includeInCriteria: boolean }) {
   if (running.has(token)) throw new Error("This research is already running.");
   running.add(token);
@@ -29,6 +39,8 @@ export async function runBingResearch(sessionId: string, token: string, options?
     executed ||= data.executed === true;
     if (data.more && Number(data.processedQueries) <= processed) throw new Error("Research paging did not advance. Retry the saved research.");
     processed = Number(data.processedQueries ?? 0);
+    progress.set(token, { processed, total: data.queryCount });
+    listeners.forEach(listener => listener());
     for (const row of data.rows ?? []) {
       const key = JSON.stringify([row.pk, row.Query, row.URL, row.evidence_id, row.Answer]);
       if (!seen.has(key)) { seen.add(key); rows.push(row); }
@@ -49,5 +61,5 @@ export async function runBingResearch(sessionId: string, token: string, options?
   sessionStore.addEvent({ sessionId, messageId, kind: "message", role: "assistant", origin: "workspace", status: data.executed ? "success" : "error", title: "Bing research", text: data.message, content: [{ type: "text", text: data.message }, { type: "data", name: "screening-artifact", data: { artifactId: artifact.id } }] });
   if (options?.includeInCriteria && executed && rows.length) await addResearchToCriteria(sessionId, rows.slice(0, 30).map(row => `${row.Query}: ${row.Answer ?? row.Excerpt ?? ""}${row.URL ? ` [${row.URL}]` : ""}`).join("\n"), "Analyst-selected general Bing research");
   return { ...data, executed, rows };
-  } finally { running.delete(token); }
+  } finally { running.delete(token); progress.delete(token); listeners.forEach(listener => listener()); }
 }
