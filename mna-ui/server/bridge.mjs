@@ -19,7 +19,7 @@ const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = `http://127.0.0.1:${ports.rust}`;
 const admin = { start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
-const allowed = new Set(['get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
+const allowed = new Set(['get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan', 'get_controller_turns']);
 for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'get_screening_rounds', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_company_detail', 'get_enrichment_report', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
 const simulate = process.env.SCREENING_SIMULATE === '1';
 if (simulate) allowed.add('search_iscc');
@@ -161,6 +161,26 @@ export async function startBridge() {
   const env = { ...process.env, MNA_ENABLE_EXTERNAL: String(externalEnabled), MNA_API_KEY: apiKey, MNA_ANALYST_KEY: analystKey, MNA_CONTROLLER_KEY: controllerKey, MNA_BIND: `127.0.0.1:${ports.rust}`, MNA_DB_PATH: resolve(data, 'screening.db'), MNA_IMPORT_DIR: importRoot, MNA_EXPORT_DIR: resolve(data, 'export'), MNA_ARTIFACT_DIR: resolve(data, 'web') };
   if (simulate) { env.MNA_SIMULATE = '1'; console.log('Simulated providers are ON (dev only). Data is labelled SIMULATED.'); } else { delete env.MNA_SIMULATE; }
   for (const key of Object.keys(env)) if (/(?:OPENAI|ANTHROPIC|AZURE_OPENAI|GOOGLE|GEMINI|COHERE|BING|M365|ISCC|MEILI|LLMSUITE|PROVIDER_(?:URL|ENDPOINT|API_KEY))/i.test(key) && !(externalEnabled && /^MNA_(?:LLMSUITE|M365|BING|ISCC)_/.test(key))) delete env[key];
+  let llmsuiteStub;
+  const stubMode = process.env.SCREENING_LLMSUITE_STUB === '1';
+  if (stubMode) {
+    const stubPort = Number(process.env.SCREENING_LLMSUITE_STUB_PORT || 8875);
+    if (!Number.isInteger(stubPort) || stubPort < 1 || stubPort > 65535) throw new Error('Invalid LLM Suite stub port.');
+    // Stub mode isolates LLM Suite even if real-provider credentials were inherited.
+    for (const key of Object.keys(env)) if (/^MNA_(?:LLMSUITE|BING|M365|ISCC)_/.test(key)) delete env[key];
+    Object.assign(env, { MNA_ENABLE_EXTERNAL: 'true', MNA_LLMSUITE_ENDPOINT: `http://127.0.0.1:${stubPort}/v1/chat`, MNA_LLMSUITE_TOKEN: 'stub', MNA_LLMSUITE_DEPLOYMENT: 'stub-model' });
+    llmsuiteStub = spawn(process.execPath, [resolve(root, 'server/llmsuite-stub.mjs')], { cwd: root, env: { ...env, SCREENING_LLMSUITE_STUB_PORT: String(stubPort), STUB_DEVIATIONS: process.env.STUB_DEVIATIONS || '0' }, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    try {
+      await new Promise((ready, reject) => {
+        const timer = setTimeout(() => reject(new Error('LLM Suite stub did not start.')), 5000);
+        const finish = fn => value => { clearTimeout(timer); fn(value); };
+        llmsuiteStub.once('error', finish(reject));
+        llmsuiteStub.once('exit', finish(() => reject(new Error('LLM Suite stub exited before readiness.'))));
+        llmsuiteStub.once('message', finish(ready));
+      });
+    } catch (error) { llmsuiteStub.kill(); throw error; }
+    console.log('LLM Suite stub is ON (dev only)');
+  }
   // Optional local embedding worker (Arctic-embed-m-v2 ONNX int8) for MID semantic scoring.
   // SCREENING_EMBED_MODEL_DIR points at the unpacked model folder (onnx/model_int8.onnx + tokenizer.json).
   let embedWorker;
@@ -194,7 +214,7 @@ export async function startBridge() {
     await new Promise(resolveWait => setTimeout(resolveWait, 100));
   }
   if (!ready) {
-    rust.kill(); embedWorker?.kill();
+    rust.kill(); embedWorker?.kill(); llmsuiteStub?.kill();
     throw new Error(launchError || `The Rust tool server did not start. Check that port ${ports.rust} is free.`);
   }
 
@@ -210,7 +230,7 @@ export async function startBridge() {
   const screening = createDurableScreeningPreparation({ call, deployment: provider => providerDeployment(provider) });
   const externalReady = (provider) => {
     const prefix = provider === 'llm_suite' ? 'LLMSUITE' : provider === 'copilot' ? 'M365' : 'BING';
-    return externalEnabled && Boolean(env[`MNA_${prefix}_ENDPOINT`] && env[`MNA_${prefix}_TOKEN`]);
+    return (stubMode ? provider === 'llm_suite' : externalEnabled) && Boolean(env[`MNA_${prefix}_ENDPOINT`] && env[`MNA_${prefix}_TOKEN`]);
   };
   // Dev-only simulation answers screening jobs and Bing searches (labelled SIMULATED in Rust);
   // direct provider questions are not simulated, so they keep the real readiness check.
@@ -222,7 +242,7 @@ export async function startBridge() {
     return configured || (simulatedProviders && prefix ? 'simulated' : '');
   };
   const controllerCall = async (tool, args) => {
-    const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry', dispatch_provider_text: '/admin/provider-text' }[tool];
+    const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry', dispatch_provider_text: '/admin/provider-text', run_controller_turn: '/admin/controller-turn' }[tool];
     if (!path) return call(tool, args);
     const response = await fetch(`${rustAddress}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'X-MNA-Controller-Key': controllerKey }, body: JSON.stringify(args) });
     const result = await response.json();
@@ -244,6 +264,11 @@ export async function startBridge() {
       if (await handleIntakeRoute(req, res, url, { respond, body, stagedFiles })) return;
       if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, simulated: simulatedProviders, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
+      if (req.method === 'GET' && url.pathname === '/api/controller/turns') {
+        const runId = url.searchParams.get('runId');
+        if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(runId)) throw new Error('Use a valid screening run ID.');
+        return respond(res, 200, await call('get_controller_turns', { run_id: runId }));
+      }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return respond(res, 200, { jobs: jobs.list() });
       const jobMatch = url.pathname.match(/^\/api\/jobs\/([A-Za-z0-9-]+)$/);
       if (req.method === 'GET' && jobMatch) {
@@ -301,6 +326,11 @@ export async function startBridge() {
       }
       if (req.method !== 'POST' || !req.headers['content-type']?.startsWith('application/json')) return respond(res, 400, { error: 'Use a JSON request.' });
       const input = await body(req);
+      if (url.pathname === '/api/controller/turn') {
+        if (typeof input.sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(input.sessionId) || typeof input.runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(input.runId)) throw new Error('Use valid session and screening run IDs.');
+        if (typeof input.message !== 'string' || !input.message.trim() || [...input.message].length > 4000 || (input.newConversation != null && typeof input.newConversation !== 'boolean')) throw new Error('Use an analyst message of 1..4000 characters and a boolean newConversation.');
+        return respond(res, 200, await controllerCall('run_controller_turn', { run_id: input.runId, analyst_message: input.message, new_conversation: input.newConversation ?? false }));
+      }
       const backgroundMatch = url.pathname.match(/^\/api\/background-runs\/(start|pause|resume|retry|stage)$/);
       if (backgroundMatch) {
         const result = await background[backgroundMatch[1]](input);
@@ -365,8 +395,8 @@ export async function startBridge() {
   try {
     await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(ports.bridge, '127.0.0.1', resolveListen); });
   } catch (error) {
-    rust.kill(); embedWorker?.kill();
+    rust.kill(); embedWorker?.kill(); llmsuiteStub?.kill();
     throw error;
   }
-  return { close: () => { background.close(); server.close(); rust.kill(); embedWorker?.kill(); }, rust, jobs };
+  return { close: () => { background.close(); server.close(); rust.kill(); embedWorker?.kill(); llmsuiteStub?.kill(); }, rust, jobs };
 }
