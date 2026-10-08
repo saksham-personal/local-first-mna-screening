@@ -78,7 +78,7 @@ pub fn iscc_rows(store: &Store, run_id: &str, query: &str) -> Result<Vec<Value>>
     })?;
     // A row without ECID or CID could never merge back to the company.
     companies.retain(|c| c.1.is_some() || c.2.is_some());
-    companies.sort_by_key(|c| (seed(&[query, &c.0]), c.0.clone()));
+    companies.sort_by_cached_key(|c| (seed(&[query, &c.0]), c.0.clone()));
     companies.truncate(600);
     let synthetic = if companies.is_empty() {
         400

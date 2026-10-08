@@ -191,7 +191,13 @@ fn active(store: &Store) -> Result<Bundle> {
         let config: Value = serde_json::from_str(&raw)?;
         let strings = |key: &str| config[key].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
         let typed = |kind: &str| config["column_types"].as_object().into_iter().flatten().filter(|(_,v)| *v == kind).map(|(k,_)|k.clone()).collect();
-        Ok(Bundle { id, index:format!("mid_{fts}"), columns:strings("workbook_columns"), search_columns:strings("search_columns"), categories:typed("category"), numbers:typed("number"), semantic })
+        let mut columns = strings("workbook_columns");
+        if columns.is_empty() {
+            // Bundles built before workbook_columns was recorded: read headers from a sample of rows.
+            let mut stmt = c.prepare("SELECT DISTINCT j.key FROM (SELECT row_json FROM mid_rows WHERE bundle_id=? LIMIT 400) r JOIN json_each(r.row_json) j")?;
+            columns = stmt.query_map([&id], |r| r.get::<_, String>(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+        }
+        Ok(Bundle { id, index:format!("mid_{fts}"), columns, search_columns:strings("search_columns"), categories:typed("category"), numbers:typed("number"), semantic })
     })
 }
 fn export_dir() -> PathBuf {

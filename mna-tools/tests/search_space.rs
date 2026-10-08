@@ -1065,3 +1065,31 @@ fn real_meili_smoke() {
         );
     });
 }
+
+#[test]
+fn older_bundles_without_workbook_columns_list_headers_from_rows() {
+    let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new(5);
+    f.store
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE mid_bundles SET config_json=json_remove(config_json,'$.workbook_columns') WHERE status='active'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let rt = rt();
+    let space = SearchSpace::new(f.store.clone()).unwrap();
+    let page = rt
+        .block_on(space.execute("space_browse", &json!({})))
+        .unwrap();
+    let columns: Vec<&str> = page["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(columns.contains(&"Company"), "{columns:?}");
+    assert!(columns.contains(&"Arbitrary Flag"), "{columns:?}");
+}
