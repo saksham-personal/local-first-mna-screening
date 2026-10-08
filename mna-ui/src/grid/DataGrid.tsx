@@ -607,7 +607,7 @@ export function DataGrid<Row>({
             />
           </div>
         )}
-        <div className="dg-grid-host" role="region" aria-label={`${label} results`}>
+        <div className="dg-grid-host" role="region" aria-label={`${label} results`} style={{ "--dg-header-height": `${70 + (groupHeaders ? 28 : 0)}px` } as CSSProperties}>
           {gridElement}
           {updating && <div className="dg-updating" aria-busy="true"><Skeleton variant="table" rows={8} cols={6} label="Updating companies" /><p role="status"><LoaderCircle className="ui-spin" size={16} />Updating companies, please wait…</p></div>}
         </div>

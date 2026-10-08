@@ -35,8 +35,22 @@ export function catalogColumnSpecs(catalog: GridCatalogColumn[]): GridColumnSpec
       id: column.id, header: column.label, group: groupLabels[column.group], kind: column.type,
       hidden: !column.default_visible, pinned: company ? "left" : undefined,
       width: company ? 250 : descriptionColumn(column.id) ? 280 : 165, minWidth: company ? 210 : 130,
-      value: row => row.values?.[column.id] ?? null,
+      value: row => {
+        if (row.values && Object.hasOwn(row.values, column.id)) return row.values[column.id] ?? null;
+        // The compatibility score keys are cheap and always present, even when a
+        // score column is hidden in the picker but selected in the histogram.
+        if (column.id === "MID Score" || column.id === "MID_Keyword Score") return row.mid_score ?? null;
+        if (semantic) return row.mid_semantic_score ?? null;
+        if (column.id === "ISCC Score" || column.id === "ISCC_Score") return row.iscc_relevancy ?? null;
+        return null;
+      },
       ...(column.type === "score" ? { bucketScheme: unitScore ? { type: "bins" as const, min: 0, max: 1, count: 10 } : semantic ? { type: "bins" as const, min: 0, max: 10, count: 10 } : { type: "integer" as const, min: 0, max: 10 } } : {}),
     };
   });
+}
+
+export function hydrationFlag(value: unknown): boolean | null {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return null;
 }

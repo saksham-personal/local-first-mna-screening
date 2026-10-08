@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { descriptionPreview, descriptionSections } from "../src/workspace/description-content";
-import type { GridDescription } from "../src/lib/grid-client";
+import { descriptionPreview, descriptionSections, withDescriptionValues } from "../src/workspace/description-content";
+import type { GridCatalogColumn, GridCompany, GridDescription } from "../src/lib/grid-client";
+import { catalogColumnSpecs } from "../src/workspace/company-catalog";
+import { filterRows } from "../src/grid/grid-filter";
 
 const mid: GridDescription["sources"][number] = { source: "MID", items: [{ label: "MID_Company Description", text: "MID claims platform" }, { label: "Pitchbook Description:", text: "PB software" }, { label: "Unused", text: " " }] };
 const iscc: GridDescription["sources"][number] = { source: "ISCC", items: [{ label: "Company Description", text: "ISCC insurer software" }, { label: "Unused", text: "-" }] };
@@ -20,4 +22,19 @@ test("preview selects the exact description and source instead of leaking MID in
   assert.equal(descriptionPreview(description, "ISCC_Company Description"), "ISCC insurer software");
   assert.equal(descriptionPreview(description, "Company Description", "iscc"), "ISCC insurer software");
   assert.equal(descriptionPreview(undefined, "Company Description"), undefined);
+  assert.equal(descriptionPreview(description, "ISCC_Missing Description"), undefined);
+});
+
+test("cached page descriptions participate in filters without replacing column definitions", () => {
+  const catalog: GridCatalogColumn[] = [{ id: "ISCC_Company Description", label: "ISCC_Company Description", source: "iscc", group: "iscc", type: "text", default_visible: true }];
+  const columns = catalogColumnSpecs(catalog);
+  const original = { company_id: "one", values: { Company: "One" } } as unknown as GridCompany;
+  assert.equal(withDescriptionValues(original, catalog, undefined), original);
+  const row = withDescriptionValues(original, catalog, { company_id: "one", sources: [mid, iscc] });
+  assert.equal(row.values?.Company, "One");
+  assert.equal(row.values?.[catalog[0].id], "ISCC insurer software");
+  assert.deepEqual(filterRows([row], columns, { quick: "", columns: { [catalog[0].id]: { kind: "text", contains: "insurer" } } }), [row]);
+  assert.deepEqual(original.values, { Company: "One" });
+  const missing = withDescriptionValues(original, catalog, { company_id: "one", sources: [mid] });
+  assert.equal(missing.values?.[catalog[0].id], null);
 });

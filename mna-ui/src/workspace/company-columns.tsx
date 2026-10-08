@@ -2,7 +2,7 @@ import { ExternalLink } from "lucide-react";
 import type { DataGridColumn } from "../grid/DataGrid";
 import type { GridCatalogColumn, GridCompany } from "../lib/grid-client";
 import { KeywordTooltip, ScorePill, SemanticBar } from "./score-cells";
-import { catalogColumnSpecs, descriptionColumn, pageDescriptionColumn } from "./company-catalog";
+import { catalogColumnSpecs, descriptionColumn, hydrationFlag, pageDescriptionColumn } from "./company-catalog";
 import { DescriptionCell } from "./DescriptionTooltip";
 
 function websiteUrl(value: string | null): string | undefined {
@@ -30,7 +30,12 @@ export function buildCompanyColumns(catalog: GridCatalogColumn[]): DataGridColum
     else if (semantic) spec.render = row => <SemanticBar value={spec.value(row) as number | null} />;
     else if (iscc) spec.render = row => <span>{spec.value(row) == null ? "—" : Number(spec.value(row)).toFixed(2)}</span>;
     else if (column.type === "score") spec.render = row => <ScorePill value={spec.value(row)} />;
-    else if (flag) spec.render = row => <span className={`ws-grid-badge ${spec.value(row) === true ? "ws-grid-considered" : "ws-grid-hidden"}`}>{column.id.split("_")[0].toUpperCase()}: {spec.value(row) == null ? "—" : spec.value(row) ? "Available" : "Not available"}</span>;
+    else if (flag) spec.render = row => {
+      const hydrated = hydrationFlag(spec.value(row));
+      return <span className={`ws-grid-badge ${hydrated === true ? "ws-grid-considered" : "ws-grid-hidden"}`}>{column.id.split("_")[0].toUpperCase()}: {hydrated == null ? "—" : hydrated ? "Available" : "Not available"}</span>;
+    };
+    else if (column.id === "considered") spec.render = row => <span className={`ws-grid-badge ${row.considered ? "ws-grid-considered" : "ws-grid-hidden"}`}>{row.considered ? "Considered" : "Hidden"}</span>;
+    else if (column.id === "source") spec.render = row => <span className="ws-grid-badge ws-grid-source">{row.source === "both" ? "MID + ISCC" : row.source ?? "—"}</span>;
     else if (descriptionColumn(column.id)) spec.render = row => <span className="ws-grid-description" title={String(spec.value(row) ?? "")}>{String(spec.value(row) ?? "—")}</span>;
     return spec;
   });

@@ -13,7 +13,7 @@ const DescriptionContext = createContext<DescriptionContextValue | null>(null);
 export function DescriptionCell({ row, columnId, source }: { row: GridCompany; columnId: string; source?: string }) {
   const context = useContext(DescriptionContext);
   const description = context?.cache.get(row.company_id);
-  const text = descriptionPreview(description, columnId, source) ?? row.values?.[columnId] ?? row.description;
+  const text = description ? descriptionPreview(description, columnId, source) : row.values?.[columnId];
   return <span className="ws-grid-description" tabIndex={0}
     onPointerEnter={event => context?.show(row, event.clientX, event.clientY)}
     onPointerMove={event => context?.move(event.clientX, event.clientY)}
@@ -44,7 +44,9 @@ export default function DescriptionTooltip({ cache, error, children }: { cache: 
     clearTimeout(hideTimer.current); setCompany(row); move(x, y);
   }, [move]);
   const hide = useCallback(() => { hideTimer.current = setTimeout(() => setCompany(null), 140); }, []);
-  useLayoutEffect(() => { if (company) position(); }, [company, cache, position]);
+  useLayoutEffect(() => {
+    if (company) { cancelAnimationFrame(frame.current); position(); }
+  }, [company, cache, position]);
   useEffect(() => () => { cancelAnimationFrame(frame.current); clearTimeout(hideTimer.current); }, []);
   const sections = company ? descriptionSections(cache.get(company.company_id)) : [];
   return <DescriptionContext.Provider value={{ cache, error, show, move, hide }}>{children}

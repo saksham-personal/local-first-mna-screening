@@ -55,8 +55,9 @@ import {
 } from "./lib/grid-client";
 import type { DataGridProps } from "./grid/DataGrid";
 import { buildCompanyColumns } from "./workspace/company-columns";
-import { readColumnChoice, requestedCatalogIds, visibleCatalogIds, type ColumnChoice } from "./workspace/company-catalog";
+import { pageDescriptionColumn, readColumnChoice, requestedCatalogIds, visibleCatalogIds, type ColumnChoice } from "./workspace/company-catalog";
 import { loadingProgress } from "./workspace/company-pager";
+import { withDescriptionValues } from "./workspace/description-content";
 import DescriptionTooltip from "./workspace/DescriptionTooltip";
 import { formatTime, plural } from "./lib/format";
 import { emptyFilterState } from "./grid/grid-filter";
@@ -458,7 +459,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
   const descriptionPending = useRef(new Set<string>());
   const [descriptionError, setDescriptionError] = useState("");
   const descriptionBlocked = useRef(false);
-  const catalogByTab = useRef<Partial<Record<CompanyTab, ScreeningGrid["columns"]>>>({});
+  const descriptionSourceHash = useRef<string | undefined>(undefined);
   const filterState = filtersByTab[sourceTab];
   const changeFilters = useCallback((next: FilterState) => setFiltersByTab((current) => ({ ...current, [sourceTab]: next })), [sourceTab]);
   const [columnPreferences, setColumnPreferences] = useState<Partial<Record<CompanyTab, ColumnChoice>>>(() => {
@@ -469,6 +470,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
     return saved;
   });
   const visibleColumnIds = useMemo(() => visibleCatalogIds(catalog, columnPreferences[sourceTab]), [catalog, columnPreferences, sourceTab]);
+  const currentColumnChoice = columnPreferences[sourceTab];
   const changeVisibleColumns = useCallback((visible: string[]) => {
     const next = { visible, known: columns.map((column) => column.id) };
     setColumnPreferences((current) => ({ ...current, [sourceTab]: next }));
@@ -492,8 +494,9 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
   const allRows = gridData?.rows ?? emptyGridRows;
   const hiddenRows = useMemo(() => allRows.filter((row) => !row.considered), [allRows]);
   const rows = useMemo(
-    () => allRows.filter((row) => belongsToTab(row.source, sourceTab) && (showHidden || row.considered)),
-    [allRows, showHidden, sourceTab],
+    () => allRows.filter((row) => belongsToTab(row.source, sourceTab) && (showHidden || row.considered))
+      .map(row => withDescriptionValues(row, catalog, descriptions.get(row.company_id))),
+    [allRows, showHidden, sourceTab, catalog, descriptions],
   );
   const selected = allRows.find((row) => row.company_id === drawerId) ?? null;
   // Refetch when screening/enrichment jobs change state, not on every chat artifact update.
@@ -514,32 +517,37 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
       return null;
     }
     // Refreshes keep the current rows on screen; a first load (or another run) shows the skeleton.
-    if (gridRun.current !== runId) {
-      gridRun.current = runId;
+    if (gridRun.current !== `${runId}:${sourceTab}`) {
+      gridRun.current = `${runId}:${sourceTab}`;
       hasGridData.current = false;
       setGridData(null);
+      descriptionCache.current = new Map(); descriptionSourceHash.current = undefined;
+      setDescriptions(new Map());
     }
     if (!hasGridData.current) setLoading(true);
     else setRefreshing(true);
     setStreaming(false);
-    descriptionCache.current = new Map(); descriptionPending.current = new Set();
+    descriptionPending.current = new Set();
     descriptionBlocked.current = false;
-    setDescriptions(new Map()); setDescriptionError("");
+    setDescriptionError("");
     setGridError("");
     try {
-      // Read the catalog without heavy values the first time this view opens.
+      // Read the current catalog without heavy values, including newly added sources/rounds.
       // Every data page, including page 1, then projects the picker choice.
-      const known = catalogByTab.current[sourceTab] ?? (await fetchScreeningGridPage(state.sessionId, runId, {
+      const known = (await fetchScreeningGridPage(state.sessionId, runId, {
         view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 1, columns: [],
       })).columns;
       if (request !== gridRequest.current) return null;
-      const saved = columnPreferences[sourceTab];
+      const saved = currentColumnChoice;
       let data = await fetchScreeningGridPage(state.sessionId, runId, {
         view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 100,
         columns: requestedCatalogIds(known, saved),
       });
       if (request !== gridRequest.current) return null;
-      catalogByTab.current[sourceTab] = data.columns;
+      if (descriptionSourceHash.current !== data.sourceHash) {
+        descriptionSourceHash.current = data.sourceHash;
+        descriptionCache.current = new Map(); setDescriptions(new Map());
+      }
       hasGridData.current = true;
       setGridData(data); setLoading(false); setRefreshing(false);
       setStreaming(Boolean(data.nextCursor));
@@ -561,7 +569,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
     } finally {
       if (request === gridRequest.current) { setLoading(false); setRefreshing(false); setStreaming(false); }
     }
-  }, [state.backendRunId, state.sessionId, sourceTab, columnPreferences]);
+  }, [state.backendRunId, state.sessionId, sourceTab, currentColumnChoice]);
   useEffect(() => {
     void loadGrid().catch(() => {});
     return () => { ++gridRequest.current; };
@@ -576,12 +584,20 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
       if (request !== gridRequest.current) return;
       for (const item of items) descriptionCache.current.set(item.company_id, item);
       for (const id of ids) if (!descriptionCache.current.has(id)) descriptionCache.current.set(id, { company_id: id, sources: [] });
+      for (const id of ids) descriptionPending.current.delete(id);
       setDescriptions(new Map(descriptionCache.current));
     }).catch(error => {
       if (request !== gridRequest.current) return;
       descriptionBlocked.current = true; setDescriptionError(error instanceof Error ? error.message : String(error));
     }).finally(() => { if (request === gridRequest.current) for (const id of ids) descriptionPending.current.delete(id); });
   }, [state.backendRunId, state.sessionId]);
+  const filteringDescriptions = Boolean(filterState.quick.trim()) || catalog.some(column => pageDescriptionColumn(column) && filterState.columns[column.id]);
+  // A description filter needs more than the visible page. Read bounded batches
+  // in the background; normal browsing only hydrates the page being viewed.
+  useEffect(() => {
+    if (!filteringDescriptions || loading || refreshing || descriptionBlocked.current || descriptionPending.current.size) return;
+    loadDescriptions(allRows.filter(row => !descriptionCache.current.has(row.company_id)).slice(0, 500));
+  }, [filteringDescriptions, allRows, descriptions, loading, refreshing, loadDescriptions]);
   useEffect(() => {
     const visibleIds = new Set(rows.map((row) => row.company_id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
@@ -659,6 +675,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
         </div>
         {loadingProgress(allRows.length, gridData?.total ?? 0, streaming) && <p className="ws-grid-progress" role="status">{loadingProgress(allRows.length, gridData?.total ?? 0, streaming)}</p>}
         {descriptionError && <p className="ws-grid-progress" role="status">Descriptions unavailable: {descriptionError}</p>}
+        {filteringDescriptions && !descriptionError && descriptions.size < allRows.length && <p className="ws-grid-progress" role="status">Loading descriptions · {descriptions.size.toLocaleString()} of {allRows.length.toLocaleString()}</p>}
         <ScoreDistribution key={sourceTab} rows={rows} columns={columns} rounds={rounds} tab={sourceTab} filterState={filterState} onFilterStateChange={changeFilters} loading={loading} />
         <Suspense fallback={<div className="ws-grid-loading"><Skeleton variant="table" rows={8} cols={6} label="Opening companies" /></div>}>
           <DescriptionTooltip cache={descriptions} error={descriptionError}><DataGrid

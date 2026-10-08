@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { catalogColumnSpecs, readColumnChoice, requestedCatalogIds, visibleCatalogIds } from "../src/workspace/company-catalog";
+import { catalogColumnSpecs, hydrationFlag, readColumnChoice, requestedCatalogIds, visibleCatalogIds } from "../src/workspace/company-catalog";
 import type { GridCatalogColumn, GridCompany } from "../src/lib/grid-client";
 
 const catalog: GridCatalogColumn[] = [
@@ -50,4 +50,18 @@ test("projection excludes hidden heavy fields and page descriptions but includes
   assert.deepEqual(requestedCatalogIds(catalog), ["Banker Name", "MID_Keyword Score", "MID_Semantic Score", "ISCC_Score", "Company"]);
   const choice = { visible: ["Company", "pb_description", "MID_Company Description"], known: catalog.map(column => column.id) };
   assert.deepEqual(requestedCatalogIds(catalog, choice), ["pb_description", "Company"]);
+});
+
+test("hydration chips read boolean category strings and keep missing flags null", () => {
+  for (const value of [true, "true"]) assert.equal(hydrationFlag(value), true);
+  for (const value of [false, "false"]) assert.equal(hydrationFlag(value), false);
+  for (const value of [null, undefined, "", "-", "unknown"]) assert.equal(hydrationFlag(value), null);
+});
+
+test("hidden source scores remain available for the metric picker without requesting heavy fields", () => {
+  const specs = catalogColumnSpecs(catalog);
+  const row = { values: {}, mid_score: 0, mid_semantic_score: null, iscc_relevancy: 0.75 } as unknown as GridCompany;
+  assert.equal(specs.find(column => column.id === "MID_Keyword Score")!.value(row), 0);
+  assert.equal(specs.find(column => column.id === "MID_Semantic Score")!.value(row), null);
+  assert.equal(specs.find(column => column.id === "ISCC_Score")!.value(row), 0.75);
 });
