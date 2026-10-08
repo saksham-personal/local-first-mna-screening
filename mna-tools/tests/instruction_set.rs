@@ -1225,3 +1225,33 @@ fn large_generated_inputs_never_panic_and_finish_quickly() {
     eprintln!("large generated inputs parse+convert: {elapsed:?}");
     assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
 }
+
+#[test]
+fn catalog_list_under_context_without_instruction_heading_is_read() {
+    let reply = parse_reply(
+        "## Context
+I will search.
+
+1. search_mid
+2. score_mid_semantic",
+    );
+    assert_eq!(reply.instructions.len(), 2);
+    assert!(reply
+        .warnings
+        .iter()
+        .any(|w| w.contains("without an \"Instruction set\" heading")));
+    let prose = parse_reply(
+        "## Context
+- Find vendors in claims
+- Get the data
+## Instruction set
+1. search_mid",
+    );
+    assert_eq!(prose.instructions.len(), 1);
+    let reasoning = parse_reply(
+        "## Reasoning
+1. search_mid first
+2. score_mid_semantic",
+    );
+    assert!(reasoning.instructions.is_empty());
+}

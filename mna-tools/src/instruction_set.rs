@@ -505,6 +505,7 @@ pub fn parse_reply(text: &str) -> ParsedReply {
     let mut item_indent = 0;
     let mut skipping_instruction = false;
     let mut instructions_capped = false;
+    let mut headless_list_warned = false;
     for line in text.lines() {
         if fence(line.trim()) {
             if let Some(instruction) = &mut current {
@@ -546,10 +547,23 @@ pub fn parse_reply(text: &str) -> ParsedReply {
                 && (if has_instruction_heading {
                     active == Section::Instructions
                 } else {
-                    !explicit_section && recognizable(s, true)
+                    // No instruction heading anywhere: a NUMBERED, strict catalog-named list
+                    // may still sit under Context (models often skip the heading); bullets
+                    // stay context, and Reasoning/Notes never hold instructions.
+                    recognizable(s, true)
+                        && (!explicit_section
+                            || ((active == Section::Context
+                                || (headless_list_warned && active == Section::Instructions))
+                                && line.trim_start().starts_with(|c: char| c.is_ascii_digit())))
                 })
                 && !bullet_field
         });
+        if new_item && !has_instruction_heading && explicit_section && !headless_list_warned {
+            reply.warnings.push(
+                "Instructions were read from a list without an \"Instruction set\" heading".into(),
+            );
+            headless_list_warned = true;
+        }
         if new_item {
             finish_instruction(&mut reply, &mut current, &mut body);
             if reply.instructions.len() >= MAX_INSTRUCTIONS {
