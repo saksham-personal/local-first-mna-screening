@@ -27,8 +27,8 @@ pub struct SearchEngine {
 }
 
 #[derive(Clone)]
-struct MeiliConfig {
-    url: String,
+pub(crate) struct MeiliConfig {
+    pub(crate) url: String,
     api_key: Option<String>,
     index: String,
     embedder: Option<String>,
@@ -1320,7 +1320,15 @@ impl SearchEngine {
         }))
     }
 
-    fn meili_request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+    pub(crate) fn meili_config(&self) -> Option<&MeiliConfig> {
+        self.meili.as_ref()
+    }
+
+    pub(crate) fn meili_request(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+    ) -> reqwest::RequestBuilder {
         let mut request = self.client.request(method, url);
         if let Some(key) = self
             .meili
@@ -1332,7 +1340,7 @@ impl SearchEngine {
         request
     }
 
-    async fn wait_for_meili_tasks(
+    pub(crate) async fn wait_for_meili_tasks(
         &self,
         task_uids: &[Value],
         timeout: Duration,
@@ -1437,14 +1445,21 @@ fn strip_embedding(company: &mut Value) {
     }
 }
 
-async fn meili_json(response: reqwest::Response) -> Result<Value> {
+pub(crate) async fn meili_json(response: reqwest::Response) -> Result<Value> {
+    meili_json_with_limit(response, 16_000_000).await
+}
+
+pub(crate) async fn meili_json_with_limit(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value> {
     let status = response.status();
     if !status.is_success() {
         return Err(Error::ProviderUnavailable(format!(
             "Meilisearch returned HTTP {status}"
         )));
     }
-    let body = crate::providers::read_bounded(response, 16_000_000).await?;
+    let body = crate::providers::read_bounded(response, max_bytes).await?;
     serde_json::from_slice(&body)
         .map_err(|_| Error::ProviderUnavailable("Meilisearch returned invalid JSON".into()))
 }

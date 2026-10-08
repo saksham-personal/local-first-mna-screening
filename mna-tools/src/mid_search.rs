@@ -129,7 +129,7 @@ fn phrase(s: &str) -> Result<String> {
     ))
 }
 #[derive(Debug)]
-enum Expr {
+pub(crate) enum Expr {
     Id(String),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
@@ -198,7 +198,7 @@ impl Parser {
     }
 }
 impl Expr {
-    fn ids(
+    pub(crate) fn ids(
         &self,
         negative: bool,
         positive: &mut BTreeSet<String>,
@@ -222,7 +222,7 @@ impl Expr {
             }
         }
     }
-    fn eval(&self, hits: &BTreeMap<String, BTreeMap<String, f64>>) -> BTreeSet<String> {
+    pub(crate) fn eval(&self, hits: &BTreeMap<String, BTreeMap<String, f64>>) -> BTreeSet<String> {
         match self {
             Self::Id(id) => hits[id].keys().cloned().collect(),
             Self::And(a, b) => a.eval(hits).intersection(&b.eval(hits)).cloned().collect(),
@@ -231,7 +231,7 @@ impl Expr {
         }
     }
 }
-fn expression(s: &str) -> Result<(Expr, Vec<String>)> {
+pub(crate) fn expression(s: &str) -> Result<(Expr, Vec<String>)> {
     if s.chars().count() > 500 {
         return Err(invalid("Expression exceeds 500 characters"));
     }

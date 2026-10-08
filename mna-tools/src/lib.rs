@@ -19,6 +19,7 @@ pub mod retrieval;
 pub mod review;
 pub mod runtime;
 pub mod search;
+pub mod search_space;
 pub mod simulate;
 pub mod source_mapping;
 pub mod store;
