@@ -1,14 +1,15 @@
 # Screening prompt (question)
 
 **ID:** screening-question
-**What it does:** Builds the editable prompt for a direct analyst question sent to LLM Suite or M365 Copilot, optionally answered for every company in the selected list. The approved criteria, examples and deferred conditions are supplied as context only. A general question never creates a screening score.
+**Description:** Build an editable question prompt.
+**What it does:** Asks an analyst question directly or per company. Uses criteria and examples as context without creating a fit score.
+**Context:** The bridge supplies analyst inputs in screening setup; the analyst approves the draft. Send in the continuing LLM Suite screening conversation id or M365 Copilot request.
 **Inputs:** `{{request}}` (required) – the analyst question; `{{definition}}` (optional) – the approved core-business criteria, as context; `{{good_fits}}` (optional) – good-fit examples, one per line; `{{bad_fits}}` (optional) – bad-fit examples, one per line; `{{deferred}}` (optional) – deferred conditions, one per line, context only; `{{input_glossary}}` (optional) – one line per input column explaining what it holds; `{{output_columns}}` (required) – the requested output names after index, comma-separated.
 **Output:** The text of the question prompt. With company rows the model answers with one Markdown table (index plus the requested output columns). Without company rows it answers in Markdown sections, without an index.
-**Supplied to:** LLM Suite and M365 Copilot screening setup in question mode. The bridge renders it (POST /api/prompts/screening-draft) into the editable prompt box. When company rows are supplied the Rust service appends output-contract.md as well.
-**Version:** 1
+**Version:** 2
 
 ===@@=== STARTING ===@@===
-You are helping an M&A team answer an analyst question about companies and their core businesses.
+Answer the analyst's question about companies and their core businesses.
 
 {{#definition}}
 APPROVED CORE-BUSINESS CRITERIA (context)
@@ -37,7 +38,7 @@ Blank cells mean the value is missing, not negative.
 
 {{/input_glossary}}
 TASK
-Answer the analyst question using the supplied context. If company rows are supplied, answer for each company. Otherwise answer the question directly without inventing company rows. A general question does not create a screening score. State uncertainty and do not invent evidence.
+Use the supplied context. Answer each supplied company row, or answer directly when there are no rows. A general question creates no fit score. State uncertainty; do not invent evidence.
 
 ANALYST REQUEST
 {{request}}

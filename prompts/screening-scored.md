@@ -1,14 +1,15 @@
 # Screening prompt (scored)
 
 **ID:** screening-scored
-**What it does:** Builds the editable prompt for a scored LLM Suite or M365 Copilot screening. Each company's core business is judged against the approved criteria, with optional good-fit and bad-fit examples, deferred conditions shown for context only, a glossary of the input columns, the analyst request, the unified score rule, and the index-only Markdown output format.
+**Description:** Build an editable scored screening prompt.
+**What it does:** Scores each company's core business against approved criteria. Includes the shared score rule and strict index-only table shape.
+**Context:** The bridge supplies analyst inputs in screening setup; the analyst approves the draft. Send in the continuing LLM Suite screening conversation id or M365 Copilot request.
 **Inputs:** `{{definition}}` (required) – the approved core-business criteria; `{{good_fits}}` (optional) – good-fit examples, one per line; `{{bad_fits}}` (optional) – bad-fit examples, one per line; `{{deferred}}` (optional) – deferred conditions (geography, size, ownership and similar), one per line, shown for context only; `{{input_glossary}}` (required) – one line per input column explaining what it holds; `{{request}}` (required) – the analyst request; `{{output_columns}}` (required) – the requested output columns after index, comma-separated; `{{score_columns}}` (optional) – the requested score columns, comma-separated; when present the unified score rule is included.
 **Output:** The text of the screening prompt. The model's answer to that prompt is one Markdown table with index plus the requested output columns.
-**Supplied to:** LLM Suite and M365 Copilot screening setup. The bridge renders it (POST /api/prompts/screening-draft) into the editable prompt box. The analyst approves the final text, and the Rust service appends output-contract.md when it prepares the plan.
-**Version:** 1
+**Version:** 2
 
 ===@@=== STARTING ===@@===
-You are helping an M&A team screen companies. Judge each company's core business against the approved criteria below.
+Screen each company's core business against the approved criteria.
 
 APPROVED CORE-BUSINESS CRITERIA
 {{definition}}
@@ -33,7 +34,7 @@ INPUT COLUMNS (one row per company in each batch)
 Blank cells mean the value is missing, not negative.
 
 TASK
-Assess each company's core business against the approved criteria using only the supplied row data. Explain the business reasoning, name the missing evidence, and do not invent facts. Do not filter on financials, size, geography, ownership, or industry codes.
+Use only supplied row data. Explain business fit and missing evidence without inventing facts. Do not filter on financials, size, geography, ownership, or industry codes.
 
 ANALYST REQUEST
 {{request}}
