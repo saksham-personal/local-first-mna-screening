@@ -515,9 +515,21 @@ fn oversized_response_fails_and_garbage_is_stored_with_parser_warnings() {
     f.reply("totally unstructured nonsense");
     let result = f.turn(false).unwrap();
     let turn = &result["turns"][0];
+    assert_eq!(result["turns"].as_array().unwrap().len(), 1);
     assert_eq!(turn["reply_markdown"], "totally unstructured nonsense");
+    assert_eq!(turn["status"], "executed");
     assert!(turn["calls"].as_array().unwrap().is_empty());
-    assert!(!turn["warnings"].as_array().unwrap().is_empty());
+    assert!(turn["instructions"].as_array().unwrap().is_empty());
+    assert!(turn["warnings"].as_array().unwrap().iter().any(|warning| {
+        warning
+            .as_str()
+            .is_some_and(|text| text.starts_with("No instruction set was found in the reply"))
+    }));
+    assert_eq!(turn["feedback_sent"], false);
+    let stored = f.stored();
+    assert_eq!(stored["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(stored["turns"][1], *turn);
+    assert_eq!(f.fake.requests.lock().unwrap().len(), 2);
     assert_eq!(f.count("SELECT COUNT(*) FROM execution_provider_audit"), 2);
 }
 

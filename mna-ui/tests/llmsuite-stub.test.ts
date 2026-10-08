@@ -3,7 +3,6 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 // @ts-expect-error Server-only module is tested through the adapter contract.
 import { createStub } from '../server/llmsuite-stub.mjs';
-// @ts-expect-error Shared prompt loader is JavaScript.
 import { renderPrompt } from '../shared/prompts.mjs';
 
 const guide = ['search_mid', 'score_mid_semantic', 'search_iscc', 'get_discovery_summary', 'get_shortlist_context', 'get_mid_index_status', 'propose_prepared_plan'].map(action => `${action}: permitted action`).join('\n');
