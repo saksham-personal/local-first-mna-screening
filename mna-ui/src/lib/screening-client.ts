@@ -14,6 +14,7 @@ import {
 import { sessionStore } from "./session-store";
 import {
   uploadEnrichmentFiles,
+  callTool,
 } from "./tool-client";
 
 type Trace = {
@@ -193,4 +194,56 @@ export async function fetchScreeningPrompt(
   if (!response.ok || typeof body.prompt !== "string")
     throw new Error(body.error ?? "The prompt could not be generated.");
   return body as ScreeningPromptResult;
+}
+
+export type ExportJob = {
+  export_id: string;
+  run_id: string;
+  kind: "pitchbook" | "llm" | "full";
+  state: "running" | "done" | "failed";
+  rows_done: number;
+  rows_total: number;
+  file?: string;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+};
+const exportRunsKey = "screening-export-runs-v1";
+export const exportJobsEvent = "screening-export-jobs";
+const knownExportRuns = new Set<string>();
+export function exportRunIds(): string[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(exportRunsKey) ?? "[]");
+    if (Array.isArray(saved)) for (const id of saved) if (typeof id === "string") knownExportRuns.add(id);
+  } catch { /* Activity still works when browser storage is disabled. */ }
+  return [...knownExportRuns];
+}
+export function rememberExportRun(runId: string): void {
+  if (exportRunIds().includes(runId)) return;
+  knownExportRuns.add(runId);
+  try { localStorage.setItem(exportRunsKey, JSON.stringify([...knownExportRuns])); } catch { /* use memory */ }
+  window.dispatchEvent(new Event(exportJobsEvent));
+}
+export async function startExport(runId: string, kind: ExportJob["kind"], allowSimulated = false): Promise<string> {
+  const result = await callTool("start_export", { run_id: runId, kind, allow_simulated: allowSimulated });
+  rememberExportRun(runId);
+  window.dispatchEvent(new Event(exportJobsEvent));
+  return result.export_id as string;
+}
+export async function getExport(exportId: string): Promise<ExportJob> {
+  return await callTool("get_export", { export_id: exportId }) as unknown as ExportJob;
+}
+export async function listExports(runId: string): Promise<ExportJob[]> {
+  const result = await callTool("list_exports", { run_id: runId });
+  return result.exports as ExportJob[];
+}
+export function exportActivity(job: ExportJob) {
+  const kind = { pitchbook: "PitchBook", llm: "LLM Suite", full: "Full data" }[job.kind];
+  return {
+    title: `Export ? ${kind}`,
+    label: { running: "Running", done: "Completed", failed: "Failed" }[job.state],
+    state: { running: "running", done: "completed", failed: "error" }[job.state],
+    percent: job.rows_total > 0 ? Math.min(100, Math.max(0, job.rows_done / job.rows_total * 100)) : job.state === "done" ? 100 : 0,
+    download: job.state === "done" && job.file ? `/api/exports/${encodeURIComponent(job.export_id)}` : undefined,
+  };
 }

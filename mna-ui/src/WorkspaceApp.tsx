@@ -32,6 +32,7 @@ import type {
   ChatState,
   JobSnapshot,
 } from "./lib/chat-contract";
+import { startExport, rememberExportRun } from "./lib/screening-client";
 import type { ExportKind } from "./lib/contracts";
 import { callTool } from "./lib/tool-client";
 import { approved } from "./lib/chat-store";
@@ -426,7 +427,7 @@ function SimulatedBanner() {
   return <p className="ws-simulated-banner" role="status">Simulated data — for development only. Exports are blocked unless allowed.</p>;
 }
 
-function Companies({ state, onAction }: { state: ChatState; onAction: Props["onAction"] }) {
+function Companies({ state }: { state: ChatState; onAction: Props["onAction"] }) {
   const [gridData, setGridData] = useState<ScreeningGrid | null>(null);
   const [loading, setLoading] = useState(Boolean(state.backendRunId));
   const [gridError, setGridError] = useState("");
@@ -569,8 +570,15 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
       </div>
     ),
   }], [busy, gridData?.hiddenCount, hiddenRows, restoreAll, restoreOne]);
+  useEffect(() => {
+    if (state.backendRunId) rememberExportRun(state.backendRunId);
+  }, [state.backendRunId]);
   const exportResult = (format: ExportKind) => {
-    if (result) onAction({ type: "export", artifactId: result.id, format });
+    if (!state.backendRunId) return;
+    setWriteError("");
+    void startExport(state.backendRunId, format).then(() => {
+      setNotice("Export started. Activity shows progress and the download when ready.");
+    }).catch((caught) => setWriteError(caught instanceof Error ? caught.message : "The export could not be started."));
   };
   return (
     <div className="ws-company-layout">

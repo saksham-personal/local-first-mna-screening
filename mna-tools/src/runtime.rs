@@ -25,6 +25,7 @@ pub struct Runtime {
     search: Arc<SearchEngine>,
     context: ContextService,
     concurrency: Arc<Semaphore>,
+    exports: crate::export_jobs::ExportJobs,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -352,6 +353,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         ("get_run_source_projection", "Build a run-scoped input table with independent PB/MID/ISCC name and website fallbacks, labeled descriptions, coverage and row hashes", "projection", false),
         ("get_mid_index_status", "Read the active MID index and running build", "data", false),
+        ("get_export", "Read background export progress", "data", false),
+        ("list_exports", "List background exports for a run", "data", false),
         ("get_index_build", "Read durable index build steps and progress", "data", false),
         ("list_index_builds", "List recent MID index builds and bundles", "data", false),
         ("get_source_field_catalog", "List available MID, ISCC, PitchBook and ROGO fields and missing-data counts for this run", "projection", false),
@@ -437,6 +440,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     .or_else(|| crate::context::input_schema(name))
                     .or_else(|| crate::search::input_schema(name))
                     .or_else(|| crate::data::input_schema(name))
+                    .or_else(|| crate::export_jobs::input_schema(name))
                     .or_else(|| crate::index_build::input_schema(name))
                     .or_else(|| crate::workflow::input_schema(name))
                     .or_else(|| crate::projection::input_schema(name))
@@ -471,6 +475,7 @@ impl Runtime {
         crate::index_build::recover_interrupted(&store)?;
         Ok(Self {
             search: Arc::new(SearchEngine::new(store.clone())?),
+            exports: crate::export_jobs::ExportJobs::new(&store)?,
             context: ContextService::new(store.clone()),
             store,
             concurrency: Arc::new(Semaphore::new(8)),
@@ -549,12 +554,15 @@ impl Runtime {
         } else {
             let store = self.store.clone();
             let context = self.context.clone();
+            let exports = self.exports.clone();
             let data = DataService::new(store.clone());
             let workflow = WorkflowService::new(store.clone());
             let owned_tool = tool.to_owned();
             let owned_arguments = arguments.clone();
             tokio::task::spawn_blocking(move || {
-                if crate::index_build::input_schema(&owned_tool).is_some() {
+                if crate::export_jobs::input_schema(&owned_tool).is_some() {
+                    exports.execute(&store, &owned_tool, &owned_arguments)
+                } else if crate::index_build::input_schema(&owned_tool).is_some() {
                     crate::index_build::execute(&store, &owned_tool, &owned_arguments)
                 } else if category == Some("context") {
                     context.execute(&owned_tool, &owned_arguments)
@@ -903,6 +911,7 @@ async fn admin(
         "index" => "sync_search_index",
         "labels" => "label_company",
         "company-files" => "import_company_files",
+        "export-start" => "start_export",
         "index-build-start" => "start_index_build",
         "index-build-cancel" => "cancel_index_build",
         "mid-bundle-activate" => "activate_mid_bundle",
@@ -999,6 +1008,7 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("approve_criteria_revision", "/admin/criteria-approve"),
         ("apply_enrichment_review", "/admin/enrichment-review"),
         ("dispatch_provider_text", "/admin/provider-text"),
+        ("start_export", "/admin/export-start"),
         ("start_index_build", "/admin/index-build-start"),
         ("cancel_index_build", "/admin/index-build-cancel"),
         ("activate_mid_bundle", "/admin/mid-bundle-activate"),
