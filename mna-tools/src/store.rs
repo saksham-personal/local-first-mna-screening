@@ -24,7 +24,8 @@ const RETRIEVAL_RECOVERY_MIGRATION: &str = include_str!("../migrations/006_retri
 const SHORTLIST_REVIEW_MIGRATION: &str = include_str!("../migrations/007_shortlist_review.sql");
 const INTAKE_REPORTS_MIGRATION: &str = include_str!("../migrations/008_intake_reports.sql");
 const PHASE2_MIGRATION: &str = include_str!("../migrations/009_phase2.sql");
-const SCHEMA_VERSION: i64 = 9;
+const CONTROLLER_MIGRATION: &str = include_str!("../migrations/010_controller.sql");
+const SCHEMA_VERSION: i64 = 10;
 const MAX_TEXT: usize = 100_000;
 const MAX_LIST: usize = 1_000;
 
@@ -94,6 +95,7 @@ impl Store {
             backfill_quarantine_hashes(&transaction)?;
         }
         transaction.execute_batch(PHASE2_MIGRATION)?;
+        transaction.execute_batch(CONTROLLER_MIGRATION)?;
         // Labelled simulated output (009). One probe per column: older-schema rebuilds above
         // can recreate model_assessments without it.
         for table in ["source_rows", "model_assessments", "evidence"] {
