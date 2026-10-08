@@ -22,7 +22,12 @@ export type MidBundle = {
 export type IndexStatus = {
   active: (Omit<MidBundle, "status" | "created_at"> & { semantic_model: string | null; config_hash: string; fts_id: number }) | null;
   running_build: IndexBuild | null;
-  config: { search_columns: string[]; llm_description_columns: string[]; fts5_column_names: Record<string, string>; source_weights: Record<string, number>; identifier_columns: Record<string, string[]> };
+  config: {
+    search_columns: string[]; description_columns: string[]; display_columns: string[];
+    column_types: Record<string, "text" | "number" | "date" | "category">;
+    coverage_columns: string[]; identifier_columns: Record<string, string[]>;
+    workbook_columns: string[];
+  };
 };
 async function read<T>(tool: string, args = {}): Promise<T> {
   return await callTool(tool, args) as unknown as T;

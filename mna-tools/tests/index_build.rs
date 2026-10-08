@@ -61,6 +61,7 @@ impl Fixture {
             "Pitchbook Description",
             "Pitchbook Keywords",
             "Offerings",
+            "Unlisted Extra",
         ];
         for (col, header) in headers.iter().enumerate() {
             sheet.write_string(0, col as u16, *header).unwrap();
@@ -88,6 +89,7 @@ impl Fixture {
             sheet.write_string(r, 5, "insurance software").unwrap();
             sheet.write_string(r, 6, "insurance").unwrap();
             sheet.write_string(r, 7, "processing services").unwrap();
+            sheet.write_string(r, 8, "retained metadata").unwrap();
         }
         // Duplicate and quarantined rows are deliberately beyond the regular records.
         sheet.write_string(rows + 1, 0, "C1").unwrap();
@@ -212,6 +214,10 @@ fn streams_identity_and_indexes_and_retains_one_rollback() {
         assert_eq!(c.query_row("SELECT COUNT(*) FROM mid_rows WHERE bundle_id=?",[first["bundle_id"].as_str().unwrap()],|r|r.get::<_,i64>(0))?,300);
         assert_eq!(c.query_row("SELECT company_id FROM mid_rows WHERE company_id='X-C2'",[],|r|r.get::<_,String>(0))?,"X-C2");
         assert_eq!(c.query_row("SELECT json_extract(row_json,'$.Company') FROM mid_rows WHERE bundle_id=? AND company_id='E1-C1'",[first["bundle_id"].as_str().unwrap()],|r|r.get::<_,String>(0))?,"Company 1");
+        assert_eq!(c.query_row("SELECT json_extract(row_json,'$.\"Unlisted Extra\"') FROM mid_rows WHERE bundle_id=? AND company_id='E1-C1'",[first["bundle_id"].as_str().unwrap()],|r|r.get::<_,String>(0))?,"retained metadata");
+        let config: Value = c.query_row("SELECT config_json FROM mid_bundles WHERE bundle_id=?",[first["bundle_id"].as_str().unwrap()],|r|r.get::<_,String>(0)).map(|raw| serde_json::from_str(&raw).unwrap())?;
+        assert_eq!(config["workbook_columns"], json!(["Crescendo ID", "ECID", "Company", "Website", "Company Description", "Pitchbook Description", "Pitchbook Keywords", "Offerings", "Unlisted Extra"]));
+        assert!(config.get("source_weights").is_none());
         for (table,query,expected) in [(format!("mid_fts_{fts}"),"claim*",300),(format!("mid_fts_{fts}"),"claim",300),(format!("mid_fts_exact_{fts}"),"claim",150),(format!("mid_fts_exact_{fts}"),"claims",150)] {
             let ids=c.prepare(&format!("SELECT rowid FROM {table} WHERE {table} MATCH ?"))?.query_map([query],|r|r.get::<_,i64>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
             assert_eq!(ids.len(),expected);
@@ -226,6 +232,12 @@ fn streams_identity_and_indexes_and_retains_one_rollback() {
         status["config"]["search_columns"].as_array().unwrap().len(),
         12
     );
+    assert_eq!(status["config"]["workbook_columns"][8], "Unlisted Extra");
+    assert_eq!(
+        status["config"]["description_columns"][0],
+        "Company Description"
+    );
+    assert_eq!(status["config"]["column_types"]["Annual Revenue"], "number");
     let second = f.start("mid.xlsx", true);
     assert_eq!(f.wait(&second)["status"], "succeeded");
     assert_eq!(f.get(&first)["bundle"]["status"], "superseded");

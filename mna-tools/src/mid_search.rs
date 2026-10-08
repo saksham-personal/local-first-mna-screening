@@ -357,11 +357,6 @@ pub fn search(store: &Store, arguments: &Value) -> Result<Value> {
     if columns.is_empty() || columns.iter().any(|c| !names.contains(c)) {
         return Err(invalid("columns must contain configured FTS column names"));
     }
-    let weights = names
-        .iter()
-        .map(|n| bundle.config.source_weights[n].to_string())
-        .collect::<Vec<_>>()
-        .join(",");
     // Hit sets hold only company ids and bm25; names are read for the returned rows only.
     let hits = store.with_connection(|c| {
         // FTS first, then a row_no -> company map built once: joining the FTS table to
@@ -388,8 +383,7 @@ pub fn search(store: &Store, arguments: &Value) -> Result<Value> {
                 bundle.fts
             );
             let query = format!("{{{}}} : {}", columns.join(" "), phrase(&k.text)?);
-            let sql =
-                format!("SELECT rowid,bm25({table},{weights}) FROM {table} WHERE {table} MATCH ?");
+            let sql = format!("SELECT rowid,bm25({table}) FROM {table} WHERE {table} MATCH ?");
             let mut records = BTreeMap::new();
             let mut statement = c.prepare(&sql)?;
             let mut rows = statement.query(params![query])?;
