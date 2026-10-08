@@ -310,7 +310,13 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         (
             "get_screening_grid",
-            "Page every company of a run for the grid in one pass: source, scores, PitchBook/ROGO/Bing coverage, combined description and considered/hidden state",
+            "Page a run's MID, ISCC or merged grid with a column catalog, separate scores, banker coverage and PitchBook/ROGO/Bing hydration",
+            "data",
+            false,
+        ),
+        (
+            "get_grid_descriptions",
+            "Read per-column MID and ISCC descriptions for up to 500 visible companies in a run",
             "data",
             false,
         ),
@@ -556,6 +562,8 @@ impl Runtime {
             tokio::task::spawn_blocking(move || {
                 if crate::index_build::input_schema(&owned_tool).is_some() {
                     crate::index_build::execute(&store, &owned_tool, &owned_arguments)
+                } else if owned_tool == "get_grid_descriptions" {
+                    crate::grid::grid_descriptions(&store, &owned_arguments)
                 } else if category == Some("context") {
                     context.execute(&owned_tool, &owned_arguments)
                 } else if category == Some("data") || owned_tool == "import_company_files" {
