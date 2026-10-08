@@ -31,6 +31,7 @@ pub struct SearchSpace {
     store: Store,
     search: SearchEngine,
     sync_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    sync_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -250,6 +251,7 @@ impl SearchSpace {
             search: SearchEngine::new(store.clone())?,
             store,
             sync_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            sync_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
     pub async fn execute(&self, tool: &str, arguments: &Value) -> Result<Value> {
@@ -334,7 +336,10 @@ impl SearchSpace {
     }
     async fn status(&self, bundle: &Bundle) -> Result<Value> {
         let up = self.request(Method::GET, "/health", None).await.is_ok();
-        let state = sync_state()?;
+        let state = {
+            let _lock = self.sync_lock.lock().await;
+            sync_state()?
+        };
         let same = state["bundle_id"] == bundle.id;
         let stats = if up {
             self.request(
@@ -352,15 +357,26 @@ impl SearchSpace {
         )
     }
     async fn sync(&self, bundle: &Bundle) -> Result<Value> {
-        let _lock = self.sync_lock.lock().await;
-        if active(&self.store)?.id != bundle.id {
+        if self
+            .sync_running
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
             return Err(Error::Conflict(
-                "Active MID bundle changed; retry sync.".into(),
+                "Search Space sync is already running.".into(),
             ));
         }
+        let _running = SyncRunning(self.sync_running.clone());
         self.request(Method::GET, "/health", None).await?;
         let mut state = json!({"bundle_id":bundle.id,"index":bundle.index,"documents":0,"last_synced_at":null,"task_status":"processing"});
-        write_sync(&state)?;
+        {
+            let _lock = self.sync_lock.lock().await;
+            if active(&self.store)?.id != bundle.id {
+                return Err(Error::Conflict(
+                    "Active MID bundle changed; retry sync.".into(),
+                ));
+            }
+            write_sync(&state)?;
+        }
         let result = self.sync_documents(bundle).await;
         match result {
             Ok(documents) => {
@@ -373,7 +389,10 @@ impl SearchSpace {
                 state["error"] = json!(e.to_string());
             }
         }
-        write_sync(&state)?;
+        {
+            let _lock = self.sync_lock.lock().await;
+            write_sync(&state)?;
+        }
         result?;
         state["meili"] = json!("up");
         Ok(state)
@@ -486,13 +505,24 @@ impl SearchSpace {
     }
     async fn lexical_hits(&self, bundle: &Bundle, args: &LexicalArgs) -> Result<LexicalResults> {
         let (keywords, tree, positives) = lexical_expression(args)?;
-        // Serialize with a rebuild so no query can see a partially populated index.
-        let _lock = self.sync_lock.lock().await;
         self.request(Method::GET, "/health", None).await?;
-        let state = sync_state()?;
-        if state["bundle_id"] != bundle.id || state["task_status"] != "succeeded" {
+        let state = {
+            let _lock = self.sync_lock.lock().await;
+            sync_state()?
+        };
+        let stats = self
+            .request(
+                Method::GET,
+                &format!("/indexes/{}/stats", bundle.index),
+                None,
+            )
+            .await;
+        if state["bundle_id"] != bundle.id
+            || state["task_status"] != "succeeded"
+            || !stats.is_ok_and(|s| s["numberOfDocuments"].as_u64().is_some_and(|n| n > 0))
+        {
             return Err(Error::ProviderUnavailable(
-                "Search Space index is not synced. Run space_sync.".into(),
+                "Search Space index is not synced yet".into(),
             ));
         }
         let mut hits = BTreeMap::new();
@@ -542,6 +572,16 @@ impl SearchSpace {
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
                 .then_with(|| a.id.cmp(&b.id))
         });
+        // A rebuild may have started while the network queries were in flight.
+        // Never publish results collected against an incomplete or replaced index.
+        {
+            let _lock = self.sync_lock.lock().await;
+            if sync_state()? != state || active(&self.store)?.id != bundle.id {
+                return Err(Error::Conflict(
+                    "Search Space index changed; retry the search.".into(),
+                ));
+            }
+        }
         Ok(LexicalResults {
             hits: result,
             keywords,
@@ -757,8 +797,13 @@ impl SearchSpace {
     async fn export(&self, bundle: &Bundle, args: ExportArgs) -> Result<Value> {
         let _ = args.format;
         std::fs::create_dir_all(export_dir())?;
+        prune_exports()?;
         let file = format!("space-{}.xlsx", uuid::Uuid::new_v4());
         let path = export_dir().join(&file);
+        let mut cleanup = ExportCleanup {
+            path: path.clone(),
+            keep: false,
+        };
         let mut workbook = rust_xlsxwriter::Workbook::new();
         workbook
             .set_tempdir(export_dir())
@@ -770,14 +815,31 @@ impl SearchSpace {
                 page(search.offset, search.limit)?;
                 let columns = export_columns(bundle, &[]);
                 write_headers(sheet, &columns)?;
-                loop {
-                    let rows = self.browse_rows(bundle, &search, written as usize, 200)?;
-                    if rows.is_empty() {
-                        break;
-                    }
-                    for row in rows {
+                if let Some(sort) = &search.sort {
+                    // Sort the narrow identity list once; hydrate wide cells one at a
+                    // time. Re-running ORDER BY for every page is quadratic work.
+                    let ids = self.sorted_ids(bundle, sort)?;
+                    for id in ids {
                         written += 1;
-                        write_row(sheet, written, &columns, &row)?;
+                        write_row(
+                            sheet,
+                            written,
+                            &columns,
+                            &hydrate(&self.store, bundle, &id)?,
+                        )?;
+                    }
+                } else {
+                    let mut cursor = 0;
+                    loop {
+                        let rows = row_page(&self.store, bundle, cursor, 200)?;
+                        if rows.is_empty() {
+                            break;
+                        }
+                        cursor = rows.last().expect("rows").0;
+                        for (_, row) in rows {
+                            written += 1;
+                            write_row(sheet, written, &columns, &row)?;
+                        }
                     }
                 }
             }
@@ -858,8 +920,84 @@ impl SearchSpace {
         workbook
             .save(&path)
             .map_err(|e| Error::Internal(format!("XLSX export failed: {e}")))?;
+        cleanup.keep = true;
         Ok(json!({"file":file,"rows":written}))
     }
+    fn sorted_ids(&self, bundle: &Bundle, sort: &Sort) -> Result<Vec<String>> {
+        if !bundle.columns.contains(&sort.column) {
+            return Err(invalid("Sort column is not in the active MID workbook"));
+        }
+        let key = if bundle.numbers.contains(&sort.column) {
+            "CAST(json_extract(r.row_json, ?) AS REAL)"
+        } else {
+            "json_extract(r.row_json, ?) COLLATE NOCASE"
+        };
+        let direction = if matches!(sort.direction, Direction::Asc) {
+            "ASC"
+        } else {
+            "DESC"
+        };
+        let path = format!("$.{}", serde_json::to_string(&sort.column)?);
+        self.store.with_connection(|c| {
+            let mut stmt = c.prepare(&format!("SELECT r.company_id FROM mid_rows r JOIN companies c USING(company_id) WHERE r.bundle_id=? ORDER BY {key} {direction},c.name COLLATE NOCASE,r.company_id"))?;
+            let ids = stmt.query_map(params![bundle.id, path], |r| r.get(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(ids)
+        })
+    }
+}
+struct SyncRunning(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Drop for SyncRunning {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+struct ExportCleanup {
+    path: PathBuf,
+    keep: bool,
+}
+impl Drop for ExportCleanup {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+fn prune_exports() -> Result<()> {
+    let now = std::time::SystemTime::now();
+    for entry in std::fs::read_dir(export_dir())? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("space-") && name.ends_with(".xlsx") {
+            let meta = entry.metadata()?;
+            if meta.is_file()
+                && meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| now.duration_since(m).ok())
+                    .is_some_and(|age| age > Duration::from_secs(7 * 24 * 60 * 60))
+            {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+    }
+    Ok(())
+}
+fn xlsx_text(value: &str) -> String {
+    if value.encode_utf16().count() <= 32767 {
+        return value.to_owned();
+    }
+    let mut units = 0;
+    let mut result = String::new();
+    for ch in value.chars() {
+        units += ch.len_utf16();
+        if units > 32766 {
+            break;
+        }
+        result.push(ch);
+    }
+    result.push('…');
+    result
 }
 struct LexicalHit {
     id: String,
@@ -1131,7 +1269,7 @@ fn write_headers(sheet: &mut rust_xlsxwriter::Worksheet, columns: &[String]) -> 
     }
     for (col, name) in columns.iter().enumerate() {
         sheet
-            .write_string(0, col as u16, name)
+            .write_string(0, col as u16, xlsx_text(name))
             .map_err(|e| Error::Internal(e.to_string()))?;
     }
     Ok(())
@@ -1157,7 +1295,7 @@ fn write_row(
                 .map(str::to_owned)
                 .unwrap_or_else(|| v.to_string());
             sheet
-                .write_string(row, col as u16, text)
+                .write_string(row, col as u16, xlsx_text(&text))
                 .map_err(|e| Error::Internal(e.to_string()))?;
         }
     }

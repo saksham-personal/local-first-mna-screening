@@ -795,6 +795,119 @@ fn excel_dump_adapter_keeps_all_other_iscc_fields() {
     assert!(rows[0].get("iQ Link").is_none());
     assert!(mna_tools::search_space::iscc_dump_rows(b"not an excel file").is_err());
 }
+
+#[test]
+fn stale_sync_metadata_refuses_missing_or_empty_meili_index() {
+    let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new(4);
+    let rt = rt();
+    let (server, state) = rt.block_on(fake());
+    let space = SearchSpace::new(f.store.clone()).unwrap();
+    let synced = rt
+        .block_on(space.execute("space_sync", &json!({})))
+        .unwrap();
+    let index = synced["index"].as_str().unwrap();
+    for absent in [false, true] {
+        if absent {
+            state.lock().unwrap().docs.remove(index);
+        } else {
+            state.lock().unwrap().docs.get_mut(index).unwrap().clear();
+        }
+        let error = rt
+            .block_on(space.execute(
+                "space_search_lexical",
+                &json!({"keywords":[{"text":"claims"}]}),
+            ))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Search Space index is not synced yet"),
+            "{error}"
+        );
+        assert!(state.lock().unwrap().queries.is_empty());
+    }
+    server.abort();
+}
+
+#[test]
+fn sorted_export_over_multiple_pages_preserves_numeric_order_and_count() {
+    let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new(425);
+    let rt = rt();
+    let space = SearchSpace::new(f.store.clone()).unwrap();
+    for direction in ["asc", "desc"] {
+        let result = rt.block_on(space.execute("space_export", &json!({"search":{"sort":{"column":"Annual Revenue","direction":direction},"offset":200,"limit":100},"format":"xlsx"}))).unwrap();
+        assert_eq!(result["rows"], 425);
+        let mut workbook: Xlsx<_> = open_workbook(
+            f.dir
+                .path()
+                .join("export")
+                .join(result["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        let range = workbook.worksheet_range_at(0).unwrap().unwrap();
+        assert_eq!(range.height(), 426);
+        let actual = range
+            .rows()
+            .skip(1)
+            .map(|r| r[0].to_string())
+            .collect::<Vec<_>>();
+        let mut expected = (1..=425).map(|i| format!("E{i}-C{i}")).collect::<Vec<_>>();
+        if direction == "desc" {
+            expected.reverse();
+        }
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn export_truncates_long_cells_and_cleans_failed_and_expired_files() {
+    let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new(4);
+    let long = "😀".repeat(17000);
+    f.store.with_connection(|c| {
+        c.execute("UPDATE mid_rows SET row_json=json_set(row_json,'$.\"Arbitrary Flag\"',?) WHERE company_id='E1-C1'", [&long])?;
+        Ok(())
+    }).unwrap();
+    let export_dir = f.dir.path().join("export");
+    std::fs::create_dir_all(&export_dir).unwrap();
+    let expired = export_dir.join("space-expired.xlsx");
+    let other = export_dir.join("other-export.xlsx");
+    for path in [&expired, &other] {
+        let file = std::fs::File::create(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60))
+            .unwrap();
+    }
+    let rt = rt();
+    let space = SearchSpace::new(f.store.clone()).unwrap();
+    let result = rt
+        .block_on(space.execute("space_export", &json!({"search":{},"format":"xlsx"})))
+        .unwrap();
+    assert!(!expired.exists());
+    assert!(other.exists());
+    let mut workbook: Xlsx<_> =
+        open_workbook(export_dir.join(result["file"].as_str().unwrap())).unwrap();
+    let range = workbook.worksheet_range_at(0).unwrap().unwrap();
+    let col = range
+        .rows()
+        .next()
+        .unwrap()
+        .iter()
+        .position(|v| matches!(v, calamine::Data::String(value) if value == "Arbitrary Flag"))
+        .unwrap();
+    let cell = range.rows().nth(1).unwrap()[col].to_string();
+    assert!(cell.ends_with('…'));
+    assert_eq!(cell.encode_utf16().count(), 32767);
+    let before = std::fs::read_dir(&export_dir).unwrap().count();
+    assert!(rt
+        .block_on(space.execute(
+            "space_export",
+            &json!({"search":{"sort":{"column":"absent","direction":"asc"}},"format":"xlsx"})
+        ))
+        .is_err());
+    assert_eq!(std::fs::read_dir(&export_dir).unwrap().count(), before);
+}
 #[test]
 fn runtime_read_tools_need_no_run_and_admin_routes_need_analyst() {
     use axum::{body::Body, http::Request};
