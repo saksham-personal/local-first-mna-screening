@@ -15,14 +15,16 @@ test("source tabs include both-source companies and preserve unknown-source rows
   assert.equal(belongsToTab(null, "MID"), false);
 });
 test("default metric follows source tabs and newest round with a fallback", () => {
-  const columns = ["mid_semantic_score", "iscc_relevancy", "round:R1:score:fit", "round:R2:score:fit"].map((id) => ({ ...column, id }));
+  const columns = ["MID_Keyword Score", "MID_Semantic Score", "ISCC_Score", "R1 LLM Suite fit", "R2 LLM Suite fit"].map((id) => ({ ...column, id }));
   const rounds = [1, 2].map((n) => ({ key: `R${n}`, round_no: n, provider: "llmsuite", provider_label: "LLM Suite", score_columns: ["fit"], output_columns: ["fit"] })) satisfies RoundColumns[];
-  assert.equal(defaultMetric("All", columns, rounds), "round:R2:score:fit");
-  assert.equal(defaultMetric("MID", columns, rounds), "mid_semantic_score");
-  assert.equal(defaultMetric("ISCC", columns, rounds), "iscc_relevancy");
-  assert.equal(defaultMetric("All", columns, []), "mid_semantic_score");
-  assert.equal(defaultMetric("All", columns, [], { has_semantic: false, has_iscc: true }), "iscc_relevancy");
-  assert.equal(defaultMetric("MID", columns, [], { has_semantic: false, has_iscc: true }), "mid_semantic_score");
+  assert.equal(defaultMetric("All", columns, rounds), "R2 LLM Suite fit");
+  assert.equal(defaultMetric("All", columns, []), "MID_Keyword Score");
+  assert.equal(defaultMetric("All", columns, [], { has_semantic: false, has_iscc: true }), "MID_Keyword Score");
+  const midColumns = ["MID Score", "MID Semantic Score"].map(id => ({ ...column, id }));
+  const isccColumns = [{ ...column, id: "ISCC Score" }];
+  assert.equal(defaultMetric("MID", midColumns, rounds), "MID Score");
+  assert.equal(defaultMetric("ISCC", isccColumns, rounds), "ISCC Score");
+  assert.equal(defaultMetric("MID", midColumns, [], { has_semantic: false, has_iscc: true }), "MID Score");
   assert.equal(defaultMetric("All", [], []), undefined);
 });
 test("bar toggles preserve CHECK by default and switch a condition to buckets", () => {

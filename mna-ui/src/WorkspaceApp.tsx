@@ -522,14 +522,20 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
     else setRefreshing(true);
     setStreaming(false);
     descriptionCache.current = new Map(); descriptionPending.current = new Set();
+    descriptionBlocked.current = false;
     setDescriptions(new Map()); setDescriptionError("");
     setGridError("");
     try {
-      const known = catalogByTab.current[sourceTab];
+      // Read the catalog without heavy values the first time this view opens.
+      // Every data page, including page 1, then projects the picker choice.
+      const known = catalogByTab.current[sourceTab] ?? (await fetchScreeningGridPage(state.sessionId, runId, {
+        view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 1, columns: [],
+      })).columns;
+      if (request !== gridRequest.current) return null;
       const saved = columnPreferences[sourceTab];
       let data = await fetchScreeningGridPage(state.sessionId, runId, {
         view: sourceTab.toLowerCase() as "all" | "mid" | "iscc", limit: 100,
-        ...(known ? { columns: requestedCatalogIds(known, saved) } : {}),
+        columns: requestedCatalogIds(known, saved),
       });
       if (request !== gridRequest.current) return null;
       catalogByTab.current[sourceTab] = data.columns;
@@ -640,7 +646,7 @@ function Companies({ state, onAction }: { state: ChatState; onAction: Props["onA
         {notice && <p className="ws-grid-notice" role="status">{notice}</p>}
         <div className="ws-source-tabs" role="group" aria-label="Company sources">
           {(["All", "MID", "ISCC"] as const).map((tab) => <button type="button" key={tab} aria-pressed={sourceTab === tab} className={sourceTab === tab ? "is-active" : ""} onClick={() => { setSourceTab(tab); setSelectedIds([]); }}>
-            {tab} <span>{streaming ? "? " : ""}{allRows.filter((row) => belongsToTab(row.source, tab) && (showHidden || row.considered)).length.toLocaleString()}</span>
+            {tab} <span>{streaming ? "≥ " : ""}{allRows.filter((row) => belongsToTab(row.source, tab) && (showHidden || row.considered)).length.toLocaleString()}</span>
           </button>)}
         </div>
         {loadingProgress(allRows.length, gridData?.total ?? 0, streaming) && <p className="ws-grid-progress" role="status">{loadingProgress(allRows.length, gridData?.total ?? 0, streaming)}</p>}

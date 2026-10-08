@@ -47,6 +47,7 @@ import type {
   SortState,
 } from "./grid-types";
 import "./grid.css";
+import { companyPageSizes, pageRows } from "../workspace/company-pager";
 
 export type DataGridColumn<Row> = GridColumnSpec<Row> & {
   render?: (row: Row) => ReactNode;
@@ -450,8 +451,8 @@ export function DataGrid<Row>({
   pageCallbackRef.current = onPageRowsChange;
   const notifyPage = useCallback(({ api }: { api: GridApi<Row> }) => {
     const size = pagination ? api.paginationGetPageSize() : displayedRowsRef.current.length;
-    const start = pagination ? api.paginationGetCurrentPage() * size : 0;
-    pageCallbackRef.current?.(displayedRowsRef.current.slice(start, start + size));
+    const page = pagination ? api.paginationGetCurrentPage() : 0;
+    pageCallbackRef.current?.(pageRows(displayedRowsRef.current, page, size));
   }, [pagination]);
   const resetLayout = useCallback(() => {
     updateVisibleColumnIds(defaultVisibleColumnIds(columns));
@@ -496,7 +497,7 @@ export function DataGrid<Row>({
         theme={gridTheme}
         pagination={pagination}
         paginationPageSize={100}
-        paginationPageSizeSelector={pagination ? [100, 250, 500] : false}
+        paginationPageSizeSelector={pagination ? companyPageSizes : false}
         onPaginationChanged={notifyPage}
         onRowDataUpdated={notifyPage}
         onGridReady={({ api }) => {
@@ -608,7 +609,7 @@ export function DataGrid<Row>({
         )}
         <div className="dg-grid-host" role="region" aria-label={`${label} results`}>
           {gridElement}
-          {updating && <div className="dg-updating" aria-busy="true"><Skeleton variant="table" rows={8} cols={6} label="Updating companies" /><p role="status"><LoaderCircle className="ui-spin" size={16} />Updating companies, please wait?</p></div>}
+          {updating && <div className="dg-updating" aria-busy="true"><Skeleton variant="table" rows={8} cols={6} label="Updating companies" /><p role="status"><LoaderCircle className="ui-spin" size={16} />Updating companies, please wait…</p></div>}
         </div>
       </div>
     </section>
