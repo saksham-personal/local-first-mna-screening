@@ -12,6 +12,24 @@ fn fixture_vars(case: &Value) -> Value {
     case.get("vars").cloned().unwrap_or_else(|| json!({}))
 }
 
+fn current_header(source: &str) -> String {
+    let source = source.replacen(
+        "**What it does:**",
+        "**Description:** Fixture summary.\n**What it does:**",
+        1,
+    );
+    let source = source.replacen(
+        "**Inputs:**",
+        "**Context:** Fixture context.\n**Inputs:**",
+        1,
+    );
+    source
+        .lines()
+        .filter(|line| !line.starts_with("**Supplied to:**"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn rust_prompt_engine_matches_shared_conformance_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -25,9 +43,9 @@ fn rust_prompt_engine_matches_shared_conformance_fixtures() {
     for (index, case) in engine.iter().enumerate() {
         let name = case["name"].as_str().unwrap();
         let id = format!("fixture-{index}");
-        let source = case["source"].as_str().unwrap();
+        let source = current_header(case["source"].as_str().unwrap());
         let source = if source.contains("**ID:** Bad_Id") {
-            source.to_owned()
+            source
         } else {
             source.replacen("**ID:** t", &format!("**ID:** {id}"), 1)
         };
@@ -62,11 +80,33 @@ fn rust_prompt_engine_matches_shared_conformance_fixtures() {
                 "{name}: {error}"
             );
         } else {
-            assert_eq!(
-                result.unwrap_or_else(|error| panic!("{name}: {error}")),
-                case["expected"].as_str().unwrap(),
-                "{name}"
-            );
+            let rendered = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(rendered, case["expected"].as_str().unwrap(), "{name}");
         }
+    }
+
+    for (id, vars) in [
+        (
+            "controller-instruction-set",
+            json!({"action_guide":"search_mid: keywords", "run_summary":"v2, 100 considered", "analyst_message":"Find claims software"}),
+        ),
+        (
+            "instruction-feedback",
+            json!({"feedback":"unknown field", "allowed_actions":"search_mid: keywords"}),
+        ),
+        (
+            "conversation-handoff",
+            json!({"run_summary":"v2 approved", "recent_decisions":"Analyst approved v2"}),
+        ),
+    ] {
+        let rendered = prompts::render_with_values(id, &vars).unwrap();
+        assert!(!rendered.is_empty() && !rendered.contains("{{"), "{id}");
+        let metadata = prompts::metadata(id).unwrap();
+        assert_eq!(metadata.id, id);
+        assert!(
+            !metadata.summary.is_empty()
+                && !metadata.description.is_empty()
+                && !metadata.context.is_empty()
+        );
     }
 }

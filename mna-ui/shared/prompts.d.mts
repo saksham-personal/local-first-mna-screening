@@ -26,7 +26,9 @@ export type PromptInput = { name: string; required: boolean; description: string
 export type PromptMetadata = {
   id: string;
   title: string;
+  summary: string;
   description: string;
+  context: string;
   inputs: PromptInput[];
   output: string;
   suppliedTo: string;

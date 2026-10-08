@@ -1,11 +1,12 @@
 # Format repair
 
 **ID:** format-repair
-**What it does:** The retry prompt for generated drafts (screening prompts, Bing query templates, criteria and direct text answers). When the provider's reply does not match the required block format, the original prompt is sent again with the format error appended. The gateway repeats this at most twice, each time through the shared LLM Suite rate gate.
+**Description:** Repair a generated draft's format.
+**What it does:** Repeats the original prompt and its format error. Requests a corrected reply in the original format.
+**Context:** `mna-tools/src/gateway.rs` `provider_text` supplies the original request and parse error after a rejected draft. Retry on the same continuing LLM Suite conversation id or M365 Copilot request.
 **Inputs:** `{{prompt}}` (required) – the original prompt text exactly as first sent; `{{format_error}}` (required) – the validation message describing what was wrong with the reply.
 **Output:** A corrected reply in the format the original prompt asked for.
-**Supplied to:** Rust service, gateway.rs text dispatch (dispatch_provider_text), re-sent to LLM Suite or M365 Copilot.
-**Version:** 1
+**Version:** 2
 
 ===@@=== STARTING ===@@===
 {{prompt}}

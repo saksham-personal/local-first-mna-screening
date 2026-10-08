@@ -11,7 +11,7 @@ import { screeningPromptRequest } from "./screening.mjs";
 
 export const START_MARKER = "===@@=== STARTING ===@@===";
 export const END_MARKER = "===@@=== END ===@@===";
-const FIELDS = ["ID", "What it does", "Inputs", "Output", "Supplied to", "Version"];
+const FIELDS = ["ID", "Description", "What it does", "Context", "Inputs", "Output", "Version"];
 const NAME = "[a-z][a-z0-9_]*";
 const TOKEN = new RegExp(`\\{\\{([#/]?)(${NAME})\\}\\}`, "y");
 // A line that holds only a section tag is removed together with its newline.
@@ -129,6 +129,7 @@ export function parsePromptFile(text, file = "prompt file") {
   const title = header[titleIndex].slice(2).trim();
   const fields = new Map();
   let current = null;
+  let fieldIndex = 0;
   for (let index = titleIndex + 1; index < header.length; index++) {
     const line = header[index];
     if (!line.trim()) {
@@ -140,6 +141,8 @@ export function parsePromptFile(text, file = "prompt file") {
       const name = field[1].trim();
       if (!FIELDS.includes(name)) failAt("bad_header", `Unknown description field "${name}". Use: ${FIELDS.join(", ")}.`, index + 1);
       if (fields.has(name)) failAt("bad_header", `The description field "${name}" appears twice.`, index + 1);
+      if (name !== FIELDS[fieldIndex]) failAt("bad_header", `Expected description field "${FIELDS[fieldIndex]}" before "${name}".`, index + 1);
+      fieldIndex++;
       current = { value: field[2].trim(), line: index + 1 };
       fields.set(name, current);
     } else if (current) current.value += ` ${line.trim()}`;
@@ -179,10 +182,12 @@ export function parsePromptFile(text, file = "prompt file") {
   const prompt = {
     id,
     title,
+    summary: fields.get("Description").value,
     description: fields.get("What it does").value,
+    context: fields.get("Context").value,
     inputs,
     output: fields.get("Output").value,
-    suppliedTo: fields.get("Supplied to").value,
+    suppliedTo: fields.get("Context").value,
     version: Number(fields.get("Version").value),
     body,
     contentHash: createHash("sha256").update(body).digest("hex"),
@@ -277,7 +282,9 @@ export function renderScreeningPrompt(input) {
 const metadata = (prompt) => ({
   id: prompt.id,
   title: prompt.title,
+  summary: prompt.summary,
   description: prompt.description,
+  context: prompt.context,
   inputs: prompt.inputs.map((input) => ({ ...input })),
   output: prompt.output,
   suppliedTo: prompt.suppliedTo,
@@ -289,7 +296,7 @@ const metadata = (prompt) => ({
 export function listPrompts() {
   const dir = promptsDir();
   return readdirSync(dir)
-    .filter((name) => name.endsWith(".md") && name.toLowerCase() !== "readme.md")
+    .filter((name) => name.endsWith(".md") && !["readme.md", "index.md"].includes(name.toLowerCase()))
     .sort()
     .map((name) => metadata(readPrompt(join(dir, name))));
 }

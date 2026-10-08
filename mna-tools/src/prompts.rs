@@ -9,12 +9,13 @@ use std::{
 
 const START_MARKER: &str = "===@@=== STARTING ===@@===";
 const END_MARKER: &str = "===@@=== END ===@@===";
-const FIELDS: [&str; 6] = [
+const FIELDS: [&str; 7] = [
     "ID",
+    "Description",
     "What it does",
+    "Context",
     "Inputs",
     "Output",
-    "Supplied to",
     "Version",
 ];
 
@@ -67,8 +68,36 @@ impl PromptFailure {
 struct Prompt {
     id: String,
     file: String,
+    summary: String,
+    description: String,
+    context: String,
+    output: String,
+    version: u32,
     inputs: Vec<Input>,
     tree: Vec<Node>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptMetadata {
+    pub id: String,
+    pub summary: String,
+    pub description: String,
+    pub context: String,
+    pub output: String,
+    pub version: u32,
+}
+
+/// Read the descriptive header for a prompt using the same override and cache as rendering.
+pub fn metadata(id: &str) -> Result<PromptMetadata> {
+    let prompt = load_prompt(id)?;
+    Ok(PromptMetadata {
+        id: prompt.id.clone(),
+        summary: prompt.summary.clone(),
+        description: prompt.description.clone(),
+        context: prompt.context.clone(),
+        output: prompt.output.clone(),
+        version: prompt.version,
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -329,6 +358,9 @@ fn embedded_prompt(id: &str) -> Option<&'static str> {
         "batch-repair" => include_str!("../../prompts/batch-repair.md"),
         "bing-query-writer" => include_str!("../../prompts/bing-query-writer.md"),
         "controller-tools" => include_str!("../../prompts/controller-tools.md"),
+        "controller-instruction-set" => include_str!("../../prompts/controller-instruction-set.md"),
+        "instruction-feedback" => include_str!("../../prompts/instruction-feedback.md"),
+        "conversation-handoff" => include_str!("../../prompts/conversation-handoff.md"),
         "criteria-from-examples" => include_str!("../../prompts/criteria-from-examples.md"),
         "criteria-from-research" => include_str!("../../prompts/criteria-from-research.md"),
         "direct-question" => include_str!("../../prompts/direct-question.md"),
@@ -456,6 +488,7 @@ fn parse_prompt_file(text: &str, file: &str) -> std::result::Result<Prompt, Prom
 
     let mut fields: HashMap<String, HeaderField> = HashMap::new();
     let mut current: Option<String> = None;
+    let mut field_index = 0;
     for (index, line) in header.iter().enumerate().skip(title_index + 1) {
         if trim_js(line).is_empty() {
             current = None;
@@ -482,6 +515,18 @@ fn parse_prompt_file(text: &str, file: &str) -> std::result::Result<Prompt, Prom
                     Some(index + 1),
                 ));
             }
+            if name != FIELDS[field_index] {
+                return Err(PromptFailure::at(
+                    "bad_header",
+                    format!(
+                        "Expected description field \"{}\" before \"{name}\".",
+                        FIELDS[field_index]
+                    ),
+                    file,
+                    Some(index + 1),
+                ));
+            }
+            field_index += 1;
             fields.insert(
                 name.clone(),
                 HeaderField {
@@ -597,6 +642,11 @@ fn parse_prompt_file(text: &str, file: &str) -> std::result::Result<Prompt, Prom
     Ok(Prompt {
         id,
         file: file.to_owned(),
+        summary: fields["Description"].value.clone(),
+        description: fields["What it does"].value.clone(),
+        context: fields["Context"].value.clone(),
+        output: fields["Output"].value.clone(),
+        version: version.parse().expect("validated prompt version"),
         inputs,
         tree,
     })

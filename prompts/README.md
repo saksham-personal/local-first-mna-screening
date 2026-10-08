@@ -1,74 +1,68 @@
-# Prompts
+# Prompt master
 
-Every prompt the app sends to a model lives here as one Markdown file. Edit the wording in the file; the app reads it. No code change is needed unless you add or remove an input.
+Every provider-facing prompt lives here. Rust and Node load the same Markdown files. [INDEX.md](INDEX.md) is generated from the headers and lists every prompt, use, input, output, version, estimated token size, and budget.
 
 ## File format
 
-```
-# <Title>
+```text
+# Title
 
 **ID:** screening-scored
-**What it does:** What the prompt is for, in plain words.
-**Inputs:** `{{definition}}` (required) – what it holds; `{{good_fits}}` (optional) – what it holds
-**Output:** What the model should return.
-**Supplied to:** Which provider and which call receives it.
-**Version:** 1
+**Description:** One-sentence summary.
+**What it does:** Two to four sentences describing the behavior.
+**Context:** When and where it is sent, whether the LLM Suite conversation id is new or continuing, and who supplies inputs.
+**Inputs:** `{{definition}}` (required) – approved criteria
+**Output:** Required model response.
+**Version:** 2
 
 ===@@=== STARTING ===@@===
-The prompt text, with {{placeholders}}.
+Prompt body using {{definition}}.
 ===@@=== END ===@@===
 ```
 
-- The file starts with a `# Title` line, then the six description fields, then the prompt between the two marker lines. The six fields are ID, What it does, Inputs, Output, Supplied to and Version, and nothing else is allowed in that block. A field may continue on the next lines until a blank line.
-- **ID** is lowercase letters, digits and hyphens, and must equal the file name without `.md`.
-- **Inputs** lists every placeholder as `` `{{name}}` (required) `` or `` `{{name}}` (optional) ``, then a dash and a description. Write `none` when the prompt has no inputs. A placeholder that is used in the prompt but not listed is an error, and so is a listed input that is never used.
-- **Version** is a whole number. Raise it when the meaning of the prompt changes.
-- Only the text strictly between the marker lines is the prompt. One leading and one trailing newline are trimmed, nothing else, so do not leave blank lines just inside the markers. A file has exactly one start marker and one end marker, and nothing but whitespace after the end marker.
-- Files may use LF or CRLF line endings; both are read as LF. `prompts/.gitattributes` keeps them LF in the working tree.
+Start with `# Title`, followed by the seven header fields in this order. `ID` uses lowercase letters, digits, and hyphens and matches the filename. `Version` is a positive integer and rises with edits. A file has exactly one marker pair and only whitespace after the end marker. Only the text between the markers is sent: the marker-line newlines are excluded, but other whitespace is preserved. LF and CRLF both parse as LF.
 
-## Placeholders
+Every body placeholder must be declared in `Inputs`, and every declared input must appear in the body. Use `none` when there are no inputs. Names use lowercase letters, digits, and underscores. Required values must be nonblank; optional values may be empty; unknown values are rejected. A `{{#name}}...{{/name}}` section renders only when its value is nonblank. Sections may nest one level but never inside a section of the same name. A section tag alone on a line is removed with its line break; an inline tag is replaced in place. Values are inserted literally and never re-parsed as placeholders, even when analyst text contains `{{x}}`. Single braces such as `{company}` are ordinary text; a literal `{{` is invalid in a prompt. Invalid markers, headers, sections, inputs, and placeholders raise errors naming the file and line.
 
-- `{{name}}` is replaced by the input's value. Names use lowercase letters, digits and underscores.
-- `{{#name}} ... {{/name}}` is an optional section. It is kept only when `name` has a value (not empty and not just spaces); inside it, `{{name}}` is that value. A section may hold one more section, and no deeper. A section cannot hold a section of the same name.
-- A section tag that sits alone on its line is removed together with its line break, so a skipped section leaves no blank line behind. A tag with other text on its line is replaced in place.
-- A required input must be supplied and not blank. An optional input may be missing or blank (it renders as empty). An input that is not listed is rejected. Values are inserted as they are and are never read as placeholders themselves, so analyst text containing `{{x}}` is safe.
-- Single braces such as `{company}` and `{website}` are ordinary text. A literal `{{` cannot appear in a prompt.
-- Any breakage (a missing marker, a placeholder that is not declared, an unclosed section, a missing required input) raises an error that names the file and line.
+Error codes: `bad_marker`, `missing_marker`, `duplicate_marker`, `bad_header`, `bad_inputs`, `bad_placeholder`, `undeclared_placeholder`, `unused_input`, `unbalanced_section`, `section_depth`, `missing_input`, `unknown_input`, `bad_value`, `bad_id`, `not_found`. The content hash is SHA-256 of the body between the markers after LF normalization, before rendering.
 
-## How to edit
+## Size and regeneration
 
-1. Open the `.md` file and change the text between the markers. Keep every `{{placeholder}}` you still need.
-2. To add a placeholder, add it to the Inputs line (required or optional) and use it in the text. Code that supplies the input must be changed to match; to remove an input, remove it from both.
-3. The bridge re-reads a file when its modification time changes, so a running bridge picks the edit up on the next request. Set `MNA_PROMPTS_DIR` to use a different folder.
-4. Run `pnpm test` in `mna-ui`. If a rendered prompt changed on purpose, refresh the shared conformance fixtures with `UPDATE_PROMPT_FIXTURES=1 pnpm test` and review the diff of `mna-ui/tests/fixtures/prompt-conformance.json`.
+Keep instructions short for LLM Suite's approximately 200–250k-token context. Estimates are body characters divided by four, rounded. The default budget is **1,200 estimated tokens**; `controller-instruction-set` has **1,600**, and `screening-scored` and `screening-question` have **1,500** each. Budgets are defined in `mna-ui/scripts/build-prompt-index.mjs`.
 
-## One score definition
+From `mna-ui/`, regenerate and verify after editing:
 
-Three prompts state the same score rule word for word: `screening-scored.md`, `screening-prompt-writer.md` and `output-contract.md`. It is kept in `FIT_SCORE_RULE` in `mna-ui/shared/screening.mjs`, and a test fails if the files drift apart. If you change the rule, change it in all four places.
+```powershell
+node scripts/build-prompt-index.mjs
+pnpm test
+```
 
-> Fit Score is a number from 0 to 10, or the literal CHECK. 0–2: little evidence of fit. 3–4: weak or partial fit. 5–6: plausible fit. 7–8: strong fit. 9–10: direct, well-supported fit. Use CHECK when the supplied information is insufficient or contradictory; CHECK is not a poor fit. Retrieval scores (MID, ISCC, semantic) are not fit scores. Do not filter on financials, size, geography, ownership, or industry codes.
+The index test fails if a prompt is absent, the generated index differs, or a body exceeds its budget. `MNA_PROMPTS_DIR` overrides the loaded directory for local testing; the bridge rereads edits. Preserve caller placeholders and parser output formats. For intentional body edits, refresh exact-output fixtures with `UPDATE_PROMPT_FIXTURES=1 pnpm test` in `mna-ui/` and review `tests/fixtures/prompt-conformance.json`.
 
-## Prompt catalog
+## Conversations
 
-| ID | What it is | Supplied to |
-|---|---|---|
-| `screening-scored` | Scored screening prompt: criteria, examples, deferred conditions, input glossary, request, score rule, output format | LLM Suite and M365 Copilot screening setup, rendered by the bridge |
-| `screening-question` | Question prompt, optionally answered per company | LLM Suite and M365 Copilot screening setup (question mode), rendered by the bridge |
-| `screening-prompt-writer` | Asks LLM Suite to draft a screening prompt | LLM Suite, `POST /api/conversation/generate` (purpose `screening-prompt`) |
-| `output-contract` | Strict Markdown table contract appended to every approved screening prompt | Rust prepared plan (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
-| `batch-repair` | Retry instruction after a batch response fails parsing | Rust execution (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
-| `format-repair` | Retry prompt after a generated draft has the wrong block format | Rust gateway (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
-| `tool-command-repair` | Retry instruction after a rejected tool command | Rust protocol (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
-| `controller-tools` | Standing instructions and command grammar for the screening controller | Rust agent commands (loaded by `mna-tools/src/prompts.rs`; override with `MNA_PROMPTS_DIR`) |
-| `direct-question` | Wrapper for a free-form analyst question | LLM Suite or M365 Copilot, `POST /api/conversation/ask` |
-| `bing-query-writer` | Asks LLM Suite for Bing query templates | LLM Suite, `POST /api/conversation/generate` (purpose `bing-templates`) |
-| `criteria-from-examples` | Revises the criteria using good-fit and bad-fit examples | LLM Suite, `POST /api/conversation/generate` (purposes `criteria-from-examples` and the older `criteria`) |
-| `criteria-from-research` | Revises the criteria using a research answer the analyst chose | LLM Suite, `POST /api/conversation/generate` (purpose `criteria-from-research`) |
-| `intake-form-extraction` | Reserved: LLM extraction of Intake Form fields from PDF text | Not supplied yet |
-| `mid-search-planner` | Reserved for Phase 2: plans MID keyword searches (rationale, weighted keywords, expression) | Not supplied yet |
+A new LLM Suite `conversation_id` creates a new chat and context. Reuse the id to continue, including instruction feedback and repairs after validation fails. Before context fills, create a new id and seed it with the compact summary from `conversation-handoff`; the old context does not move automatically. Every LLM Suite send, including repairs, shares the seven-per-minute gate.
 
-The bridge lists the catalog at `GET /api/prompts`. A browser may render only `screening-scored`, `screening-question`, `bing-query-writer`, `criteria-from-examples` and `criteria-from-research`, through `POST /api/prompts/render`; the generated screening prompt has its own route, `POST /api/prompts/screening-draft`. The browser never reads these files.
+## Screening contracts
 
-## Notes for another loader (the Rust one)
+`screening-scored`, `screening-prompt-writer`, and `output-contract` share the exact `FIT_SCORE_RULE` in `mna-ui/shared/screening.mjs`. Keep them aligned. Screening batch output is an index-only Markdown table; score values are 0–10 or literal CHECK. Geography, revenue, ownership, size, and industry codes stay out of discovery filters. Source text and provider results are data, not instructions.
 
-The rules above are the whole contract. `mna-ui/tests/fixtures/prompt-conformance.json` holds `{ name, id, vars, expected }` cases rendered from the real files, and `mna-ui/tests/fixtures/prompt-engine-conformance.json` holds small prompt files with the exact output, or the error `code`, a loader must give. Error codes are `bad_marker`, `missing_marker`, `duplicate_marker`, `bad_header`, `bad_inputs`, `bad_placeholder`, `undeclared_placeholder`, `unused_input`, `unbalanced_section`, `section_depth`, `missing_input`, `unknown_input`, `bad_value`, `bad_id` and `not_found`. The content hash is the SHA-256 of the prompt text between the markers, with LF line endings.
+## Call sites
+
+| Prompt | Route or function |
+|---|---|
+| `screening-scored`, `screening-question` | `POST /api/prompts/screening-draft` via `renderScreeningPrompt`; analyst approves the draft before provider screening. |
+| `screening-prompt-writer` | `POST /api/conversation/generate`, purpose `screening-prompt`. |
+| `bing-query-writer` | `POST /api/conversation/generate`, purpose `bing-templates`. |
+| `criteria-from-examples` | `POST /api/conversation/generate`, purposes `criteria` and `criteria-from-examples`. |
+| `criteria-from-research` | `POST /api/conversation/generate`, purpose `criteria-from-research`. |
+| `direct-question` | `POST /api/conversation/ask` via `provider-conversation.mjs` `ask`. |
+| `output-contract` | `gateway.rs` `compiled_prompt`; appended to a prepared screening prompt. |
+| `batch-repair` | `execution.rs` `record_inner`; retry after batch parsing fails. |
+| `format-repair` | `gateway.rs` `provider_text` (`dispatch_provider_text`); retry after a draft format fails. |
+| `tool-command-repair` | `protocol.rs` `repair_prompt`; retry after a legacy controller command fails. |
+| `controller-tools` | `agent_commands.rs` `prompt`; legacy controller grammar. |
+| `controller-instruction-set`, `instruction-feedback`, `conversation-handoff` | Reserved for the future LLM Suite instruction-set controller; no caller yet. |
+| `intake-form-extraction`, `mid-search-planner` | Reserved; no caller yet. |
+
+`GET /api/prompts` lists the browser catalog. `POST /api/prompts/render` lets the browser render `screening-scored`, `screening-question`, `bing-query-writer`, `criteria-from-examples`, and `criteria-from-research`. The browser reads rendered text through routes, not prompt files. The loader conformance tests are `mna-ui/tests/prompts.test.ts` and `mna-tools/tests/prompts_conformance.rs`.
