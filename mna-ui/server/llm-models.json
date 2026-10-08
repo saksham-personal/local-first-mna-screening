@@ -1,0 +1,10 @@
+{
+  "llm_suite": [
+    { "id": "gpt-4.1", "label": "LLM Suite · GPT-4.1 (stub)" },
+    { "id": "gpt-4o", "label": "LLM Suite · GPT-4o (stub)" },
+    { "id": "o4-mini", "label": "LLM Suite · o4-mini (stub)" }
+  ],
+  "copilot": [
+    { "id": "m365-copilot", "label": "M365 Copilot (stub)" }
+  ]
+}

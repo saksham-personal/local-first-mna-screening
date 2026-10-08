@@ -783,3 +783,7 @@
     display: none;
   }
 }
+.ss-batch-controls { display: flex; align-items: center; gap: 12px; }
+.ss-batch-controls input[type="range"] { flex: 1; min-width: 0; padding: 0; accent-color: var(--accent); }
+.ss-batch-controls input[type="number"] { width: 76px; flex: none; }
+.ss-batch-warning { color: var(--warning); }

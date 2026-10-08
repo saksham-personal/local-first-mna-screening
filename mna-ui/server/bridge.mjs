@@ -338,7 +338,8 @@ export async function startBridge() {
     try {
       if (await handlePromptRoute(req, res, url, { respond, body })) return;
       if (await handleIntakeRoute(req, res, url, { respond, body, stagedFiles })) return;
-      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, simulated: simulatedProviders, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
+      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { ready: true, simulated: simulatedProviders, controller: { available: externalReady('llm_suite') && Boolean(providerDeployment('llm_suite')), simulated: stubMode }, providers: { llm_suite: providerReady('llm_suite'), copilot: providerReady('copilot'), bing: providerReady('bing') } });
+      if (req.method === 'GET' && url.pathname === '/api/screening/models') return respond(res, 200, JSON.parse(await readFile(resolve(root, 'server/llm-models.json'), 'utf8')));
       // The existing file route serves staged uploads only. Exports use a separate
       // basename-only route rooted in export/, never a caller-supplied path.
       const exportMatch = url.pathname.match(/^\/api\/exports\/(space-[0-9a-f-]{36}\.xlsx)$/);

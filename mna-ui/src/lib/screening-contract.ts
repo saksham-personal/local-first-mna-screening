@@ -1,4 +1,23 @@
 export type ScreeningProvider = "llm_suite" | "copilot";
+export type ScreeningModel = { id: string; label: string };
+export type ScreeningModels = Record<ScreeningProvider, ScreeningModel[]>;
+export async function loadScreeningModels(): Promise<ScreeningModels> {
+  const response = await fetch("/api/screening/models");
+  const models = await response.json();
+  if (!response.ok) throw new Error(models.error ?? "Could not load models.");
+  for (const provider of ["llm_suite", "copilot"] as const) {
+    if (!Array.isArray(models[provider]) || !models[provider].length || models[provider].some((model: ScreeningModel) =>
+      typeof model.id !== "string" || !model.id.trim() || model.id.length > 160 || typeof model.label !== "string" || !model.label.trim()) ||
+      new Set(models[provider].map((model: ScreeningModel) => model.id)).size !== models[provider].length)
+      throw new Error("The model list is invalid. Check server/llm-models.json.");
+  }
+  return models;
+}
+export function selectedModel(models: ScreeningModel[], current = "") { return models.find(model => model.id === current)?.id ?? models[0]?.id ?? ""; }
+export function batchLimit(provider: ScreeningProvider) { return provider === "copilot" ? 50 : 200; }
+export function defaultBatchSize(provider: ScreeningProvider) { return provider === "copilot" ? 10 : 25; }
+export function syncBatchSize(provider: ScreeningProvider, value: number | string) { return Math.max(1, Math.min(batchLimit(provider), Math.round(Number(value) || 1))); }
+export function batchWarning(provider: ScreeningProvider, size: number) { return provider === "copilot" && size > 20 ? "Large M365 batches can lose web context; 10–20 is recommended." : ""; }
 export type ScreeningSourceRow = {
   pk: string;
   PBId: string | null;

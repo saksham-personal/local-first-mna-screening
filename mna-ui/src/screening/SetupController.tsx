@@ -23,6 +23,7 @@ import type {
   ScreeningProvider,
   PreparedScreening,
 } from "../lib/screening-contract";
+import { loadScreeningModels, type ScreeningModels } from "../lib/screening-contract";
 
 export default function SetupController({
   sessionId,
@@ -45,15 +46,17 @@ export default function SetupController({
 }) {
   const initial = useRef(getChatState(sessionId)).current;
   const [catalog, setCatalog] = useState<ScreeningCatalog>();
+  const [models, setModels] = useState<ScreeningModels>();
   const [build, setBuild] = useState<SetupBuild>();
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
     setError("");
-    void Promise.all([getScreeningCatalog(sessionId, initial.backendRunId), listSetupBuilds()])
-      .then(([data, builds]) => {
+    void Promise.all([getScreeningCatalog(sessionId, initial.backendRunId), listSetupBuilds(), loadScreeningModels()])
+      .then(([data, builds, models]) => {
         if (active) {
+          setModels(models);
           setBuild(builds.filter(job => (!buildId || job.id === buildId) && job.sessionId === sessionId && job.runId === initial.backendRunId && job.provider === provider && job.config.mode === mode && job.status !== "approved").at(-1));
           setCatalog(data);
         }
@@ -84,7 +87,7 @@ export default function SetupController({
         "The screening changed while this setup was open. Close it and reopen the latest setup.",
       );
   };
-  if (!catalog)
+  if (!catalog || !models)
     return (
       <Dialog.Root
         open
@@ -128,6 +131,7 @@ export default function SetupController({
   return (
     <ScreeningSetup
       provider={provider}
+      models={models[provider]}
       initialMode={mode}
       initialPrompt={request}
       initialConfig={build?.config ?? initialConfig}

@@ -1,0 +1,31 @@
+.cc-turn { min-width: 0; font-size: 13px; }
+.cc-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.cc-header time { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+.cc-badge { background: var(--info-soft); color: var(--info); border-radius: 4px; padding: 2px 6px; font-size: 10px; }
+.cc-divider { border-block: 1px solid var(--border); color: var(--text-muted); padding: 10px 0; margin-bottom: 16px; font-size: 11px; }
+.cc-feedback { border-left: 2px solid var(--border); padding-left: 14px; }
+.cc-feedback-link { display: inline-block; color: var(--accent); margin-bottom: 12px; font-size: 12px; }
+.cc-turn h4 { margin: 16px 0 8px; font-size: 13px; }
+.cc-instructions { padding: 0; margin: 0; list-style: none; }
+.cc-instruction { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.cc-instruction-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.cc-status-label { text-transform: capitalize; color: var(--text-muted); font-size: 11px; }
+.cc-status-icon { font-weight: 700; }
+.cc-executed .cc-status-icon { color: var(--success); }
+.cc-rejected .cc-status-icon { color: var(--warning); }
+.cc-failed .cc-status-icon, .cc-reason { color: var(--danger); }
+.cc-instruction p { margin: 6px 0; overflow-wrap: anywhere; }
+.cc-result, .cc-warnings { color: var(--text-muted); font-size: 12px; }
+.cc-turn summary { cursor: pointer; color: var(--text-muted); font-size: 12px; padding: 6px 0; }
+.cc-reasoning { margin-block: 8px; }
+.cc-arguments { margin: 4px 0; padding-left: 16px; color: var(--text-muted); overflow-wrap: anywhere; }
+.cc-notes { background: var(--info-soft); border-left: 2px solid var(--info); padding: 12px; margin-top: 16px; }
+.cc-notes > strong { font-size: 12px; }
+.cc-popover { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 16px; max-width: min(360px, calc(100vw - 24px)); z-index: 100; font-size: 12px; }
+.cc-popover dl { margin-bottom: 0; }.cc-popover dt { color: var(--text-muted); margin-top: 10px; }.cc-popover dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.cc-pending { display: flex; align-items: center; gap: 8px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }.cc-pending span { color: var(--text-muted); font-size: 11px; }
+.cc-mode { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; font-size: 11px; }
+.cc-mode button { border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); border-radius: 5px; padding: 5px 8px; cursor: pointer; }
+.cc-mode button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.cc-mode-menu { position: relative; }.cc-mode-menu > div { position: absolute; bottom: 100%; right: 0; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: 10; white-space: nowrap; }
+@media (max-width: 500px) { .cc-pending { flex-wrap: wrap; }.cc-feedback { padding-left: 8px; } }
