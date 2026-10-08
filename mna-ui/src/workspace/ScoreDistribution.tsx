@@ -26,7 +26,7 @@ export default function ScoreDistribution({ rows, columns, rounds, tab, filterSt
   const maximum = Math.max(1, ...counts.map((bucket) => bucket.count));
   const hasScores = column && rows.some((row) => bucketOf(column.value(row), scheme) !== null);
   const filter = column ? filterState.columns[column.id] : undefined;
-  const emptyText = column?.id === "mid_semantic_score" ? "No semantic scores yet — semantic search isn't set up." : column?.id === "iscc_relevancy" ? "No ISCC relevancy scores yet." : rounds.length ? "No scores from this screening round yet." : "No screening rounds yet.";
+  const emptyText = /semantic/i.test(column?.id ?? "") ? "No semantic scores yet — semantic search isn't set up." : /iscc/i.test(column?.id ?? "") ? "No ISCC relevancy scores yet." : /MID/.test(column?.id ?? "") ? "No MID keyword scores yet." : rounds.length ? "No scores from this screening round yet." : "No screening rounds yet.";
   return <section className="ws-distribution" aria-label="Score distribution">
     <div className="ws-distribution-head">
       <div className="ws-distribution-title"><strong>Score distribution</strong><HelpTip size="sm" label="About score distribution">Counts follow the other column filters. Select a bar to change this score's bucket filter. CHECK stays included until you deselect it.</HelpTip></div>

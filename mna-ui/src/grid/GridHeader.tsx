@@ -1,3 +1,6 @@
+import { useSyncExternalStore } from "react";
+import { isFilterActive } from "./grid-filter";
+import { createGridRuntime } from "./grid-runtime";
 import { Popover } from "radix-ui";
 import { ArrowDown, ArrowUp, ArrowUpDown, Filter } from "lucide-react";
 import type { IHeaderParams } from "ag-grid-community";
@@ -7,36 +10,31 @@ import type { ColumnFilter, FilterState, SortState } from "./grid-types";
 
 export type GridHeaderParams<Row> = IHeaderParams<Row> & {
   gridColumn: GridColumnSpec<Row>;
-  rows: Row[];
-  columns: GridColumnSpec<Row>[];
-  filterState: FilterState;
-  columnFilter: ColumnFilter | undefined;
-  sortState: SortState;
-  filterOpen: boolean;
-  activeFilterCount: number;
-  quickFilterValue: string;
+  runtime: ReturnType<typeof createGridRuntime<GridHeaderSnapshot<Row>>>;
   onSortChange: (sort: SortState) => void;
   onFilterChange: (filter: ColumnFilter | undefined) => void;
   onFilterOpenChange: (columnId: string, open: boolean) => void;
   onQuickFilterChange: (value: string) => void;
 };
 
+export type GridHeaderSnapshot<Row> = {
+  rows: Row[]; columns: GridColumnSpec<Row>[]; filterState: FilterState;
+  sortState: SortState; openFilterColumn: string | null; selectedIds: string[];
+};
+export function headerQuickValue<Row>(column: GridColumnSpec<Row>, filter: ColumnFilter | undefined): string {
+  if (!filter || filter.kind !== column.kind) return "";
+  if (filter.kind === "text" || filter.kind === "category") return filter.contains ?? "";
+  if (filter.kind === "number" || filter.kind === "score") return filter.op === "gte" && filter.a !== undefined ? String(filter.a) : "";
+  return filter.op === "on" ? filter.a ?? "" : "";
+}
+
 export default function GridHeader<Row>(params: GridHeaderParams<Row>) {
-  const {
-    gridColumn,
-    rows,
-    columns,
-    filterState,
-    columnFilter,
-    sortState,
-    filterOpen,
-    activeFilterCount,
-    quickFilterValue,
-    onSortChange,
-    onFilterChange,
-    onFilterOpenChange,
-    onQuickFilterChange,
-  } = params;
+  const { gridColumn, runtime, onSortChange, onFilterChange, onFilterOpenChange, onQuickFilterChange } = params;
+  const { rows, columns, filterState, sortState, openFilterColumn } = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
+  const columnFilter = filterState.columns[gridColumn.id];
+  const filterOpen = openFilterColumn === gridColumn.id;
+  const activeFilterCount = isFilterActive(columnFilter) ? 1 : 0;
+  const quickFilterValue = headerQuickValue(gridColumn, columnFilter);
   const id = gridColumn.id;
   const direction =
     sortState?.columnId === id ? sortState.direction : undefined;
@@ -133,7 +131,7 @@ export default function GridHeader<Row>(params: GridHeaderParams<Row>) {
                 : "search"
           }
           min={gridColumn.kind === "score" ? 0 : undefined}
-          max={gridColumn.kind === "score" ? 10 : undefined}
+          max={gridColumn.kind === "score" ? gridColumn.bucketScheme?.max ?? 10 : undefined}
           value={quickFilterValue}
           placeholder={
             gridColumn.kind === "number" || gridColumn.kind === "score"

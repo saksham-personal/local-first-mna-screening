@@ -166,12 +166,18 @@ export default function CompanyDrawer({
                         </section>)}
                         <section className="company-drawer-section">
                           <h3>Coverage</h3>
+                          <dl className="company-drawer-facts">{(detail?.columns ?? []).filter(column => column.group === "coverage").map(column => <div key={column.id}><dt>{column.label}</dt><dd>{displayValue(detail?.values?.[column.id])}</dd></div>)}</dl>
+                          {!(detail?.columns ?? []).some(column => column.group === "coverage") && <p className="company-drawer-muted">No banker coverage fields available.</p>}
+                        </section>
+                        <section className="company-drawer-section">
+                          <h3>Hydration</h3>
                           <div className="company-drawer-coverage">
                             {(["PB", "ROGO", "Bing"] as const).map((label) => {
                               const covered = label === "PB" ? company.coverage.pb : label === "ROGO" ? company.coverage.rogo : company.coverage.bing;
                               return <span className={covered ? "is-covered" : ""} key={label}>{label}: {covered ? "Available" : "Not available"}</span>;
                             })}
                           </div>
+                          <dl className="company-drawer-facts">{(detail?.columns ?? []).filter(column => column.group === "hydration").map(column => <div key={column.id}><dt>{column.label}</dt><dd>{displayValue(detail?.values?.[column.id])}</dd></div>)}</dl>
                         </section>
                         <section className="company-drawer-section">
                           <h3>Descriptions</h3>

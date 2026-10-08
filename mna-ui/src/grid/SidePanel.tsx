@@ -18,6 +18,8 @@ type SidePanelProps<Row> = {
   activeTabId: string;
   onActiveTabChange: (id: string) => void;
   idPrefix: string;
+  onResetLayout?: () => void;
+  onClose?: () => void;
 };
 
 type PanelTab = {
@@ -40,6 +42,8 @@ export default function SidePanel<Row>({
   activeTabId,
   onActiveTabChange,
   idPrefix,
+  onResetLayout,
+  onClose,
 }: SidePanelProps<Row>) {
   const [columnSearch, setColumnSearch] = useState("");
   const [openFilterIds, setOpenFilterIds] = useState<string[]>(() => {
@@ -119,6 +123,7 @@ export default function SidePanel<Row>({
 
   const columnsContent = (
     <div className="dg-side-columns">
+      <div className="dg-picker-heading"><div><strong>Visible columns</strong><span>{visibleColumnIds.length} of {columns.length} selected</span></div><button type="button" onClick={() => onVisibleColumnIdsChange(allColumnIds)}>Show all</button><button type="button" onClick={() => onResetLayout ? onResetLayout() : onVisibleColumnIdsChange(defaultColumnIds)}>Reset layout</button></div>
       <label className="dg-filter-search dg-side-column-search">
         <Search size={14} aria-hidden="true" />
         <span className="sr-only">Search columns</span>
@@ -129,10 +134,6 @@ export default function SidePanel<Row>({
           placeholder="Search columns"
         />
       </label>
-      <div className="dg-side-column-actions">
-        <button type="button" onClick={() => onVisibleColumnIdsChange(allColumnIds)}>Select all</button>
-        <button type="button" onClick={() => onVisibleColumnIdsChange(defaultColumnIds)}>Reset</button>
-      </div>
       {groupedColumns.map(([group, groupColumns]) => {
         const collapsed = collapsedGroups.includes(group);
         return (
@@ -148,7 +149,7 @@ export default function SidePanel<Row>({
               <span>{group}</span>
               <span>{groupColumns.length}</span>
             </button>
-            {!collapsed && groupColumns.map((column) => (
+            {!collapsed && <div className="dg-column-tiles">{groupColumns.map((column) => (
               <label className="dg-column-choice" key={column.id}>
                 <input
                   type="checkbox"
@@ -157,7 +158,7 @@ export default function SidePanel<Row>({
                 />
                 <span>{column.header}</span>
               </label>
-            ))}
+            ))}</div>}
           </section>
         );
       })}
@@ -182,17 +183,14 @@ export default function SidePanel<Row>({
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
   return (
-    <aside className="dg-side-panel" aria-label="Grid options">
+    <aside className="dg-side-panel" aria-label="Grid options" onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); onClose?.(); } }}>
       <div
         id={`${idPrefix}-content-${activeTab.id}`}
         className="dg-side-panel-content"
         role="tabpanel"
         aria-labelledby={`${idPrefix}-tab-${activeTab.id}`}
       >
-        <div className="dg-side-panel-heading">
-          <strong>{activeTab.label}</strong>
-          {activeTab.count !== undefined && <span>{activeTab.count.toLocaleString()}</span>}
-        </div>
+        {activeTab.id !== "columns" && <div className="dg-side-panel-heading"><strong>{activeTab.label}</strong>{activeTab.count !== undefined && <span>{activeTab.count.toLocaleString()}</span>}</div>}
         {activeTab.content}
       </div>
       <div className="dg-side-panel-tabs" role="tablist" aria-label="Grid options">

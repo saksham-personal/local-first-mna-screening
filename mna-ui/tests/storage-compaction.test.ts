@@ -124,7 +124,7 @@ test("5,000-company state uses under 300 KB and all keys under 2 MB; reload page
   try {
     assert.equal(getChatState(id).companiesTrimmed, true); // restore is started by the app for the open session
     await restoreChatCompanies(id);
-    assert.equal(pages, 3); assert.equal(getChatState(id).companiesLoadError, undefined);
+    assert.equal(pages, 5); assert.equal(getChatState(id).companiesLoadError, undefined);
     assert.deepEqual(getChatState(id).companies, companies);
     assert.equal(getChatState(id).companiesLoading, false);
     assert.equal(getChatState(id).approvedRevision, 1);
@@ -219,7 +219,7 @@ test("company restore retries an oversized FIRST page at a smaller size instead 
   globalThis.fetch = async (_url, init) => {
     const { arguments: args } = JSON.parse(String(init?.body));
     limits.push(args.limit);
-    if (args.limit > 1000) return Response.json({ ok: false, error: "screening grid page exceeds 2 MB; retry with a smaller limit" }, { status: 400 });
+    if (args.limit > 500) return Response.json({ ok: false, error: "screening grid page exceeds 2 MB; retry with a smaller limit" }, { status: 400 });
     const start = args.after_company_id ? ids.indexOf(args.after_company_id) + 1 : 0;
     const rows = ids.slice(start, start + 2).map(company_id => ({ company_id, name: company_id, considered: true, source: "MID", company_payload: { name: company_id, mid_source_row: { "Company Name": company_id } } }));
     const next = start + 2 < ids.length ? rows.at(-1)!.company_id : null;
@@ -228,7 +228,7 @@ test("company restore retries an oversized FIRST page at a smaller size instead 
   try {
     const companies = await readRunCompanies("RUN-X");
     assert.deepEqual(companies.map(company => company.pk), ids);
-    assert.equal(limits[0], 2000);
-    assert.equal(limits[1], 1000);
+    assert.equal(limits[0], 1000);
+    assert.equal(limits[1], 500);
   } finally { globalThis.fetch = prior; }
 });
