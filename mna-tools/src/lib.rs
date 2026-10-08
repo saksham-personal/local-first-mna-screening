@@ -4,6 +4,7 @@ pub mod data;
 pub mod enrichment_report;
 pub mod error;
 pub mod execution;
+pub mod export_jobs;
 pub mod gateway;
 pub mod grid;
 pub mod identity;

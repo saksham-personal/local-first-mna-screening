@@ -895,59 +895,31 @@ impl DataService {
             Uuid::new_v4(),
             export_type.to_ascii_lowercase()
         ));
-        if export_type == "FULL" {
-            let outcome = self.store.with_connection(|connection| {
-                if !simulated && export_has_simulated(connection, &args.run_id)? {
-                    return Err(simulated_export_error());
-                }
-                write_full_export(connection, &args.run_id, &temporary, simulated)
-            });
-            let (companies, mid_rows, iscc_rows) = match outcome {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    let _ = std::fs::remove_file(&temporary);
-                    return Err(error);
-                }
-            };
-            publish_export(&temporary, &path)?;
-            return Ok(
-                json!({"run_id":args.run_id,"export_type":export_type,"path":path.to_string_lossy(),"companies":companies,"mid_rows":mid_rows,"iscc_rows":iscc_rows}),
-            );
-        }
-        let data=self.store.with_connection(|connection|{
-            require_run(connection,&args.run_id)?;
-            if !simulated && export_has_simulated(connection, &args.run_id)? { return Err(simulated_export_error()); }
-            let mut statement=connection.prepare("SELECT c.company_id,c.name,c.website,c.city,c.description,json_extract(c.metadata_json,'$.hq_state') FROM candidates x JOIN companies c ON c.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 ORDER BY c.company_id")?;
-            let companies=statement.query_map([&args.run_id],|r|Ok(ExportCompany{company_id:r.get(0)?,name:r.get(1)?,website:r.get(2)?,city:r.get(3)?,description:r.get(4)?,state:r.get(5)?}))?
-                .collect::<std::result::Result<Vec<_>,_>>()?;
-            let mut sources=HashMap::new();
-            let mut source_query=connection.prepare("SELECT c.company_id,MAX(CASE WHEN s.source='MID' THEN 1 ELSE 0 END),MAX(CASE WHEN s.source='ISCC' AND s.run_scope=? THEN 1 ELSE 0 END) FROM candidates c LEFT JOIN source_rows s ON s.company_id=c.company_id WHERE c.run_id=? AND c.considered=1 GROUP BY c.company_id")?;
-            for row in source_query.query_map(params![args.run_id,args.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?)))? {
-                let (id,mid,iscc)=row?;
-                sources.insert(id,match(mid!=0,iscc!=0){(true,true)=>"both",(true,false)=>"MID",(false,true)=>"ISCC",_=>"UNKNOWN"}.to_owned());
+        let outcome = self.store.with_connection(|connection| {
+            let snapshot = connection.unchecked_transaction()?;
+            let simulated = export_has_simulated(&snapshot, &args.run_id)?;
+            if simulated && !args.allow_simulated {
+                return Err(simulated_export_error());
             }
-            let mut raw_mid=Vec::new();let mut raw_iscc=Vec::new();
-            if export_type=="FULL" {
-                let mut statement=connection.prepare("SELECT s.source,s.company_id,s.row_json FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND c.considered=1 AND (s.source='MID' OR s.run_scope=c.run_id) ORDER BY s.source,s.company_id,s.imported_at")?;
-                for row in statement.query_map([&args.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))? {
-                    let (source,company_id,json)=row?;
-                    let record=(company_id,serde_json::from_str::<Value>(&json)?);
-                    if source=="MID"{raw_mid.push(record);}else{raw_iscc.push(record);}
-                }
+            write_export_stream(
+                &snapshot,
+                &args.run_id,
+                &export_type,
+                &temporary,
+                simulated,
+                |_, _| Ok(()),
+            )
+        });
+        let (companies, mid_rows, iscc_rows) = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(error);
             }
-            Ok((companies,sources,raw_mid,raw_iscc))
-        })?;
-        if data.0.len() >= 1_048_576 || data.2.len() >= 1_048_576 || data.3.len() >= 1_048_576 {
-            return Err(Error::Validation("Excel sheet row limit exceeded".into()));
-        }
-        let written = write_export(&temporary, &export_type, &data, simulated);
-        if let Err(error) = written {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(error);
-        }
+        };
         publish_export(&temporary, &path)?;
         Ok(
-            json!({"run_id":args.run_id,"export_type":export_type,"path":path.to_string_lossy(),"companies":data.0.len(),"mid_rows":data.2.len(),"iscc_rows":data.3.len()}),
+            json!({"run_id":args.run_id,"export_type":export_type,"path":path.to_string_lossy(),"companies":companies,"mid_rows":mid_rows,"iscc_rows":iscc_rows}),
         )
     }
 }
@@ -1994,14 +1966,7 @@ fn write_json_parquet(path: &Path, rows: &[Value]) -> Result<()> {
     Ok(())
 }
 
-type ExportData = (
-    Vec<ExportCompany>,
-    HashMap<String, String>,
-    Vec<(String, Value)>,
-    Vec<(String, Value)>,
-);
-
-fn publish_export(temporary: &Path, target: &Path) -> Result<()> {
+pub(crate) fn publish_export(temporary: &Path, target: &Path) -> Result<()> {
     let published = std::fs::hard_link(temporary, target);
     let _ = std::fs::remove_file(temporary);
     if let Err(error) = published {
@@ -2016,11 +1981,11 @@ fn publish_export(temporary: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn simulated_export_error() -> Error {
+pub(crate) fn simulated_export_error() -> Error {
     Error::Validation("This export includes simulated data. Turn off simulation or pass allow_simulated to export a labelled copy.".into())
 }
 
-fn export_has_simulated(connection: &Connection, run_id: &str) -> Result<bool> {
+pub(crate) fn export_has_simulated(connection: &Connection, run_id: &str) -> Result<bool> {
     require_run(connection, run_id)?;
     Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM candidates c WHERE c.run_id=?1 AND c.considered=1 AND (
         EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.simulated=1 AND (s.source='MID' OR s.run_scope=c.run_id)) OR
@@ -2046,6 +2011,7 @@ fn write_full_export(
     run_id: &str,
     path: &Path,
     simulated: bool,
+    mut progress: impl FnMut(usize, usize) -> Result<()>,
 ) -> Result<(usize, usize, usize)> {
     use rust_xlsxwriter::Workbook;
     require_run(connection, run_id)?;
@@ -2055,11 +2021,17 @@ fn write_full_export(
         |r| r.get(0),
     )?;
     let mut workbook = Workbook::new();
+    workbook
+        .set_tempdir(path.parent().unwrap_or_else(|| Path::new(".")))
+        .map_err(xlsx_error)?;
     if simulated {
         write_simulated_note(&mut workbook)?;
     }
     let offset = u16::from(simulated);
     let mut counts = [0usize, 0usize];
+    let total = export_row_total(connection, run_id, "FULL")?;
+    let mut done = 0;
+    progress(0, total)?;
     for (index, source) in ["MID", "ISCC"].iter().enumerate() {
         let sql="SELECT s.company_id,s.row_json FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND c.considered=1 AND s.source=? AND (s.source='MID' OR s.run_scope=c.run_id) ORDER BY s.company_id,s.imported_at,s.source_row_id";
         let mut headers = BTreeSet::<String>::new();
@@ -2077,6 +2049,11 @@ fn write_full_export(
             }
         }
         let headers = headers.into_iter().collect::<Vec<_>>();
+        if headers.len() + 1 + usize::from(simulated) > 16_384 {
+            return Err(Error::Validation(
+                "Excel sheet column limit exceeded".into(),
+            ));
+        }
         let sheet = workbook.add_worksheet_with_constant_memory();
         sheet.set_name(*source).map_err(xlsx_error)?;
         if simulated {
@@ -2127,149 +2104,164 @@ fn write_full_export(
                     )
                     .map_err(xlsx_error)?;
             }
+            done += 1;
+            if done % 500 == 0 {
+                progress(done, total)?;
+            }
         }
     }
+    progress(done, total)?;
     workbook.save(path).map_err(xlsx_error)?;
     Ok((companies, counts[0], counts[1]))
 }
 
-fn write_export(path: &Path, kind: &str, data: &ExportData, simulated: bool) -> Result<()> {
-    use rust_xlsxwriter::Workbook;
-    let mut workbook = Workbook::new();
-    if kind == "PITCHBOOK" || kind == "LLM" {
-        let sheet = workbook.add_worksheet_with_constant_memory();
-        sheet.set_name(kind).map_err(xlsx_error)?;
-        let mut headers = if kind == "PITCHBOOK" {
-            vec![
-                "pk",
-                "Company Name",
-                "Website",
-                "HQ City",
-                "HQ State",
-                "Source",
-            ]
-        } else {
-            vec![
-                "index",
-                "pk",
-                "Company Name",
-                "Website",
-                "Source",
-                "Description",
-            ]
-        };
-        if simulated {
-            headers.insert(0, "Data origin");
-        }
-        for (col, header) in headers.iter().enumerate() {
-            sheet
-                .write_string(0, col as u16, *header)
-                .map_err(xlsx_error)?;
-        }
-        for (i, company) in data.0.iter().enumerate() {
-            let source = data
-                .1
-                .get(&company.company_id)
-                .map(String::as_str)
-                .unwrap_or("UNKNOWN");
-            let mut values = if kind == "PITCHBOOK" {
-                vec![
-                    company.company_id.as_str(),
-                    company.name.as_str(),
-                    company.website.as_deref().unwrap_or(""),
-                    company.city.as_deref().unwrap_or(""),
-                    company.state.as_deref().unwrap_or(""),
-                    source,
-                ]
-            } else {
-                vec![
-                    "",
-                    company.company_id.as_str(),
-                    company.name.as_str(),
-                    company.website.as_deref().unwrap_or(""),
-                    source,
-                    company.description.as_deref().unwrap_or(""),
-                ]
-            };
-            if simulated {
-                values.insert(0, "SIMULATED");
-            }
-            for (col, value) in values.iter().enumerate() {
-                if kind == "LLM" && col == usize::from(simulated) {
-                    sheet
-                        .write_number((i + 1) as u32, col as u16, (i + 1) as f64)
-                        .map_err(xlsx_error)?;
-                } else {
-                    sheet
-                        .write_string(
-                            (i + 1) as u32,
-                            col as u16,
-                            crate::identity::safe_spreadsheet_text(value),
-                        )
-                        .map_err(xlsx_error)?;
-                }
-            }
-        }
+// SQLite cursors keep one source row/company in memory. Progress is published every 500 rows.
+pub(crate) fn export_row_total(connection: &Connection, run_id: &str, kind: &str) -> Result<usize> {
+    let sql = if kind == "FULL" {
+        "SELECT COUNT(*) FROM source_rows s JOIN candidates c ON c.company_id=s.company_id WHERE c.run_id=? AND c.considered=1 AND (s.source='MID' OR s.run_scope=c.run_id)"
     } else {
-        if simulated {
-            write_simulated_note(&mut workbook)?;
-        }
-        let offset = u16::from(simulated);
-        for (name, rows) in [("MID", &data.2), ("ISCC", &data.3)] {
-            let sheet = workbook.add_worksheet();
-            sheet.set_name(name).map_err(xlsx_error)?;
-            let mut headers = BTreeSet::<String>::new();
-            for (_, row) in rows {
-                if let Some(obj) = row.as_object() {
-                    headers.extend(obj.keys().cloned());
-                }
-            }
-            let headers = headers.into_iter().collect::<Vec<_>>();
-            if simulated {
-                sheet
-                    .write_string(0, 0, "Data origin")
-                    .map_err(xlsx_error)?;
-            }
-            sheet.write_string(0, offset, "pk").map_err(xlsx_error)?;
-            for (col, header) in headers.iter().enumerate() {
-                sheet
-                    .write_string(0, (col + 1) as u16 + offset, header)
-                    .map_err(xlsx_error)?;
-            }
-            for (i, (company_id, row)) in rows.iter().enumerate() {
-                if simulated {
-                    sheet
-                        .write_string((i + 1) as u32, 0, "SIMULATED")
-                        .map_err(xlsx_error)?;
-                }
-                sheet
-                    .write_string(
-                        (i + 1) as u32,
-                        offset,
-                        crate::identity::safe_spreadsheet_text(company_id),
-                    )
-                    .map_err(xlsx_error)?;
-                for (col, header) in headers.iter().enumerate() {
-                    let value = row
-                        .get(header)
-                        .map(|v| {
-                            v.as_str()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| v.to_string())
-                        })
-                        .unwrap_or_default();
-                    sheet
-                        .write_string(
-                            (i + 1) as u32,
-                            (col + 1) as u16 + offset,
-                            crate::identity::safe_spreadsheet_text(&value),
-                        )
-                        .map_err(xlsx_error)?;
-                }
-            }
+        "SELECT COUNT(*) FROM candidates WHERE run_id=? AND considered=1"
+    };
+    Ok(connection.query_row(sql, [run_id], |r| r.get(0))?)
+}
+
+pub(crate) fn write_export_stream(
+    connection: &Connection,
+    run_id: &str,
+    kind: &str,
+    path: &Path,
+    simulated: bool,
+    mut progress: impl FnMut(usize, usize) -> Result<()>,
+) -> Result<(usize, usize, usize)> {
+    if kind == "FULL" {
+        return write_full_export(connection, run_id, path, simulated, progress);
+    }
+    let total = export_row_total(connection, run_id, kind)?;
+    if total >= 1_048_576 {
+        return Err(Error::Validation("Excel sheet row limit exceeded".into()));
+    }
+    let mut workbook = rust_xlsxwriter::Workbook::new();
+    workbook
+        .set_tempdir(path.parent().unwrap_or_else(|| Path::new(".")))
+        .map_err(xlsx_error)?;
+    let sheet = workbook.add_worksheet_with_constant_memory();
+    sheet.set_name(kind).map_err(xlsx_error)?;
+    write_company_headers(sheet, kind, simulated)?;
+    progress(0, total)?;
+    let mut statement = connection.prepare("SELECT c.company_id,c.name,c.website,c.city,c.description,json_extract(c.metadata_json,'$.hq_state'),EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.source='MID'),EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.source='ISCC' AND s.run_scope=x.run_id) FROM candidates x JOIN companies c ON c.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 ORDER BY c.company_id")?;
+    let mut done = 0;
+    for record in statement.query_map([run_id], |r| {
+        Ok((
+            ExportCompany {
+                company_id: r.get(0)?,
+                name: r.get(1)?,
+                website: r.get(2)?,
+                city: r.get(3)?,
+                description: r.get(4)?,
+                state: r.get(5)?,
+            },
+            r.get::<_, bool>(6)?,
+            r.get::<_, bool>(7)?,
+        ))
+    })? {
+        let (company, mid, iscc) = record?;
+        let source = match (mid, iscc) {
+            (true, true) => "both",
+            (true, false) => "MID",
+            (false, true) => "ISCC",
+            _ => "UNKNOWN",
+        };
+        done += 1;
+        write_company_row(sheet, kind, &company, source, done as u32, simulated)?;
+        if done % 500 == 0 {
+            progress(done, total)?;
         }
     }
+    progress(done, total)?;
     workbook.save(path).map_err(xlsx_error)?;
+    Ok((done, 0, 0))
+}
+
+fn write_company_headers(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    kind: &str,
+    simulated: bool,
+) -> Result<()> {
+    let mut headers = if kind == "PITCHBOOK" {
+        vec![
+            "pk",
+            "Company Name",
+            "Website",
+            "HQ City",
+            "HQ State",
+            "Source",
+        ]
+    } else {
+        vec![
+            "index",
+            "pk",
+            "Company Name",
+            "Website",
+            "Source",
+            "Description",
+        ]
+    };
+    if simulated {
+        headers.insert(0, "Data origin");
+    }
+    for (col, header) in headers.iter().enumerate() {
+        sheet
+            .write_string(0, col as u16, *header)
+            .map_err(xlsx_error)?;
+    }
+    Ok(())
+}
+
+fn write_company_row(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    kind: &str,
+    company: &ExportCompany,
+    source: &str,
+    row_number: u32,
+    simulated: bool,
+) -> Result<()> {
+    let mut values = if kind == "PITCHBOOK" {
+        vec![
+            company.company_id.as_str(),
+            company.name.as_str(),
+            company.website.as_deref().unwrap_or(""),
+            company.city.as_deref().unwrap_or(""),
+            company.state.as_deref().unwrap_or(""),
+            source,
+        ]
+    } else {
+        vec![
+            "",
+            company.company_id.as_str(),
+            company.name.as_str(),
+            company.website.as_deref().unwrap_or(""),
+            source,
+            company.description.as_deref().unwrap_or(""),
+        ]
+    };
+    if simulated {
+        values.insert(0, "SIMULATED");
+    }
+    for (col, value) in values.iter().enumerate() {
+        if kind == "LLM" && col == usize::from(simulated) {
+            sheet
+                .write_number(row_number, col as u16, row_number as f64)
+                .map_err(xlsx_error)?;
+        } else {
+            sheet
+                .write_string(
+                    row_number,
+                    col as u16,
+                    crate::identity::safe_spreadsheet_text(value),
+                )
+                .map_err(xlsx_error)?;
+        }
+    }
     Ok(())
 }
 fn xlsx_error(error: rust_xlsxwriter::XlsxError) -> Error {

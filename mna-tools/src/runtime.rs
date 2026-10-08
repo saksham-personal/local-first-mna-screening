@@ -26,6 +26,7 @@ pub struct Runtime {
     space: Arc<crate::search_space::SearchSpace>,
     context: ContextService,
     concurrency: Arc<Semaphore>,
+    exports: crate::export_jobs::ExportJobs,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -365,6 +366,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         ("get_run_source_projection", "Build a run-scoped input table with independent PB/MID/ISCC name and website fallbacks, labeled descriptions, coverage and row hashes", "projection", false),
         ("get_mid_index_status", "Read the active MID index and running build", "data", false),
+        ("get_export", "Read background export progress", "data", false),
+        ("list_exports", "List background exports for a run", "data", false),
         ("get_index_build", "Read durable index build steps and progress", "data", false),
         ("list_index_builds", "List recent MID index builds and bundles", "data", false),
         ("get_source_field_catalog", "List available MID, ISCC, PitchBook and ROGO fields and missing-data counts for this run", "projection", false),
@@ -451,6 +454,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     .or_else(|| crate::context::input_schema(name))
                     .or_else(|| crate::search::input_schema(name))
                     .or_else(|| crate::data::input_schema(name))
+                    .or_else(|| crate::export_jobs::input_schema(name))
                     .or_else(|| crate::index_build::input_schema(name))
                     .or_else(|| crate::workflow::input_schema(name))
                     .or_else(|| crate::projection::input_schema(name))
@@ -486,6 +490,7 @@ impl Runtime {
         Ok(Self {
             search: Arc::new(SearchEngine::new(store.clone())?),
             space: Arc::new(crate::search_space::SearchSpace::new(store.clone())?),
+            exports: crate::export_jobs::ExportJobs::new(&store)?,
             context: ContextService::new(store.clone()),
             store,
             concurrency: Arc::new(Semaphore::new(8)),
@@ -569,12 +574,15 @@ impl Runtime {
         } else {
             let store = self.store.clone();
             let context = self.context.clone();
+            let exports = self.exports.clone();
             let data = DataService::new(store.clone());
             let workflow = WorkflowService::new(store.clone());
             let owned_tool = tool.to_owned();
             let owned_arguments = arguments.clone();
             tokio::task::spawn_blocking(move || {
-                if crate::index_build::input_schema(&owned_tool).is_some() {
+                if crate::export_jobs::input_schema(&owned_tool).is_some() {
+                    exports.execute(&store, &owned_tool, &owned_arguments)
+                } else if crate::index_build::input_schema(&owned_tool).is_some() {
                     crate::index_build::execute(&store, &owned_tool, &owned_arguments)
                 } else if owned_tool == "get_grid_descriptions" {
                     crate::grid::grid_descriptions(&store, &owned_arguments)
@@ -928,6 +936,7 @@ async fn admin(
         "space-export" => "space_export",
         "labels" => "label_company",
         "company-files" => "import_company_files",
+        "export-start" => "start_export",
         "index-build-start" => "start_index_build",
         "index-build-cancel" => "cancel_index_build",
         "mid-bundle-activate" => "activate_mid_bundle",
@@ -1025,11 +1034,12 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("approve_criteria_revision", "/admin/criteria-approve"),
         ("apply_enrichment_review", "/admin/enrichment-review"),
         ("dispatch_provider_text", "/admin/provider-text"),
+        ("start_export", "/admin/export-start"),
         ("start_index_build", "/admin/index-build-start"),
         ("cancel_index_build", "/admin/index-build-cancel"),
         ("activate_mid_bundle", "/admin/mid-bundle-activate"),
         ("delete_mid_bundle", "/admin/mid-bundle-delete"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::export_jobs::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 

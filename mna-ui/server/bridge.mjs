@@ -1,9 +1,10 @@
 import { availableParallelism } from 'node:os';
+import { pipeline } from 'node:stream/promises';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, access, readdir, stat, rename, open, unlink } from 'node:fs/promises';
-import { dirname, resolve, extname, basename } from 'node:path';
+import { mkdir, readFile, writeFile, access, readdir, stat, rename, open, unlink, realpath } from 'node:fs/promises';
+import { dirname, resolve, extname, basename, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJobRegistry } from './jobs.mjs';
 import { createDurableScreeningPreparation } from './durable-screening.mjs';
@@ -19,8 +20,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = `http://127.0.0.1:${ports.rust}`;
-const admin = { start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
-const allowed = new Set(['get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
+const admin = { start_export: '/admin/export-start', start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
+const allowed = new Set(['get_export', 'list_exports', 'get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
 for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'get_screening_rounds', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_company_detail', 'get_enrichment_report', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
 Object.assign(admin, { space_sync: '/admin/space-sync', space_add_to_run: '/admin/space-add-to-run', space_export: '/admin/space-export' });
 for (const tool of ['space_sync_status', 'space_browse', 'space_search_lexical', 'space_search_semantic', 'space_search_iscc', 'space_recent']) allowed.add(tool);
@@ -100,6 +101,16 @@ async function sendStagedFile(res, record) {
     'X-Content-Type-Options': 'nosniff',
   });
   res.end(bytes);
+}
+
+// Resolve both the root and file to prevent traversal and symlink escapes.
+export async function resolveExportDownload(exportRoot, id, status) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('Invalid export id.');
+  if (status?.export_id !== id || status.state !== 'done' || typeof status.file !== 'string' || !/^[A-Za-z0-9_-]+\.xlsx$/.test(status.file)) throw new Error('The export is not ready to download.');
+  const rootPath = await realpath(exportRoot), path = await realpath(resolve(rootPath, status.file));
+  const inside = relative(rootPath, path);
+  if (!inside || inside.startsWith('..') || isAbsolute(inside)) throw new Error('Export file must be inside the export directory.');
+  return path;
 }
 
 async function rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal) {
@@ -325,6 +336,21 @@ export async function startBridge() {
         const job = jobs.get(jobMatch[1]);
         return job ? respond(res, 200, { job }) : respond(res, 404, { error: 'Screening job not found.' });
       }
+      if (req.method === 'GET' && url.pathname.startsWith('/api/exports/')) {
+        const id = decodeURIComponent(url.pathname.slice('/api/exports/'.length));
+        if (!/^[A-Za-z0-9_-]+$/.test(id)) return respond(res, 400, { error: 'Invalid export id.' });
+        const status = await call('get_export', { export_id: id });
+        if (status.state !== 'done') return respond(res, 409, { error: status.error || 'The export is not ready to download.' });
+        const path = await resolveExportDownload(env.MNA_EXPORT_DIR, id, status);
+        const handle = await open(path, 'r');
+        try {
+          const info = await handle.stat();
+          if (!info.isFile()) throw new Error('Export file is unavailable.');
+          res.writeHead(200, { 'Content-Type': fileKinds.get('.xlsx').contentType, 'Content-Length': String(info.size), 'Content-Disposition': quotedFilename(status.file), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+          await pipeline(handle.createReadStream({ autoClose: false }), res);
+        } finally { await handle.close(); }
+        return;
+      }
       const fileMatch = url.pathname.match(/^\/api\/files\/([A-Za-z0-9._-]+)$/);
       if (req.method === 'GET' && fileMatch) {
         const record = stagedFiles.get(fileMatch[1]);
@@ -434,6 +460,7 @@ export async function startBridge() {
       const result = await call(input.tool, input.arguments ?? {}, input.analystApproved, controller.signal);
       return respond(res, 200, { tool: input.tool, ok: true, result });
     } catch (error) {
+      if (res.headersSent) { res.destroy(); return; }
       if (!res.destroyed) respond(res, Number.isSafeInteger(error?.status) ? error.status : 400, { error: error instanceof Error ? error.message : String(error), ...(error.calls ? { calls: error.calls } : {}) });
     }
   });

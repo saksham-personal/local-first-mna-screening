@@ -1,9 +1,10 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowRight, Check, ChevronDown, ChevronUp, CircleAlert, Clock3, Pause, Play, RotateCcw, Square, X } from "lucide-react";
 import { formatDateTime, formatTime, plural } from "../lib/format";
 import type { IndexBuild } from "../index/index-build-client";
 import { buildEtaText, isActiveBuild, overallPercent, stepPresentation, buildStatusText } from "../index/index-build-state";
 import { IndexProgressBar } from "../index/BuildIndexDialog";
+import { exportActivity, exportJobsEvent, exportRunIds, listExports, type ExportJob } from "../lib/screening-client";
 import "./background-runs.css";
 
 export type BackgroundRunView = {
@@ -76,8 +77,42 @@ function percent(job: BackgroundRunView) {
 
 export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismissIndex, jobs, searches = [], expanded, onExpandedChange, layoutKey, onAction, onDismiss, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const items = indexBuilds.length + searches.length + jobs.length;
-  const visible = items > 0 || expanded;
+  const [exports, setExports] = useState<ExportJob[]>([]);
+  const [exportError, setExportError] = useState("");
+  const expandRef = useRef(onExpandedChange);
+  expandRef.current = onExpandedChange;
+  useEffect(() => {
+    let disposed = false, polling = false, refreshAgain = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      clearTimeout(timer);
+      if (polling) { refreshAgain = true; return; }
+      polling = true;
+      let running = false;
+      try {
+        const results = await Promise.all(exportRunIds().map(listExports));
+        const next = results.flat().sort((a, b) => b.started_at.localeCompare(a.started_at));
+        running = next.some(job => job.state === "running");
+        if (!disposed) { setExports(next); setExportError(""); }
+      } catch (caught) {
+        if (!disposed) setExportError(caught instanceof Error ? caught.message : "Export status could not be loaded.");
+        running = true;
+      } finally {
+        polling = false;
+        if (!disposed) {
+          const delay = refreshAgain ? 0 : running ? 1000 : 10000;
+          refreshAgain = false;
+          timer = setTimeout(() => void refresh(), delay);
+        }
+      }
+    };
+    const started = () => { expandRef.current(true); void refresh(); };
+    window.addEventListener(exportJobsEvent, started);
+    void refresh();
+    return () => { disposed = true; clearTimeout(timer); window.removeEventListener(exportJobsEvent, started); };
+  }, []);
+  const items = indexBuilds.length + searches.length + jobs.length + exports.length;
+  const visible = items > 0 || expanded || !!exportError;
   useLayoutEffect(() => {
     const host = hostRef.current, main = host?.parentElement;
     if (!host || !main) return;
@@ -104,9 +139,9 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     const observer = new ResizeObserver(measure);
     [main, header, sideChatHeader, composer, toggle].forEach(element => { if (element) observer.observe(element); });
     return () => observer.disconnect();
-  }, [indexBuilds, jobs, searches, expanded, visible, layoutKey]);
+  }, [indexBuilds, jobs, searches, exports, expanded, visible, layoutKey]);
   if (!visible) return null;
-  const activeCount = indexBuilds.filter(isActiveBuild).length + jobs.filter((job) => job.state === "running" || job.state === "queued").length + searches.filter((search) => search.state === "running").length;
+  const activeCount = exports.filter(job => job.state === "running").length + indexBuilds.filter(isActiveBuild).length + jobs.filter((job) => job.state === "running" || job.state === "queued").length + searches.filter((search) => search.state === "running").length;
   const totalBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.total), 0);
   const completedBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.completed), 0);
   const aggregatePercent = totalBatches > 0 ? Math.min(100, (completedBatches / totalBatches) * 100) : 0;
@@ -134,6 +169,21 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
       {expanded && (
         <div className="br-dock-details" id="activity-details">
           {items === 0 && <p className="br-empty">Searches and screening runs show up here while they work.</p>}
+          {exportError && <p className="br-message br-search-error" role="alert">{exportError}</p>}
+          {exports.length > 0 && <section className="br-group" aria-label="Exports">
+            <h3 className="br-group-title">Exports<span>{exports.length}</span></h3>
+            {exports.map(job => {
+              const item = exportActivity(job);
+              return <section className={`br-run br-state-${item.state}`} key={job.export_id} aria-label={`${item.title}: ${item.label}`}>
+                <div className="br-run-heading"><div className="br-run-copy"><strong>{item.title}</strong><span>{item.label}</span></div></div>
+                <div className="br-progress-label"><span>{job.rows_done.toLocaleString()} of {plural(job.rows_total, "row")} written</span><span>{Math.round(item.percent)}%</span></div>
+                <div className="br-progress" role="progressbar" aria-label={`${item.title} progress`} aria-valuemin={0} aria-valuemax={job.rows_total || 1} aria-valuenow={job.rows_total ? Math.min(job.rows_done, job.rows_total) : job.state === "done" ? 1 : 0}><span style={{ width: `${item.percent}%` }} /></div>
+                {job.error && <p className="br-message br-search-error" role="alert">{job.error}</p>}
+                {item.download && <div className="br-actions"><button type="button" onClick={() => { window.location.href = item.download!; }}>Download</button></div>}
+                <time className="br-updated" dateTime={job.started_at}>Started {formatDateTime(job.started_at)}</time>
+              </section>;
+            })}
+          </section>}
           {indexBuilds.length > 0 && <section className="br-group" aria-label="Index builds">
             <h3 className="br-group-title">Index builds<span>{indexBuilds.length}</span></h3>
             {indexBuilds.map(build => <section className="br-run br-index" key={build.build_id}>
