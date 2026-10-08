@@ -1,5 +1,6 @@
 pub mod agent_commands;
 pub mod context;
+pub mod controller;
 pub mod data;
 pub mod enrichment_report;
 pub mod error;
@@ -9,6 +10,7 @@ pub mod grid;
 pub mod identity;
 pub mod index_build;
 pub mod instruction_set;
+pub mod llmsuite;
 pub mod mid_config;
 pub mod mid_search;
 pub mod projection;

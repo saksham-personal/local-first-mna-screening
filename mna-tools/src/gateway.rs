@@ -220,32 +220,8 @@ pub async fn provider_text(store: Store, args: ProviderTextRequest) -> Result<Va
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(90))
         .build()?;
-    let service = ExecutionService::new(store.clone());
     let mut repair = String::new();
     for attempt in 0..=2 {
-        let key = format!("text:{request_id}:{attempt}");
-        let already_sent = store.with_connection(|connection| {
-            Ok(connection.query_row(
-                "SELECT COUNT(*) FROM execution_provider_audit WHERE request_key=?",
-                [&key],
-                |row| row.get::<_, i64>(0),
-            )? > 0)
-        })?;
-        if already_sent {
-            return Err(Error::Conflict("This provider request may already have been sent. Inspect its receipt before retrying".into()));
-        }
-        if args.provider == "llm_suite" {
-            invoke(
-                &service,
-                "consume_llmsuite_slot",
-                json!({"purpose":if attempt==0{purpose}else{"repair"},"request_key":key}),
-            )
-            .await?;
-        }
-        store.with_connection(|connection| {
-            connection.execute("INSERT INTO execution_provider_audit(audit_id,job_id,provider,purpose,request_key,payload_hash,recorded_at) VALUES(?,NULL,?,?,?,?,?)",rusqlite::params![Uuid::new_v4().to_string(),args.provider,purpose,key,payload_hash,chrono::Utc::now().to_rfc3339()])?;
-            Ok(())
-        })?;
         let mut body = payload.clone();
         if !repair.is_empty() {
             body["prompt"] = json!(crate::prompts::render(
@@ -256,49 +232,22 @@ pub async fn provider_text(store: Store, args: ProviderTextRequest) -> Result<Va
                 ]
             )?);
         }
-        let response = client
-            .post(endpoint.clone())
-            .bearer_auth(&token)
-            .header("Idempotency-Key", &key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| {
-                Error::Conflict(
-                    "Provider receipt is uncertain. Verify the request before retrying".into(),
-                )
-            })?;
-        if !response.status().is_success() {
-            return Err(Error::Conflict(format!(
-                "Provider returned HTTP {}; no answer was accepted",
-                response.status().as_u16()
-            )));
-        }
-        let mut bytes = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|_| {
-                Error::Conflict("Provider reply was interrupted; inspect its receipt".into())
-            })?;
-            if bytes.len() + chunk.len() > 2_000_000 {
-                return Err(Error::Validation("Provider reply exceeded 2 MB".into()));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        // The receipt precedes even envelope parsing: malformed JSON and missing
-        // response_text are still exact, durable evidence of a sent request.
-        let mut response_bytes_hex = String::with_capacity(bytes.len() * 2);
-        use std::fmt::Write as _;
-        for byte in &bytes {
-            write!(&mut response_bytes_hex, "{byte:02x}").expect("writing to String cannot fail");
-        }
-        store.with_connection(|connection| {
-            connection.execute("INSERT INTO agent_events(event_id,run_id,event_type,payload_json,major,created_at) VALUES(?,?,'PROVIDER_TEXT_RECEIPT',?,0,?)",rusqlite::params![format!("text:{request_id}:receipt:{attempt}"),args.run_id,json!({"request_id":request_id,"provider":args.provider,"attempt":attempt,"payload_hash":payload_hash,"response_hash":format!("{:x}",Sha256::digest(&bytes)),"response_bytes_hex":response_bytes_hex}).to_string(),chrono::Utc::now().to_rfc3339()])?;
-            Ok(())
-        })?;
-        let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| {
-            Error::Validation("Provider response does not match the text adapter contract".into())
-        })?;
+        let envelope = send_text_envelope(
+            &store,
+            &client,
+            TextSend {
+                provider: &args.provider,
+                run_id: args.run_id.as_deref(),
+                request_id: &request_id,
+                attempt,
+                purpose,
+                payload_hash: &payload_hash,
+                endpoint: endpoint.clone(),
+                token: &token,
+                body,
+            },
+        )
+        .await?;
         let response_text = envelope["response_text"].as_str().ok_or_else(|| {
             Error::Validation("Provider response does not match the text adapter contract".into())
         })?;
@@ -320,6 +269,108 @@ pub async fn provider_text(store: Store, args: ProviderTextRequest) -> Result<Va
     Err(Error::Internal(
         "Provider text repair state exhausted".into(),
     ))
+}
+
+pub(crate) struct TextSend<'a> {
+    pub provider: &'a str,
+    pub run_id: Option<&'a str>,
+    pub request_id: &'a str,
+    pub attempt: usize,
+    pub purpose: &'a str,
+    pub payload_hash: &'a str,
+    pub endpoint: Url,
+    pub token: &'a str,
+    pub body: Value,
+}
+
+/// Shared text transport: consume one actual-send slot, audit, bound the reply,
+/// and retain the exact receipt before attempting envelope parsing.
+pub(crate) async fn send_text_envelope(
+    store: &Store,
+    client: &Client,
+    args: TextSend<'_>,
+) -> Result<Value> {
+    let TextSend {
+        request_id,
+        attempt,
+        purpose,
+        payload_hash,
+        ref endpoint,
+        token,
+        ref body,
+        ..
+    } = args;
+    let key = format!("text:{request_id}:{attempt}");
+    let service = ExecutionService::new(store.clone());
+    let already_sent = store.with_connection(|connection| {
+        Ok(connection.query_row(
+            "SELECT COUNT(*) FROM execution_provider_audit WHERE request_key=?",
+            [&key],
+            |row| row.get::<_, i64>(0),
+        )? > 0)
+    })?;
+    if already_sent {
+        return Err(Error::Conflict(
+            "This provider request may already have been sent. Inspect its receipt before retrying"
+                .into(),
+        ));
+    }
+    if args.provider == "llm_suite" {
+        invoke(
+            &service,
+            "consume_llmsuite_slot",
+            json!({"purpose":if attempt==0{purpose}else{"repair"},"request_key":key}),
+        )
+        .await?;
+    }
+    store.with_connection(|connection| {
+            connection.execute("INSERT INTO execution_provider_audit(audit_id,job_id,provider,purpose,request_key,payload_hash,recorded_at) VALUES(?,NULL,?,?,?,?,?)",rusqlite::params![Uuid::new_v4().to_string(),args.provider,purpose,key,payload_hash,chrono::Utc::now().to_rfc3339()])?;
+            Ok(())
+        })?;
+    let response = client
+        .post(endpoint.clone())
+        .bearer_auth(token)
+        .header("Idempotency-Key", &key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| {
+            Error::Conflict(
+                "Provider receipt is uncertain. Verify the request before retrying".into(),
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err(Error::Conflict(format!(
+            "Provider returned HTTP {}; no answer was accepted",
+            response.status().as_u16()
+        )));
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| {
+            Error::Conflict("Provider reply was interrupted; inspect its receipt".into())
+        })?;
+        if bytes.len() + chunk.len() > 2_000_000 {
+            return Err(Error::Validation("Provider reply exceeded 2 MB".into()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    // The receipt precedes even envelope parsing: malformed JSON and missing
+    // response_text are still exact, durable evidence of a sent request.
+    let mut response_bytes_hex = String::with_capacity(bytes.len() * 2);
+    use std::fmt::Write as _;
+    for byte in &bytes {
+        write!(&mut response_bytes_hex, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    store.with_connection(|connection| {
+            connection.execute("INSERT INTO agent_events(event_id,run_id,event_type,payload_json,major,created_at) VALUES(?,?,'PROVIDER_TEXT_RECEIPT',?,0,?)",rusqlite::params![format!("text:{request_id}:receipt:{attempt}"),args.run_id,json!({"request_id":request_id,"provider":args.provider,"attempt":attempt,"payload_hash":payload_hash,"response_hash":format!("{:x}",Sha256::digest(&bytes)),"response_bytes_hex":response_bytes_hex}).to_string(),chrono::Utc::now().to_rfc3339()])?;
+            Ok(())
+        })?;
+    let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| {
+        Error::Validation("Provider response does not match the text adapter contract".into())
+    })?;
+    Ok(envelope)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -373,7 +424,7 @@ fn output_contract_fallback(output_columns: &str, score_columns: &str) -> String
     contract
 }
 
-fn configured(provider: &str) -> Result<(Url, String)> {
+pub(crate) fn configured(provider: &str) -> Result<(Url, String)> {
     if std::env::var("MNA_ENABLE_EXTERNAL").ok().as_deref() != Some("true") {
         return Err(Error::ProviderUnavailable(
             "External execution is disabled".into(),
