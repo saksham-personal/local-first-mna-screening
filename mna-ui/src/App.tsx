@@ -98,7 +98,7 @@ import { stageUploads } from "./lib/tool-client";
 import { reviewShortlist, flushCriteriaDraft } from "./lib/review-client";
 import { generateDraft } from "./lib/conversation-client";
 import { backgroundAction, dismissBackground, getBackgroundJobs, isBackgroundActive, startBackgroundPolling, startBackgroundScreening, subscribeBackground } from "./lib/background-client";
-import { previewBingResearch, runBingResearch } from "./lib/research-client";
+import { dismissResearch, getResearchJobs, isResearchActive, previewBingResearch, researchAction, startBingResearch, startResearchPolling, subscribeResearch } from "./lib/research-client";
 import { processStagedUploads } from "./lib/import-pipeline";
 import { researchQuestions } from "./lib/chat-driver";
 import { updateChatState } from "./lib/chat-store";
@@ -592,8 +592,10 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   const [bingSetup, setBingSetup] = useState<{ sessionId: string; queries: string[] }>();
   const [bingConnected, setBingConnected] = useState(false);
   const backgroundJobs = useSyncExternalStore(subscribeBackground, getBackgroundJobs, getBackgroundJobs);
+  const researchJobs = useSyncExternalStore(subscribeResearch, getResearchJobs, getResearchJobs);
   const allJobs = useSyncExternalStore(subscribeJobs, getJobsSnapshot, getJobsSnapshot);
   useEffect(startBackgroundPolling, []);
+  useEffect(startResearchPolling, []);
   useEffect(() => { void fetch("/api/health").then(r => r.json()).then(data => setBingConnected(data.providers?.bing === true)).catch(() => {}); }, []);
   // Anything that needs the composer calls this first: the full chat opens when
   // the Workspace chat is hidden (narrow window) and the dock leaves its rail.
@@ -795,6 +797,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
           patchArtifact(session.id, artifact.id, { applied: true });
         } else if (action.type === "start-screening" && artifact?.type === "screening-setup") {
           const job = await startBackgroundScreening(session.id, artifact.prepared);
+          setActivityOpen(true);
           setToast(job.state === "blocked" ? job.message ?? "Provider unavailable. Setup saved." : "Screening started in the background.");
         } else if (action.type === "run-research") {
           setBingSetup({ sessionId: session.id, queries: artifact?.type === "research" ? artifact.questions : researchQuestions(current.definition) });
@@ -1054,7 +1057,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   );
   const activityRunning =
     searches.some((search) => search.state === "running") ||
-    isBackgroundActive(backgroundJobs) || !!runningIndexBuildId;
+    isBackgroundActive(backgroundJobs) || isResearchActive(researchJobs) || !!runningIndexBuildId;
   const chatBusy = busy || job?.state === "running";
   const appRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1425,14 +1428,20 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
           indexBuilds={indexBuilds}
           onOpenIndex={id => openIndex(id)}
           onDismissIndex={id => setIndexBuilds(previous => previous.filter(build => build.build_id !== id))}
-          jobs={backgroundJobs.map(job => ({ ...job, title: `${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? job.title} · ${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"}` }))}
+          jobs={backgroundJobs.map(job => ({ ...job, title: `${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} screening · ${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? "Screening"}` }))}
+          researchJobs={researchJobs.map(job => ({ ...job, title: `Bing research · ${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? "Research"}` }))}
           searches={searches}
           expanded={activityOpen}
           onExpandedChange={setActivityOpen}
           layoutKey={`${mode}:${dockRail ? "rail" : "open"}`}
           onDismiss={dismissBackground}
-          onAction={(id, action) => { void backgroundAction(id, action).then(() => setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated.")).catch(error => setToast(String(error))); }}
+          onAction={async (id, action) => { await backgroundAction(id, action); setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated."); }}
+          onResearchAction={async (id, action) => { await researchAction(id, action); setToast(action === "pause" ? "Bing research paused." : "Bing research resumed."); }}
+          onCancelRun={async (source, id, keep) => { if (source === "bing") await researchAction(id, "cancel", keep); else await backgroundAction(id, "cancel", keep); setToast(keep ? "Run cancelled. Processed results were kept." : "Run cancelled. Processed results were discarded."); }}
           onOpenSearch={selectSession}
+          onOpenScreening={selectSession}
+          onOpenResearch={(sessionId, jobId) => { const messageId = `bing-research-${jobId}`; if (mode !== "chat") changeMode("chat"); selectSession(sessionId); window.setTimeout(() => { const messages = document.querySelector<HTMLElement>(".ct-messages"); const message = messages ? Array.from(messages.querySelectorAll<HTMLElement>(".ct-message")).find(item => item.id === messageId || item.dataset.messageId === messageId) : undefined; if (message) message.scrollIntoView({ block: "center" }); else if (messages) messages.scrollTop = messages.scrollHeight; }, 100); }}
+          onDismissResearch={dismissResearch}
           onStopSearch={id => { void stopJob(id).catch(error => setToast(String(error))); }}
           onDismissSearch={id => setDismissedSearches(previous => new Set(previous).add(id))}
         />
@@ -1550,12 +1559,13 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
             {...screeningSetup}
             onClose={() => setScreeningSetup(undefined)}
             onSaved={(prepared) => {
-              void startBackgroundScreening(screeningSetup.sessionId, prepared).then(job => setToast(job.state === "blocked" ? job.message ?? "Provider unavailable. Setup saved." : "Screening is running in the background.")).catch(error => setToast(String(error)));
+              setScreeningSetup(undefined);
+              void startBackgroundScreening(screeningSetup.sessionId, prepared).then(job => { setActivityOpen(true); setToast(job.state === "blocked" ? job.message ?? "Provider unavailable. Setup saved." : "Screening is running in the background."); }).catch(error => setToast(String(error)));
             }}
           />
         </Suspense>
       )}
-      {bingSetup && <Suspense fallback={<div className="ct-toast ct-toast-skeleton"><Skeleton variant="line" lines={2} label="Opening web research" /></div>}><BingResearchDialog key={bingSetup.sessionId} companies={consideredCompanies(getChatState(bingSetup.sessionId))} initialQueries={bingSetup.queries} connected={bingConnected} onClose={() => setBingSetup(undefined)} onPreview={input => previewBingResearch(bingSetup.sessionId, input)} onGenerateTemplates={() => generateDraft(bingSetup.sessionId, "bing-templates")} onRun={(token, options) => runBingResearch(bingSetup.sessionId, token, options)} /></Suspense>}
+      {bingSetup && <Suspense fallback={<div className="ct-toast ct-toast-skeleton"><Skeleton variant="line" lines={2} label="Opening web research" /></div>}><BingResearchDialog key={bingSetup.sessionId} companies={consideredCompanies(getChatState(bingSetup.sessionId))} initialQueries={bingSetup.queries} connected={bingConnected} onClose={() => setBingSetup(undefined)} onPreview={input => previewBingResearch(bingSetup.sessionId, input)} onGenerateTemplates={() => generateDraft(bingSetup.sessionId, "bing-templates")} onRun={async (token, options) => { const started = await startBingResearch(bingSetup.sessionId, token, options); setActivityOpen(true); setToast("Bing research started · see Activity"); return started; }} /></Suspense>}
       {toast && (
         <div className="ct-toast" role="status">
           <Check size={15} />
