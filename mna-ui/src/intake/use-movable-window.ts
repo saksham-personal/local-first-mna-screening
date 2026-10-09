@@ -1,6 +1,14 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
-import { moveWindowRect, readWindowPosition, rememberWindowPosition, type WindowRect } from "../files/document-window-geometry";
+import {
+  DOCUMENT_WINDOW_LAYOUT_EVENT,
+  forgetWindowPosition,
+  moveWindowRect,
+  placeWindow,
+  readWindowPosition,
+  rememberWindowPosition,
+  type WindowRect,
+} from "../files/document-window-geometry";
 
 const viewport = () => ({ width: window.innerWidth, height: window.innerHeight });
 const bounds = (element: HTMLElement): WindowRect => {
@@ -8,7 +16,9 @@ const bounds = (element: HTMLElement): WindowRect => {
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
 };
 
-export function useMovableWindow(type: string, open: boolean, onCommit?: (rect: WindowRect) => void, disabled = false) {
+// `documents` lists the open document windows. A window without a remembered position is placed beside them (or centred)
+// and placed again whenever they open, close, move or resize. Moving the window remembers its position for the session.
+export function useMovableWindow(type: string, open: boolean, onCommit?: (rect: WindowRect) => void, disabled = false, documents?: () => WindowRect[]) {
   const windowRef = useRef<HTMLDivElement>(null);
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const attachWindow = useCallback((node: HTMLDivElement | null) => {
@@ -19,23 +29,40 @@ export function useMovableWindow(type: string, open: boolean, onCommit?: (rect: 
   const drag = useRef<{ id: number; x: number; y: number; rect: WindowRect; next: WindowRect } | null>(null);
   const commitRef = useRef(onCommit);
   commitRef.current = onCommit;
-  const commit = (rect: WindowRect) => {
+  const documentsRef = useRef(documents);
+  documentsRef.current = documents;
+  // Only moves by the analyst are remembered. Automatic placements are not, so they keep following the documents.
+  const commit = (rect: WindowRect, remember = true) => {
     const element = windowRef.current;
     if (!element) return;
     element.style.left = `${rect.left}px`;
     element.style.top = `${rect.top}px`;
     element.style.transform = "none";
-    rememberWindowPosition(type, rect);
+    if (remember) rememberWindowPosition(type, rect);
     commitRef.current?.(rect);
+  };
+  const settle = (current: WindowRect, withMemory: boolean) => {
+    const remembered = readWindowPosition(type);
+    const others = documentsRef.current;
+    if (others) {
+      // The clamped result is not stored, so the analyst's own position survives a temporary shrink of the viewport.
+      const position = placeWindow({ dialog: current, documents: others(), viewport: viewport(), remembered });
+      commit({ ...current, ...position }, false);
+      return;
+    }
+    commit(moveWindowRect(withMemory ? { ...current, ...remembered } : current, { x: 0, y: 0 }, viewport()));
   };
   useLayoutEffect(() => {
     if (!open || !element || disabled) return;
     initial.current ??= bounds(element);
-    const remembered = readWindowPosition(type);
-    commit(moveWindowRect({ ...bounds(element), ...remembered }, { x: 0, y: 0 }, viewport()));
-    const resize = () => { if (!disabled) commit(moveWindowRect(bounds(element), { x: 0, y: 0 }, viewport())); };
+    settle(bounds(element), true);
+    const resize = () => { if (!disabled) settle(bounds(element), false); };
     window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+    if (documentsRef.current) window.addEventListener(DOCUMENT_WINDOW_LAYOUT_EVENT, resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      window.removeEventListener(DOCUMENT_WINDOW_LAYOUT_EVENT, resize);
+    };
   }, [element, open, disabled, type]);
   const cancel = (event: PointerEvent<HTMLElement>) => {
     if (drag.current?.id !== event.pointerId) return;
@@ -77,7 +104,14 @@ export function useMovableWindow(type: string, open: boolean, onCommit?: (rect: 
       onPointerCancel: cancel,
       onLostPointerCapture: cancel,
       onDoubleClick: (event: React.MouseEvent<HTMLElement>) => {
-        if (disabled || (event.target as HTMLElement).closest("button") || !initial.current || !windowRef.current) return;
+        if (disabled || (event.target as HTMLElement).closest("button") || !windowRef.current) return;
+        if (documentsRef.current) {
+          // Reset to the automatic placement.
+          forgetWindowPosition(type);
+          settle(bounds(windowRef.current), false);
+          return;
+        }
+        if (!initial.current) return;
         const rect = { ...bounds(windowRef.current), left: initial.current.left, top: initial.current.top };
         commit(moveWindowRect(rect, { x: 0, y: 0 }, viewport()));
       },

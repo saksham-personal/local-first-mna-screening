@@ -5,6 +5,7 @@ import { Maximize2, Minimize2, X } from "lucide-react";
 import type { StagedFile } from "../lib/chat-contract";
 import Skeleton from "../ui/Skeleton";
 import {
+  announceDocumentWindowLayout,
   clampWindowRect,
   defaultDocumentWindowRect,
   resizeWindowRect,
@@ -35,6 +36,10 @@ export default function DocumentWindow({ file, url, title, onClose }: Props) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [maximized]);
+
+  // Windows placed beside this document (the intake dialog) follow it as it opens, moves, resizes or closes.
+  useEffect(() => { announceDocumentWindowLayout(); }, [rect, maximized]);
+  useEffect(() => () => announceDocumentWindowLayout(), []);
 
   const toggleMaximized = () => {
     if (maximized) {

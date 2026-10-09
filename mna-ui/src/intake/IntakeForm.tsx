@@ -8,6 +8,7 @@ import SelectField from "../ui/SelectField";
 import HelpTip from "../ui/HelpTip";
 import "./intake.css";
 import { useMovableWindow } from "./use-movable-window";
+import { openDocumentWindowRects } from "../files/document-window-geometry";
 
 type Props = {
   open: boolean;
@@ -100,7 +101,7 @@ function ChipMultiSelect({
 }
 
 export default function IntakeForm({ open, initial, sourceFileName, onViewDocument, onCancel, onSubmit, busy = false, modal = true, onInteractOutside, onPointerDownOutside, onEscapeKeyDown }: Props) {
-  const movable = useMovableWindow("intake", open);
+  const movable = useMovableWindow("intake", open, undefined, false, openDocumentWindowRects);
   const headingId = useId();
   const descriptionId = useId();
   const [form, setForm] = useState<IntakeFormData>(() => normalizeIntake(initial));
