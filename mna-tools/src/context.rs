@@ -114,7 +114,8 @@ impl ContextService {
             CompanySection::Services => field_or_null(company, "services"),
             CompanySection::Keywords => field_or_null(company, "keywords"),
             // This is the only section that deliberately crosses run boundaries.
-            CompanySection::PreviousResearch => self.store.execute(
+            CompanySection::PreviousResearch => crate::data::DataService::new(self.store.clone())
+                .execute(
                 "get_previous_research",
                 &json!({"company_id": args.company_id}),
             )?,
@@ -122,9 +123,9 @@ impl ContextService {
                 "get_labelled_examples",
                 &json!({"run_id": required_run_id(args)?, "company_id": args.company_id}),
             )?,
-            CompanySection::Evidence => self.store.execute(
-                "get_evidence",
-                &json!({"run_id": required_run_id(args)?, "company_id": args.company_id}),
+            CompanySection::Evidence => crate::data::get_evidence(
+                &self.store,
+                &json!({"run_id": required_run_id(args)?, "company_id": args.company_id, "include_discarded": false}),
             )?,
             CompanySection::ScreeningHistory => {
                 let candidate =
@@ -132,9 +133,9 @@ impl ContextService {
                 json!({"candidate": candidate})
             }
             CompanySection::ExternalResearch => {
-                let evidence = self.store.execute(
-                    "get_evidence",
-                    &json!({"run_id": required_run_id(args)?, "company_id": args.company_id}),
+                let evidence = crate::data::get_evidence(
+                    &self.store,
+                    &json!({"run_id": required_run_id(args)?, "company_id": args.company_id, "include_discarded": false}),
                 )?;
                 filter_external_evidence(evidence)
             }
@@ -169,11 +170,11 @@ impl ContextService {
             .store
             .execute("get_company", &json!({"company_id": args.company_id}))?;
         let candidate = self.candidate_for_run(&args.run_id, &args.company_id, false)?;
-        let evidence = self.store.execute(
-            "get_evidence",
-            &json!({"run_id": args.run_id, "company_id": args.company_id}),
+        let evidence = crate::data::get_evidence(
+            &self.store,
+            &json!({"run_id": args.run_id, "company_id": args.company_id, "include_discarded": false}),
         )?;
-        let missing = self.store.execute(
+        let missing = crate::data::DataService::new(self.store.clone()).execute(
             "get_missing_evidence",
             &json!({
                 "run_id": args.run_id,
@@ -293,9 +294,9 @@ impl ContextService {
         if requested_fields.iter().any(|field| field == "evidence") {
             available.insert(
                 "evidence".into(),
-                self.store.execute(
-                    "get_evidence",
-                    &json!({"run_id": run_id, "company_id": company_id}),
+                crate::data::get_evidence(
+                    &self.store,
+                    &json!({"run_id": run_id, "company_id": company_id, "include_discarded": false}),
                 )?,
             );
         }
@@ -305,7 +306,7 @@ impl ContextService {
         {
             available.insert(
                 "missing_attributes".into(),
-                self.store.execute(
+                crate::data::DataService::new(self.store.clone()).execute(
                     "get_missing_evidence",
                     &json!({
                         "run_id": run_id,
@@ -382,9 +383,9 @@ impl ContextService {
                 .push(json!({"company": reasoning_company(company), "candidate": candidate}));
             evidence_by_subject.insert(
                 company_id.clone(),
-                self.store.execute(
-                    "get_evidence",
-                    &json!({"run_id": args.run_id, "company_id": company_id}),
+                crate::data::get_evidence(
+                    &self.store,
+                    &json!({"run_id": args.run_id, "company_id": company_id, "include_discarded": false}),
                 )?,
             );
         }

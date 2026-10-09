@@ -136,7 +136,7 @@ tool("save_evidence", "Save a scoped claim or research observation with provenan
      "Evidence record with evidence_id, retrieved_at, content_hash and created flag. A failed fetch/search is an error or gap, not a negative company claim.",
      {"run_id":R,"company_id":A,"claim":"products","value":["Policy administration SaaS"],"source_type":"company_website","source_reference":"https://policynest.example/products","source_url":"https://policynest.example/products","evidence_confidence":"low","claim_provenance":{"page_title":"Products","excerpt_hash":"sha256:returned-by-controller"},"extraction_method":"Unverified research lead; analyst review is pending"})
 tool("get_evidence", "Read evidence for one company in one run.",
-     "Optional claims and source_types narrow the read; an omitted or empty filter does not narrow it. limit defaults to 200, maximum 1,000. Records retain source references, evidence_confidence (with confidence as a compatibility alias), claim_provenance and analyst verification status. New or unreviewed claims are UNKNOWN. They are observations rather than an automatically reconciled fact table.",
+     "Optional claims and source_types narrow the read; an omitted or empty filter does not narrow it. Discarded plan results are omitted by default; set include_discarded=true for audit recovery. limit defaults to 200, maximum 1,000. Records retain source references, evidence_confidence (with confidence as a compatibility alias), claim_provenance and analyst verification status. New or unreviewed claims are UNKNOWN. They are observations rather than an automatically reconciled fact table.",
      "An array of evidence records ordered by retrieval time. Evidence from another run is not included.",
      {"run_id":R,"company_id":A,"claims":["products","customer_segment"],"limit":100})
 tool("get_missing_evidence", "Find qualitative attributes that still need research.",
@@ -184,6 +184,10 @@ tool("get_search_history", "Inspect durable query inputs, results and retrieval 
      "limit defaults to 50, maximum 500. Optional source matches the stored source label exactly; search_mid records MID while ISCC records search_iscc. ISCC history keeps a bounded score-band summary; original rows live in source_rows. MID/Bing/M365 histories retain their normalized result records. A new search invocation creates a new query observation even if a process cache served the provider response.",
      "query_id, run_id, source, query, parameters, results and created_at. Query IDs can be attached to add_candidates for exact discovery lineage.",
      {"run_id":R,"source":"search_iscc","limit":20})
+tool("get_discarded_plans", "List result plans an analyst chose to discard.",
+     "Reads the run's soft-discard audit records. Discarding marks plan results for exclusion from ordinary readers; it never deletes assessments, observations or evidence.",
+     "Discarded plan IDs, kind, analyst attribution, optional reason, timestamp and count. Read-only.",
+     {"run_id":R})
 tool("get_open_questions", "Read unresolved screening criteria ambiguities or company research gaps.",
      "Omit company_id for all questions in the run or provide it for company-specific questions. include_resolved defaults false; use true during recovery to check what was answered. limit defaults to 100, maximum 500. A skipped analyst question stays open; the orchestrator decides which ambiguity actually blocks approval.",
      "Question records with scope, priority, OPEN/RESOLVED state, answer and evidence IDs.",
@@ -369,7 +373,7 @@ GROUPS = [
     ("Analyst examples",["label_company","get_labelled_examples","get_representative_examples"]),
     ("Evidence",["save_evidence","get_evidence","get_missing_evidence"]),
     ("Research",["bing_search","m365_research","fetch_url","extract_url_context"]),
-    ("Durable memory",["search_research_memory","get_previous_research","get_recent_agent_events","get_search_history","get_open_questions","add_open_question","resolve_open_question"]),
+    ("Durable memory",["search_research_memory","get_previous_research","get_recent_agent_events","get_search_history","get_discarded_plans","get_open_questions","add_open_question","resolve_open_question"]),
     ("Candidate funnel",["add_candidates","get_candidate_set","get_shortlist_context","get_screening_grid","get_grid_descriptions","get_company_detail","update_candidate_status","get_discovery_summary"]),
     ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","get_enrichment_report","export_candidate_set","get_export","list_exports"]),
     ("Search Space",["space_sync_status","space_browse","space_search_lexical","space_search_semantic","space_search_iscc","space_recent"]),
@@ -517,7 +521,8 @@ These operations are excluded from the model tool catalog. The criteria, shortli
 | `review_shortlist` | `/admin/shortlist-review` | Controller-only analyst selection: keep named IDs, hide others, and save chosen result columns. Require the current selection revision when available. History is retained. |
 | `approve_action_plan` | `/admin/actions/approve` | Approve or reject an immutable proposal at its original profile version; stale proposals must be rebuilt. |
 | `approve_prepared_plan` | `/admin/prepared-plan-approve` | Approve a version-2 plan by its exact backend digest; creates durable jobs but leaves `executed=false`. |
-| `cancel_prepared_plan` | `/admin/prepared-plan-cancel` | Cancel an undispatched prepared plan through the controller. |
+| `cancel_prepared_plan` | `/admin/prepared-plan-cancel` | Cancel non-terminal prepared-plan jobs through the controller while retaining finished assessments. |
+| `discard_plan_results` | `/admin/plan-discard` | Analyst-approved soft discard for a screening or research plan. Screening jobs must be cancelled first; research discard marks linked Bing evidence. Nothing is deleted. |
 | `lease_execution_job` | `/admin/execution-lease` | Controller-only lease for one eligible durable job. |
 | `mark_execution_dispatch` | `/admin/execution-mark` | Controller-only record that a provider request is about to be sent. |
 | `dispatch_execution_job` | `/admin/execution-dispatch` | Controller-only provider dispatch using the leased immutable payload. External execution occurs only here. |
@@ -624,7 +629,7 @@ The tables below cover typed nested objects and enums referenced by the agent ar
 
 """
 
-assert len(TOOLS)==86 and set(META)==set(TOOLS)
+assert len(TOOLS)==87 and set(META)==set(TOOLS)
 grouped=[name for _,names in GROUPS for name in names]
 assert len(grouped)==len(TOOLS) and len(set(grouped))==len(TOOLS) and set(grouped)==set(TOOLS)
 parts=[INTRO]

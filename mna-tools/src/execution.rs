@@ -634,13 +634,13 @@ impl ExecutionService {
 
     fn assessments(&self, a: AssessmentsArgs) -> Result<Value> {
         self.store.with_connection(|conn|{
-        let mut stmt=conn.prepare("SELECT assessment_id,plan_id,job_id,company_id,row_index,provider,prompt,result_json,created_at FROM model_assessments WHERE run_id=? ORDER BY created_at,row_index")?;
+        let mut stmt=conn.prepare("SELECT assessment_id,plan_id,job_id,company_id,row_index,provider,prompt,result_json,created_at FROM model_assessments WHERE run_id=? AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) ORDER BY created_at,row_index")?;
         let mut out=Vec::new();let rows=stmt.query_map([&a.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?,r.get::<_,String>(8)?)))?;
         let mut eligibility=std::collections::HashMap::new();
         for row in rows {let(id,plan,job,company,index,provider,prompt,result,created)=row?;if a.plan_id.as_ref().is_some_and(|v|v!=&plan)||a.company_id.as_ref().is_some_and(|v|v!=&company){continue;}
             let eligible=*eligibility.entry(plan.clone()).or_insert_with(||load_plan(conn,&plan).is_ok_and(|p|p.status=="APPROVED" && require_fresh(conn,&p).is_ok()));
             out.push(json!({"assessment_id":id,"run_id":a.run_id,"plan_id":plan,"job_id":job,"company_id":company,"index":index,"provider":provider,"prompt":prompt,"result":decoded(result)?,"created_at":created,"eligible_for_current_use":eligible}));}
-        let mut answers=Vec::new();let mut answer_stmt=conn.prepare("SELECT plan_id,job_id,provider,question,answer,created_at FROM execution_question_answers WHERE run_id=? ORDER BY created_at")?;
+        let mut answers=Vec::new();let mut answer_stmt=conn.prepare("SELECT plan_id,job_id,provider,question,answer,created_at FROM execution_question_answers WHERE run_id=? AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) ORDER BY created_at")?;
         for row in answer_stmt.query_map([&a.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {let(plan,job,provider,question,answer,created)=row?;if a.plan_id.as_ref().is_some_and(|v|v!=&plan)||a.company_id.is_some(){continue;}let eligible=*eligibility.entry(plan.clone()).or_insert_with(||load_plan(conn,&plan).is_ok_and(|p|p.status=="APPROVED" && require_fresh(conn,&p).is_ok()));answers.push(json!({"plan_id":plan,"job_id":job,"provider":provider,"question":question,"answer":answer,"created_at":created,"eligible_for_current_use":eligible}));}
         Ok(json!({"run_id":a.run_id,"assessments":out,"count":out.len(),"question_answers":answers}))})
     }
@@ -648,7 +648,7 @@ impl ExecutionService {
     fn screening_rounds(&self, a: ScreeningRoundsArgs) -> Result<Value> {
         bounded("run_id", &a.run_id, 160)?;
         self.store.with_connection(|conn| {
-            let mut stmt=conn.prepare("SELECT sr.round_no,sr.plan_id,sr.provider,sr.created_at,ppa.approved_by,p.spec_json FROM screening_rounds sr JOIN prepared_plans p ON p.plan_id=sr.plan_id JOIN prepared_plan_approvals ppa ON ppa.plan_id=sr.plan_id WHERE sr.run_id=? ORDER BY sr.round_no")?;
+            let mut stmt=conn.prepare("SELECT sr.round_no,sr.plan_id,sr.provider,sr.created_at,ppa.approved_by,p.spec_json FROM screening_rounds sr JOIN prepared_plans p ON p.plan_id=sr.plan_id JOIN prepared_plan_approvals ppa ON ppa.plan_id=sr.plan_id WHERE sr.run_id=? AND NOT EXISTS(SELECT 1 FROM discarded_plans d WHERE d.plan_id=sr.plan_id) ORDER BY sr.round_no")?;
             let mut rounds=Vec::new();
             for row in stmt.query_map([&a.run_id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {
                 let(round_no,plan_id,provider,created_at,approved_by,spec_json)=row?;

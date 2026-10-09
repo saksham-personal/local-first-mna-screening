@@ -181,7 +181,7 @@ fn run_summary(store: &Store, run_id: &str) -> Result<String> {
         let bundle = c.query_row("SELECT bundle_id,semantic_status FROM mid_bundles WHERE status='active'", [], |r|
             Ok(format!("{}; semantic: {}",r.get::<_,String>(0)?,r.get::<_,String>(1)?))
         ).optional()?.unwrap_or_else(|| "none; semantic: unavailable".into());
-        let rounds: i64 = c.query_row("SELECT COUNT(*) FROM screening_rounds WHERE run_id=?", [run_id], |r| r.get(0))?;
+        let rounds: i64 = c.query_row("SELECT COUNT(*) FROM screening_rounds sr WHERE sr.run_id=? AND NOT EXISTS(SELECT 1 FROM discarded_plans d WHERE d.plan_id=sr.plan_id)", [run_id], |r| r.get(0))?;
         Ok((sources, bundle, rounds))
     })?;
     let approved = current["approved"] == true;

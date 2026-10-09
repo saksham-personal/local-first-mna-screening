@@ -249,6 +249,70 @@ test('a pause that completes during batch preparation prevents the next dispatch
   svc.close();
 });
 
+test('screening cancellation waits for an active batch, cancels pending Rust jobs, and keeps completed assessments', async () => {
+  const f = fixture(['SUCCEEDED', 'READY']);
+  f.jobs.get('job-1')!.executed = true;
+  let tick: (() => void) | undefined;
+  let entered!: () => void;
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const adminCalls: string[] = [];
+  const baseCall = f.call;
+  const svc = createBackgroundScreening({ ...f,
+    setTimer: (callback: () => void) => { tick = callback; return 1; }, clearTimer: () => {},
+    dispatch: async (args: { job_id: string; controller_id: string }) => { entered(); await held; return f.dispatch(args); },
+    call: async (tool: string, args: Record<string, string>) => {
+      if (tool === 'cancel_prepared_plan') {
+        adminCalls.push(tool); assert.equal(args.plan_id, 'plan-1'); assert.equal(args.cancelled_by, 'screening-ui-analyst');
+        f.plan.status = 'CANCELLED'; f.jobs.get('job-2')!.state = 'CANCELLED';
+        return { status: 'CANCELLED' };
+      }
+      if (tool === 'discard_plan_results') { adminCalls.push(tool); return { discarded: true }; }
+      return baseCall(tool, args);
+    } });
+  await svc.start({ planId: 'plan-1', digest: 'digest-1', approved: true });
+  tick!(); await waiting;
+  const cancelling = svc.cancel({ planId: 'plan-1', keep: true });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(adminCalls, []);
+  release();
+  const cancelled = await cancelling;
+  assert.equal(cancelled.state, 'cancelled');
+  assert.deepEqual(adminCalls, ['cancel_prepared_plan']);
+  assert.equal(cancelled.steps[0].label, 'Build input table');
+  assert.equal(cancelled.steps[1].label, 'Send batches · 2 of 2');
+  const staged = await svc.stage({ planId: 'plan-1' });
+  assert.equal(staged.rows.length, 1);
+  assert.equal(staged.rows[0].job_id, 'job-1');
+  svc.close();
+});
+
+test('screening cancellation discards processed results only when the analyst chooses discard', async () => {
+  const f = fixture(['SUCCEEDED', 'READY']);
+  f.jobs.get('job-1')!.executed = true;
+  const calls: string[] = [];
+  const baseCall = f.call;
+  const svc = createBackgroundScreening({ ...f, setTimer: () => 1, clearTimer: () => {},
+    call: async (tool: string, args: Record<string, string>) => {
+      if (tool === 'cancel_prepared_plan') {
+        calls.push(tool); f.plan.status = 'CANCELLED'; f.jobs.get('job-2')!.state = 'CANCELLED';
+        return { status: 'CANCELLED' };
+      }
+      if (tool === 'discard_plan_results') {
+        calls.push(tool); assert.equal(args.run_id, 'run-1'); assert.equal(args.plan_id, 'plan-1'); assert.equal(args.kind, 'screening');
+        return { discarded: true };
+      }
+      return baseCall(tool, args);
+    } });
+  await svc.start({ planId: 'plan-1', digest: 'digest-1', approved: true });
+  const cancelled = await svc.cancel({ planId: 'plan-1', keep: false });
+  assert.equal(cancelled.state, 'cancelled');
+  assert.deepEqual(calls, ['cancel_prepared_plan', 'discard_plan_results']);
+  assert.match(cancelled.message, /discarded/);
+  svc.close();
+});
+
 test('accepted durable results can be staged after provider disconnection', async () => {
   const f = fixture(['SUCCEEDED'], false);
   f.jobs.get('job-1')!.executed = true;

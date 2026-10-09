@@ -21,6 +21,7 @@ pub mod providers;
 pub mod result_parser;
 pub mod retrieval;
 pub mod review;
+pub mod run_control;
 pub mod runtime;
 pub mod search;
 pub mod search_space;

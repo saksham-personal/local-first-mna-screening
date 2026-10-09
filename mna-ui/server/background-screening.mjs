@@ -26,6 +26,7 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
   const controls = new Map();
   const running = new Set();
   const timers = new Map();
+  const pumpWaiters = new Map();
   const preferred = new Map();
   const controllerId = `screening-ui-${randomUUID()}`;
   let saveQueue = Promise.resolve();
@@ -42,7 +43,9 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
                 typeof item.paused === 'boolean' && Number.isSafeInteger(item.staged) && item.staged >= 0) {
               controls.set(item.planId, { planId: item.planId, digest: item.digest,
                 sessionId: item.sessionId, paused: item.paused, staged: item.staged,
-                lastSnapshot: item.lastSnapshot, events: Array.isArray(item.events) ? item.events : [], blocked: item.blocked ?? '', updatedAt: item.updatedAt ?? new Date(now()).toISOString() });
+                lastSnapshot: item.lastSnapshot, events: Array.isArray(item.events) ? item.events : [], blocked: item.blocked ?? '',
+                cancelling: item.cancelling === true, cancelled: item.cancelled === true, discarded: item.discarded === true,
+                updatedAt: item.updatedAt ?? new Date(now()).toISOString() });
             }
           }
         }
@@ -67,9 +70,9 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     return saveQueue;
   }
 
-  async function planJobs(planId, expectedDigest, { allowStale = false } = {}) {
+  async function planJobs(planId, expectedDigest, { allowStale = false, allowCancelled = false } = {}) {
     const plan = await call('get_execution_progress', { plan_id: planId });
-    if (plan?.plan_id !== planId || !(plan.status === 'APPROVED' || (allowStale && plan.status === 'STALE')) || plan.digest !== expectedDigest ||
+    if (plan?.plan_id !== planId || !(plan.status === 'APPROVED' || (allowStale && plan.status === 'STALE') || (allowCancelled && plan.status === 'CANCELLED')) || plan.digest !== expectedDigest ||
         plan.executed !== false || (!allowStale && plan.fresh !== true) || !Array.isArray(plan.jobs) || !plan.jobs.length)
       throw new Error(STALE_SETUP_MESSAGE);
     if (!['llm_suite', 'copilot'].includes(plan.spec?.provider)) throw new Error('Unsupported screening provider.');
@@ -96,16 +99,27 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
       }
     }
     const hasPending = jobs.some(job => ACTIVE.has(job.state));
+    const processed = jobs.filter(job => TERMINAL.has(job.state)).length;
     const executed = jobs.some(job => job.executed === true);
     const blocked = stale ? STALE_SETUP_MESSAGE : control.blocked || (!connected(plan.spec.provider) ? (executed ? 'Provider connection is unavailable. Recorded results remain saved.' : 'Provider connection is unavailable. No request was sent.') : '');
-    const state = stale ? 'blocked' : !hasPending && !counts.failed ? 'completed' : control.paused ? 'paused' : blocked ? 'blocked' :
+    const state = control.cancelled ? 'cancelled' : control.cancelling ? 'cancelling' : stale ? 'blocked' : !hasPending && !counts.failed ? 'completed' : control.paused ? 'paused' : blocked ? 'blocked' :
       counts.running || running.has(plan.plan_id) ? 'running' :
       hasPending ? 'queued' : counts.failed ? 'error' : 'completed';
+    const sending = jobs.some(job => ['READY', 'LEASED', 'WAITING_RATE', 'RUNNING'].includes(job.state));
+    const parsing = jobs.some(job => job.state === 'PARSE_REVIEW');
+    const stepState = done => done ? 'completed' : control.cancelled ? 'cancelled' : control.paused ? 'paused' : blocked ? 'failed' : 'queued';
     return { id: plan.plan_id, planId: plan.plan_id, runId: plan.run_id,
       title: plan.spec?.mode === 'question' ? 'Question' : 'Screening', provider: plan.spec?.provider,
       state, ...counts, staged: control.staged, message: blocked ||
         (state === 'paused' ? 'Paused after the current provider request.' :
+          state === 'cancelled' ? (control.discarded ? 'Cancelled; processed results were discarded.' : 'Cancelled; processed results were kept.') :
           state === 'completed' ? 'All durable jobs completed.' : ''),
+      steps: [
+        { id: 'build-input-table', label: 'Build input table', state: 'completed' },
+        { id: 'send-batches', label: `Send batches · ${processed} of ${jobs.length}`, state: stepState(!sending && !control.cancelling) },
+        { id: 'parse-results', label: 'Parse results', state: parsing ? 'running' : stepState(!hasPending) },
+        { id: 'stage-results', label: 'Stage results', state: control.staged > 0 ? 'completed' : 'queued' },
+      ],
       errors, updatedAt: control.updatedAt, executed, current: !stale, events: control.events ?? [],
       ...(control.sessionId ? { sessionId: control.sessionId } : {}), digest: plan.digest };
   }
@@ -115,6 +129,7 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     planId = id(planId, 'plan');
     const control = controls.get(planId);
     if (!control) return undefined;
+    if (control.cancelled && control.lastSnapshot) return control.lastSnapshot;
     // Historical progress remains readable after a source edit. Execution,
     // retry and staging still require the current approved inputs.
     const data = await planJobs(planId, control.digest, { allowStale: true });
@@ -195,7 +210,11 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
       control.updatedAt = new Date(now()).toISOString();
       await save();
       if (!control.paused) schedule(planId);
-    } finally { running.delete(planId); }
+    } finally {
+      running.delete(planId);
+      const wake = pumpWaiters.get(planId);
+      if (wake) { pumpWaiters.delete(planId); wake(); }
+    }
   }
 
   async function start({ planId, sessionId, digest, approved }) {
@@ -239,6 +258,44 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     return snapshot(data, control);
   }
 
+  async function cancel({ planId, keep }) {
+    await init(); planId = id(planId, 'plan');
+    if (typeof keep !== 'boolean') throw new Error('Choose whether to keep or discard completed results.');
+    const control = controls.get(planId);
+    if (!control) throw new Error('Background screening plan was not started.');
+    if (control.cancelled) return control.lastSnapshot;
+    control.paused = true;
+    control.cancelling = true;
+    control.updatedAt = new Date(now()).toISOString();
+    if (timers.has(planId)) { clearTimer(timers.get(planId)); timers.delete(planId); }
+    await save();
+    if (running.has(planId)) await new Promise(resolve => pumpWaiters.set(planId, resolve));
+    try {
+      const data = await planJobs(planId, control.digest);
+      await call('cancel_prepared_plan', { plan_id: planId, cancelled_by: 'screening-ui-analyst' }, true);
+      if (!keep) {
+        await call('discard_plan_results', { run_id: data.plan.run_id, plan_id: planId, kind: 'screening',
+          reason: 'Analyst chose to discard results from cancelled screening.' }, true);
+      }
+      for (const job of data.jobs) if (ACTIVE.has(job.state)) job.state = 'CANCELLED';
+      control.cancelled = true;
+      control.discarded = !keep;
+      control.cancelling = false;
+      control.paused = true;
+      control.updatedAt = new Date(now()).toISOString();
+      control.lastSnapshot = snapshot(data, control);
+      await save();
+      return control.lastSnapshot;
+    } catch (error) {
+      control.cancelling = false;
+      control.paused = true;
+      control.blocked = message(error);
+      control.updatedAt = new Date(now()).toISOString();
+      await save();
+      throw error;
+    }
+  }
+
   async function retry({ planId, jobId }) {
     await init(); planId = id(planId, 'plan');
     const control = controls.get(planId);
@@ -263,18 +320,20 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     await init(); planId = id(planId, 'plan');
     const control = controls.get(planId);
     if (!control) throw new Error('Background screening plan was not started.');
-    const data = await planJobs(planId, control.digest);
+    const data = await planJobs(planId, control.digest, { allowCancelled: control.cancelled });
     const accepted = new Set(data.jobs.filter(job => job.state === 'SUCCEEDED').map(job => job.job_id));
     const persisted = await call('get_model_assessments', { run_id: data.plan.run_id, plan_id: planId });
     const rows = (persisted.assessments ?? []).filter(row =>
-      row.plan_id === planId && accepted.has(row.job_id) && row.eligible_for_current_use === true);
+      row.plan_id === planId && accepted.has(row.job_id) && (row.eligible_for_current_use === true || (control.cancelled && !control.discarded)));
     const answers = (persisted.question_answers ?? []).filter(row =>
-      row.plan_id === planId && accepted.has(row.job_id) && row.eligible_for_current_use === true);
+      row.plan_id === planId && accepted.has(row.job_id) && (row.eligible_for_current_use === true || (control.cancelled && !control.discarded)));
     control.staged = new Set([...rows, ...answers].map(row => row.job_id)).size;
-    control.updatedAt = new Date(now()).toISOString(); await save();
-    return { job: snapshot(data, control), rows, answers };
+    control.updatedAt = new Date(now()).toISOString();
+    control.lastSnapshot = snapshot(data, control);
+    await save();
+    return { job: control.lastSnapshot, rows, answers };
   }
 
   function close() { for (const timer of timers.values()) clearTimer(timer); timers.clear(); }
-  return { init, list, get, start, pause, resume, retry, stage, close };
+  return { init, list, get, start, pause, resume, cancel, retry, stage, close };
 }

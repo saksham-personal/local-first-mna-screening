@@ -163,7 +163,7 @@ pub(crate) fn review_columns(
     run_id: &str,
 ) -> Result<BTreeMap<String, Vec<String>>> {
     let mut stmt = conn.prepare(
-        "SELECT plan_id,columns_json FROM shortlist_review_columns WHERE run_id=? ORDER BY plan_id",
+        "SELECT plan_id,columns_json FROM shortlist_review_columns WHERE run_id=? AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) ORDER BY plan_id",
     )?;
     let mut out = BTreeMap::new();
     for row in stmt.query_map([run_id], |r| {
@@ -267,7 +267,7 @@ fn context(store: &Store, args: ContextArgs) -> Result<Value> {
     store.with_connection(|conn|{
         require_run(conn,&args.run_id)?;
         let (total,considered_count):(i64,i64)=conn.query_row("SELECT COUNT(*),COALESCE(SUM(considered),0) FROM candidates WHERE run_id=?",[&args.run_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        let mut stmt=conn.prepare("SELECT x.company_id,x.status,x.considered,COALESCE(NULLIF(e.pb_name,''),c.name),COALESCE(NULLIF(e.pb_website,''),c.website), (SELECT identifier FROM company_identifiers WHERE company_id=x.company_id AND kind='PBID'), COALESCE((e.pb_name IS NOT NULL OR e.pb_description IS NOT NULL),0),COALESCE(e.rogo_json,'{}')!='{}',EXISTS(SELECT 1 FROM evidence b WHERE b.run_id=x.run_id AND b.company_id=x.company_id AND b.claim='bing_research_observation' AND b.source_type='bing'),x.consideration_reason FROM candidates x JOIN companies c ON c.company_id=x.company_id LEFT JOIN company_enrichment e ON e.company_id=x.company_id WHERE x.run_id=? AND (? OR x.considered=1) AND (? IS NULL OR x.company_id>?) ORDER BY x.company_id LIMIT ?")?;
+            let mut stmt=conn.prepare("SELECT x.company_id,x.status,x.considered,COALESCE(NULLIF(e.pb_name,''),c.name),COALESCE(NULLIF(e.pb_website,''),c.website), (SELECT identifier FROM company_identifiers WHERE company_id=x.company_id AND kind='PBID'), COALESCE((e.pb_name IS NOT NULL OR e.pb_description IS NOT NULL),0),COALESCE(e.rogo_json,'{}')!='{}',EXISTS(SELECT 1 FROM evidence b WHERE b.run_id=x.run_id AND b.company_id=x.company_id AND b.claim='bing_research_observation' AND b.source_type='bing' AND b.discarded_plan_id IS NULL),x.consideration_reason FROM candidates x JOIN companies c ON c.company_id=x.company_id LEFT JOIN company_enrichment e ON e.company_id=x.company_id WHERE x.run_id=? AND (? OR x.considered=1) AND (? IS NULL OR x.company_id>?) ORDER BY x.company_id LIMIT ?")?;
         let rows=stmt.query_map(params![args.run_id,args.include_hidden,args.after_company_id,args.after_company_id,(limit+1) as i64],|r|Ok(json!({"company_id":r.get::<_,String>(0)?,"pk":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"considered":r.get::<_,i64>(2)?!=0,"name":r.get::<_,String>(3)?,"website":r.get::<_,Option<String>>(4)?,"PBId":r.get::<_,Option<String>>(5)?,"consideration_reason":r.get::<_,Option<String>>(9)?,"coverage":{"PB":r.get::<_,i64>(6)?!=0,"ROGO":r.get::<_,i64>(7)?!=0,"BING":r.get::<_,i64>(8)?!=0}})))?.collect::<std::result::Result<Vec<_>,_>>()?;
         let has_more=rows.len()>limit;
         let rows=rows.into_iter().take(limit).collect::<Vec<_>>();
@@ -276,7 +276,7 @@ fn context(store: &Store, args: ContextArgs) -> Result<Value> {
         for (name,sql) in [
             ("PB","SELECT COUNT(*) FROM candidates x WHERE x.run_id=? AND x.considered=1 AND EXISTS(SELECT 1 FROM company_enrichment e WHERE e.company_id=x.company_id AND (e.pb_name IS NOT NULL OR e.pb_description IS NOT NULL))"),
             ("ROGO","SELECT COUNT(*) FROM candidates x WHERE x.run_id=? AND x.considered=1 AND EXISTS(SELECT 1 FROM company_enrichment e WHERE e.company_id=x.company_id AND e.rogo_json!='{}')"),
-            ("BING","SELECT COUNT(DISTINCT x.company_id) FROM candidates x JOIN evidence b ON b.run_id=x.run_id AND b.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 AND b.claim='bing_research_observation' AND b.source_type='bing'")
+            ("BING","SELECT COUNT(DISTINCT x.company_id) FROM candidates x JOIN evidence b ON b.run_id=x.run_id AND b.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 AND b.claim='bing_research_observation' AND b.source_type='bing' AND b.discarded_plan_id IS NULL")
         ] { coverage.insert(name.into(),json!(conn.query_row::<i64,_,_>(sql,[&args.run_id],|r|r.get(0))?)); }
         let fingerprint=selection_fingerprint(conn,&args.run_id)?;
         let source_hash=source_hash(conn,&args.run_id,&fingerprint)?;
@@ -315,7 +315,7 @@ fn review(store: &Store, args: ReviewArgs) -> Result<Value> {
             for (plan,cols) in &selected {
                 bounded("plan_id",plan,160)?;
                 if cols.len()>100 || cols.iter().collect::<BTreeSet<_>>().len()!=cols.len() {return Err(Error::Validation("duplicate or excess review columns".into()));}
-                let spec:Option<String>=tx.query_row("SELECT spec_json FROM prepared_plans WHERE plan_id=? AND run_id=? AND EXISTS(SELECT 1 FROM model_assessments WHERE plan_id=prepared_plans.plan_id)",params![plan,args.run_id],|r|r.get(0)).optional()?;
+                let spec:Option<String>=tx.query_row("SELECT spec_json FROM prepared_plans WHERE plan_id=? AND run_id=? AND NOT EXISTS(SELECT 1 FROM discarded_plans d WHERE d.plan_id=prepared_plans.plan_id) AND EXISTS(SELECT 1 FROM model_assessments WHERE plan_id=prepared_plans.plan_id)",params![plan,args.run_id],|r|r.get(0)).optional()?;
                 let spec=spec.ok_or_else(||Error::Validation(format!("assessment plan unavailable in this run: {plan}")))?;
                 let spec:Value=serde_json::from_str(&spec)?;
                 let allowed=spec["output_columns"].as_array().ok_or_else(||Error::Internal("plan output columns missing".into()))?;

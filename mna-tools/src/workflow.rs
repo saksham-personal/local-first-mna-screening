@@ -525,8 +525,7 @@ impl WorkflowService {
                 "Company {id} is not a candidate in this run"
             )));
         }
-        let evidence = self
-            .store
+        let evidence = crate::data::DataService::new(self.store.clone())
             .execute("get_evidence", &json!({"run_id":run_id,"company_id":id}))?;
         let mut company = company;
         company
@@ -771,6 +770,20 @@ impl WorkflowService {
                     .into(),
             )
         })?;
+        if tool == "bing_search" {
+            let discarded = self.store.with_connection(|connection| {
+                Ok(connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM discarded_plans WHERE plan_id=? AND run_id=? AND kind='research')",
+                    params![plan, run],
+                    |row| row.get::<_, bool>(0),
+                )?)
+            })?;
+            if discarded {
+                return Err(Error::Conflict(
+                    "Bing research plan was discarded and cannot send more queries".into(),
+                ));
+            }
+        }
         let step_id = args["step_id"]
             .as_str()
             .ok_or_else(|| Error::Validation("step_id is required".into()))?;

@@ -374,7 +374,7 @@ fn rounds_for_run(conn: &Connection, run_id: &str) -> Result<Vec<RoundInfo>> {
     let mut statement = conn.prepare(
         "SELECT sr.round_no,sr.provider,p.spec_json
          FROM screening_rounds sr JOIN prepared_plans p ON p.plan_id=sr.plan_id
-         WHERE sr.run_id=? ORDER BY sr.round_no",
+         WHERE sr.run_id=? AND NOT EXISTS(SELECT 1 FROM discarded_plans d WHERE d.plan_id=sr.plan_id) ORDER BY sr.round_no",
     )?;
     let mut rounds = Vec::new();
     for row in statement.query_map([run_id], |r| {
@@ -451,6 +451,7 @@ fn page_assessments(
              FROM aliases a
              JOIN model_assessments ma ON ma.company_id=a.alias_id AND ma.run_id=?1
              JOIN screening_rounds sr ON sr.run_id=ma.run_id AND sr.plan_id=ma.plan_id
+             WHERE NOT EXISTS(SELECT 1 FROM discarded_plans d WHERE d.plan_id=ma.plan_id)
          )
          SELECT current_id,round_no,result_json FROM ranked WHERE rn=1
          ORDER BY current_id,round_no"
@@ -495,7 +496,7 @@ fn company_rounds(
         "SELECT sr.round_no,ma.result_json,ma.created_at
          FROM model_assessments ma
          JOIN screening_rounds sr ON sr.run_id=ma.run_id AND sr.plan_id=ma.plan_id
-         WHERE ma.run_id=?1 AND (ma.company_id=?2 OR ma.company_id IN
+         WHERE ma.run_id=?1 AND NOT EXISTS(SELECT 1 FROM discarded_plans d WHERE d.plan_id=ma.plan_id) AND (ma.company_id=?2 OR ma.company_id IN
            (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))
          ORDER BY sr.round_no,ma.created_at DESC,ma.assessment_id DESC",
     )?;
@@ -532,10 +533,10 @@ fn simulated_for_company(conn: &Connection, run_id: &str, company_id: &str) -> R
            EXISTS(SELECT 1 FROM source_rows WHERE run_scope=?1 AND simulated=1 AND
              (company_id=?2 OR company_id IN
                (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK')))
-           OR EXISTS(SELECT 1 FROM evidence WHERE run_id=?1 AND simulated=1 AND
+           OR EXISTS(SELECT 1 FROM evidence WHERE run_id=?1 AND simulated=1 AND discarded_plan_id IS NULL AND
              (company_id=?2 OR company_id IN
                (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK')))
-           OR EXISTS(SELECT 1 FROM model_assessments WHERE run_id=?1 AND simulated=1 AND
+           OR EXISTS(SELECT 1 FROM model_assessments WHERE run_id=?1 AND simulated=1 AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) AND
              (company_id=?2 OR company_id IN
                (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))) ",
         params![run_id, company_id],
@@ -1213,18 +1214,18 @@ fn grid_page(conn: &Connection, args: &GridArgs, limit: usize) -> Result<Value> 
             UNION
             SELECT a.current_id FROM aliases a
             JOIN evidence ev ON ev.company_id=a.alias_id
-            WHERE ev.run_id=?1 AND ev.simulated=1
+            WHERE ev.run_id=?1 AND ev.simulated=1 AND ev.discarded_plan_id IS NULL
             UNION
             SELECT a.current_id FROM aliases a
             JOIN model_assessments ma ON ma.company_id=a.alias_id
-            WHERE ma.run_id=?1 AND ma.simulated=1
+            WHERE ma.run_id=?1 AND ma.simulated=1 AND ma.plan_id NOT IN (SELECT plan_id FROM discarded_plans)
         )
         SELECT p.company_id,p.considered,p.consideration_reason,
                c.name,c.website,c.city,json_extract(c.metadata_json,'$.hq_state'),c.description,
                (SELECT identifier FROM company_identifiers WHERE company_id=p.company_id AND kind='PBID'),
                e.pb_website,e.pb_name,e.pb_description,e.pb_linkedin_url,e.pb_hq_location,e.pb_active_investors,e.pb_universe,
                COALESCE(e.rogo_json,'{}')!='{}',
-               EXISTS(SELECT 1 FROM evidence b WHERE b.run_id=?1 AND b.company_id=p.company_id AND b.claim='bing_research_observation' AND b.source_type='bing'),
+               EXISTS(SELECT 1 FROM evidence b WHERE b.run_id=?1 AND b.company_id=p.company_id AND b.claim='bing_research_observation' AND b.source_type='bing' AND b.discarded_plan_id IS NULL),
                COALESCE(src.has_mid,0),COALESCE(src.has_iscc,0),src.iscc_relevance,
                disc.mid_score,disc.iscc_score,COALESCE(disc.found_mid,0),COALESCE(disc.found_iscc,0),COALESCE(disc.discoveries,0),
                (SELECT json_group_array(json_object('kind',kind,'value',identifier)) FROM company_identifiers WHERE company_id=p.company_id),
@@ -1666,7 +1667,7 @@ pub fn company_detail(store: &Store, arguments: &Value) -> Result<Value> {
         let legacy_mid_score: Option<f64> = conn.query_row(
             "SELECT MAX(retrieval_score) FROM candidate_discovery WHERE run_id=?1 AND discovery_source='MID' AND (company_id=?2 OR company_id IN (SELECT identifier FROM company_identifiers WHERE company_id=?2 AND kind='PK'))",
             params![args.run_id,company_id], |r| r.get(0))?;
-        let has_bing: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM evidence WHERE run_id=?1 AND company_id=?2 AND source_type='bing' AND claim='bing_research_observation')",params![args.run_id,company_id],|r|r.get(0))?;
+        let has_bing: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM evidence WHERE run_id=?1 AND company_id=?2 AND source_type='bing' AND claim='bing_research_observation' AND discarded_plan_id IS NULL)",params![args.run_id,company_id],|r|r.get(0))?;
         let pb = &row["sources"]["PB"];
         let derived = json!({
             "company_id":company_id,"name":company["name"],"website":company["website"],
@@ -1776,7 +1777,7 @@ fn activity(conn: &Connection, run_id: &str, company_id: &str) -> Result<Vec<Val
     drop(statement);
 
     let mut statement = conn.prepare(
-        "SELECT claim,source_type,value_json,retrieved_at FROM evidence WHERE run_id=? AND company_id=? ORDER BY retrieved_at DESC,evidence_id DESC LIMIT 20",
+        "SELECT claim,source_type,value_json,retrieved_at FROM evidence WHERE run_id=? AND company_id=? AND discarded_plan_id IS NULL ORDER BY retrieved_at DESC,evidence_id DESC LIMIT 20",
     )?;
     for row in statement.query_map(params![run_id, company_id], |r| {
         Ok((
@@ -1818,7 +1819,7 @@ fn activity(conn: &Connection, run_id: &str, company_id: &str) -> Result<Vec<Val
     drop(statement);
 
     let mut statement = conn.prepare(
-        "SELECT provider,result_json,created_at FROM model_assessments WHERE run_id=? AND company_id=? ORDER BY created_at DESC,assessment_id DESC LIMIT 20",
+        "SELECT provider,result_json,created_at FROM model_assessments WHERE run_id=? AND company_id=? AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) ORDER BY created_at DESC,assessment_id DESC LIMIT 20",
     )?;
     for row in statement.query_map(params![run_id, company_id], |r| {
         Ok((
