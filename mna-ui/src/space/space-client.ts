@@ -1,7 +1,6 @@
 import { callTool } from "../lib/tool-client";
-import { searchRequest, type SpaceSearch } from "./space-model";
-export type SpaceRow = { company_id: string; name: string; website?: string; values: Record<string, unknown>; matched_keywords?: { id: string; text: string }[]; raw_score?: number; match_strength?: number; score?: number; simulated?: boolean };
-export type SpaceResult = { results: SpaceRow[]; columns?: string[]; total: number; query_id?: string; bundle_id?: string; status?: string; reason?: string; simulated?: boolean };
+import { searchRequest, type SpaceResult, type SpaceSearch } from "./space-model";
+export type { SpaceResult, SpaceRow } from "./space-model";
 export type RecentSearch = { query_id: string; source: string; query: string; parameters: Record<string, unknown>; created_at: string };
 export type SyncStatus = { meili: string; task_status: string; documents: number; bundle_id: string };
 export async function fetchSpace(search: SpaceSearch, offset: number, limit: number, signal: AbortSignal): Promise<SpaceResult> {

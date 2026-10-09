@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { combinedDescriptionText, descriptionPreview, descriptionSections, withDescriptionValues } from "../src/workspace/description-content";
+import { combinedDescriptionText, descriptionBatches, descriptionPreview, descriptionRequestLimit, descriptionSections, withDescriptionValues } from "../src/workspace/description-content";
 import type { GridCatalogColumn, GridCompany, GridDescription } from "../src/lib/grid-client";
 import { catalogColumnSpecs } from "../src/workspace/company-catalog";
 import { filterRows } from "../src/grid/grid-filter";
@@ -47,4 +47,18 @@ test("combined Description column previews the first description and filters on 
   assert.equal(descriptionPreview(description, "Description", "derived"), "Claims software");
   assert.equal(combinedDescriptionText(description), "Claims software · claims, billing · Insurance claims platform");
   assert.equal(combinedDescriptionText({ company_id: "C2", sources: [] }), undefined);
+});
+
+test("description requests skip companies already known, send each id once, and split at the endpoint limit", () => {
+  const rows = Array.from({ length: 1201 }, (_, index) => ({ company_id: `c${index}` }));
+  const known = new Set(["c0", "c7"]);
+  const batches = descriptionBatches([...rows, { company_id: "c5" }], id => known.has(id));
+  assert.equal(descriptionRequestLimit, 500);
+  assert.deepEqual(batches.map(batch => batch.length), [500, 500, 199]);
+  assert.equal(batches[0][0], "c1");
+  assert.equal(batches.flat().some(id => known.has(id)), false);
+  assert.equal(batches.flat().filter(id => id === "c5").length, 1);
+  assert.deepEqual(descriptionBatches(rows.slice(0, 2), id => id === "c0"), [["c1"]]);
+  assert.deepEqual(descriptionBatches(rows.slice(0, 3), () => false, 2), [["c0", "c1"], ["c2"]]);
+  assert.deepEqual(descriptionBatches([], () => false), []);
 });

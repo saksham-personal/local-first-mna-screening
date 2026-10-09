@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendKeywords, defaultDraft, editKeyword, insertExpression, pager, restoreDraft, searchRequest } from "../src/space/space-model";
+import { appendKeywords, defaultDraft, editKeyword, insertExpression, restoreDraft, searchRequest } from "../src/space/space-model";
 
 test("chips accept comma/Enter batches, dedupe case-insensitively and stop at 50", () => {
   const chips = appendKeywords([], " nitrogen fertilizer, ammonia\nurea,AMMONIA,, ");
@@ -32,17 +32,11 @@ test("semantic, ISCC and sorted browse map exactly to existing tool schemas", ()
   assert.deepEqual(searchRequest({ kind: "iscc", query: " claims ", count: 1000 }, 100, 200), { tool: "space_search_iscc", args: { query: "claims", count: 1000 } });
   assert.deepEqual(searchRequest({ kind: "browse", sort: { column: "Company", direction: "desc" } }, 0, 100), { tool: "space_browse", args: { offset: 0, limit: 100, sort: { column: "Company", direction: "desc" } } });
 });
-test("pager handles empty, first, final, and exact full pages", () => {
-  assert.deepEqual(pager(0, 0, 100), { first: 0, last: 0, previous: 0, next: 100, canPrevious: false, canNext: false });
-  assert.deepEqual(pager(4897, 4800, 100), { first: 4801, last: 4897, previous: 4700, next: 4900, canPrevious: true, canNext: false });
-  assert.equal(pager(200, 100, 100).canNext, false);
-  assert.equal(pager(201, 100, 100).canNext, true);
-});
 test("reload remembers independent source and controls without rehydrating ISCC", () => {
   const saved = { ...defaultDraft, source: "ISCC", query: "claims", count: 200, search: { kind: "iscc", query: "claims", count: 200 }, offset: 100 };
   const restored = restoreDraft(JSON.stringify(saved));
   assert.equal(restored.source, "ISCC"); assert.equal(restored.query, "claims");
-  assert.deepEqual(restored.search, { kind: "browse" }); assert.equal(restored.offset, 0);
+  assert.deepEqual(restored.search, { kind: "browse" }); assert.equal("offset" in restored, false);
   assert.equal(restoreDraft("oops"), defaultDraft);
   assert.equal(restoreDraft(JSON.stringify({ ...saved, count: 1001 })), defaultDraft);
 });

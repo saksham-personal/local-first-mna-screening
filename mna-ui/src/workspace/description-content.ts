@@ -36,3 +36,13 @@ export function withDescriptionValues(row: GridCompany, catalog: GridCatalogColu
   }
   return { ...row, values };
 }
+
+/** The description endpoint answers at most this many companies per request. */
+export const descriptionRequestLimit = 500;
+/** Company ids in `rows` with no cached or in-flight description, split into requests the endpoint accepts. */
+export function descriptionBatches(rows: { company_id: string }[], known: (companyId: string) => boolean, limit = descriptionRequestLimit): string[][] {
+  const ids = [...new Set(rows.map(row => row.company_id))].filter(id => !known(id));
+  const batches: string[][] = [];
+  for (let start = 0; start < ids.length; start += limit) batches.push(ids.slice(start, start + limit));
+  return batches;
+}

@@ -1225,7 +1225,8 @@
 .ws-company-main > .ws-grid-error,
 .ws-company-main > .ws-grid-notice { flex-shrink: 0; }
 .ws-company-main > .ws-grid-loading { flex: 1 1 auto; min-height: 360px; }
-.ws-summary-progress { font-variant-numeric: tabular-nums; }
+/* Background pages still arriving: a slim strip under the grid, so the end of the list never looks finished. */
+.ws-company-main > .ws-grid-more { flex-shrink: 0; display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px 14px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 /* One toolbar row at the grid's width; it wraps only when the grid is narrow. The grid's own
    760px container rules would stack the export group on a second row, so they are overridden here. */
 .ws-company-main .dg-toolbar { flex: none; min-height: 0; padding: 6px 12px; gap: 6px 8px; }

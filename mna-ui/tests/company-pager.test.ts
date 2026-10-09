@@ -3,13 +3,16 @@ import test from "node:test";
 import { companyPageSizes, loadingProgress, pageRows } from "../src/workspace/company-pager";
 import { appendGridPage, fetchScreeningGridPage, fetchGridDescriptions, type ScreeningGrid } from "../src/lib/grid-client";
 
-test("pagination exposes 100/250/500 sizes and slices just the visible page", () => {
+test("the loading strip counts loaded rows against the run total and disappears once every page is in", () => {
+  assert.equal(loadingProgress(2000, 7178, true), "Loading more companies… · 2,000 of 7,178");
+  assert.equal(loadingProgress(7178, 7178, false), undefined);
+});
+
+test("DataGrid's optional pager still slices one page at a time for paginated callers", () => {
   const rows = Array.from({ length: 5613 }, (_, index) => index);
   assert.deepEqual(companyPageSizes, [100, 250, 500]);
   assert.deepEqual(pageRows(rows, 1, 100), rows.slice(100, 200));
   assert.equal(pageRows(rows, 11, 500).length, 113);
-  assert.equal(loadingProgress(3000, 5613, true), "Loading all rows · 3,000 of 5,613");
-  assert.equal(loadingProgress(5613, 5613, false), undefined);
 });
 
 test("page one resolves without requesting the continuation and projects the view and picker ids", async () => {

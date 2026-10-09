@@ -20,6 +20,7 @@ import {
   FileText,
   FolderOpen,
   List,
+  LoaderCircle,
   MessageSquare,
   UploadCloud,
 } from "lucide-react";
@@ -57,11 +58,11 @@ import type { DataGridProps } from "./grid/DataGrid";
 import { buildCompanyColumns } from "./workspace/company-columns";
 import { pageDescriptionColumn, readColumnChoice, requestedCatalogIds, visibleCatalogIds, type ColumnChoice } from "./workspace/company-catalog";
 import { loadingProgress } from "./workspace/company-pager";
-import { withDescriptionValues } from "./workspace/description-content";
+import { descriptionBatches, descriptionRequestLimit, withDescriptionValues } from "./workspace/description-content";
 import DescriptionTooltip from "./workspace/DescriptionTooltip";
 import { formatTime, plural } from "./lib/format";
 import { emptyFilterState } from "./grid/grid-filter";
-import type { FilterState } from "./grid/grid-types";
+import type { FilterState, SortState } from "./grid/grid-types";
 import ScoreDistribution from "./workspace/ScoreDistribution";
 import { belongsToTab, type CompanyTab } from "./workspace/score-distribution-state";
 import "./workspace/workspace.css";
@@ -461,6 +462,8 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
   const [descriptionError, setDescriptionError] = useState("");
   const descriptionBlocked = useRef(false);
   const descriptionSourceHash = useRef<string | undefined>(undefined);
+  const descriptionTimer = useRef<number | undefined>(undefined);
+  const [gridSort, setGridSort] = useState<SortState>(null);
   const filterState = filtersByTab[sourceTab];
   const changeFilters = useCallback((next: FilterState) => setFiltersByTab((current) => ({ ...current, [sourceTab]: next })), [sourceTab]);
   const [columnPreferences, setColumnPreferences] = useState<Partial<Record<CompanyTab, ColumnChoice>>>(() => {
@@ -588,27 +591,38 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
   }, [loadGrid, state.selectionRevision, resultsKey]);
   const loadDescriptions = useCallback((page: GridCompany[]) => {
     if (!state.backendRunId || descriptionBlocked.current) return;
-    const ids = page.map(row => row.company_id).filter(id => !descriptionCache.current.has(id) && !descriptionPending.current.has(id));
-    if (!ids.length) return;
     const request = gridRequest.current;
-    for (const id of ids) descriptionPending.current.add(id);
-    void fetchGridDescriptions(state.sessionId, state.backendRunId, ids).then(items => {
-      if (request !== gridRequest.current) return;
-      for (const item of items) descriptionCache.current.set(item.company_id, item);
-      for (const id of ids) if (!descriptionCache.current.has(id)) descriptionCache.current.set(id, { company_id: id, sources: [] });
-      for (const id of ids) descriptionPending.current.delete(id);
-      setDescriptions(new Map(descriptionCache.current));
-    }).catch(error => {
-      if (request !== gridRequest.current) return;
-      descriptionBlocked.current = true; setDescriptionError(error instanceof Error ? error.message : String(error));
-    }).finally(() => { if (request === gridRequest.current) for (const id of ids) descriptionPending.current.delete(id); });
+    // Only rows with neither a cached nor an in-flight description are requested, in endpoint-sized batches.
+    for (const ids of descriptionBatches(page, id => descriptionCache.current.has(id) || descriptionPending.current.has(id))) {
+      for (const id of ids) descriptionPending.current.add(id);
+      void fetchGridDescriptions(state.sessionId, state.backendRunId, ids).then(items => {
+        if (request !== gridRequest.current) return;
+        for (const item of items) descriptionCache.current.set(item.company_id, item);
+        for (const id of ids) if (!descriptionCache.current.has(id)) descriptionCache.current.set(id, { company_id: id, sources: [] });
+        for (const id of ids) descriptionPending.current.delete(id);
+        setDescriptions(new Map(descriptionCache.current));
+      }).catch(error => {
+        if (request !== gridRequest.current) return;
+        descriptionBlocked.current = true; setDescriptionError(error instanceof Error ? error.message : String(error));
+      }).finally(() => { if (request === gridRequest.current) for (const id of ids) descriptionPending.current.delete(id); });
+    }
   }, [state.backendRunId, state.sessionId]);
-  const filteringDescriptions = Boolean(filterState.quick.trim()) || catalog.some(column => pageDescriptionColumn(column) && filterState.columns[column.id]);
-  // A description filter needs more than the visible page. Read bounded batches
-  // in the background; normal browsing only hydrates the page being viewed.
+  // The rows in view (AG Grid's row buffer included) are requested once the scroll has settled for 150 ms.
+  const scheduleVisibleDescriptions = useCallback((page: GridCompany[]) => {
+    const request = gridRequest.current;
+    window.clearTimeout(descriptionTimer.current);
+    descriptionTimer.current = window.setTimeout(() => {
+      if (request === gridRequest.current) loadDescriptions(page);
+    }, 150);
+  }, [loadDescriptions]);
+  useEffect(() => () => window.clearTimeout(descriptionTimer.current), []);
+  // Filters, quick search and a description sort need every description. Read bounded batches
+  // in the background; normal browsing only hydrates the rows in view.
+  const sortsByDescription = catalog.some(column => column.id === gridSort?.columnId && pageDescriptionColumn(column));
+  const filteringDescriptions = Boolean(filterState.quick.trim()) || catalog.some(column => pageDescriptionColumn(column) && filterState.columns[column.id]) || sortsByDescription;
   useEffect(() => {
     if (!filteringDescriptions || loading || refreshing || descriptionBlocked.current || descriptionPending.current.size) return;
-    loadDescriptions(allRows.filter(row => !descriptionCache.current.has(row.company_id)).slice(0, 500));
+    loadDescriptions(allRows.filter(row => !descriptionCache.current.has(row.company_id)).slice(0, descriptionRequestLimit));
   }, [filteringDescriptions, allRows, descriptions, loading, refreshing, loadDescriptions]);
   useEffect(() => {
     const visibleIds = new Set(rows.map((row) => row.company_id));
@@ -673,7 +687,6 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
         <div className="ws-table-summary">
           <span>
             {loading && !gridData ? "Loading companies…" : <><strong>{(gridData?.consideredCount ?? 0).toLocaleString()}</strong> considered · <strong>{(gridData?.hiddenCount ?? 0).toLocaleString()}</strong> hidden</>}
-            {progress && <span className="ws-summary-progress" role="status"> · {progress}</span>}
           </span>
           <span>
             Source scores <HelpTip label="About source scores">MID and ISCC scores use different retrieval methods and stay separate from each other and from screening scores.</HelpTip>
@@ -683,7 +696,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
         {writeError && <p className="ws-grid-error" role="alert">{writeError}</p>}
         {notice && <p className="ws-grid-notice" role="status">{notice}</p>}
         <div className="ws-source-tabs" role="group" aria-label="Company sources">
-          {(["All", "MID", "ISCC"] as const).map((tab) => <button type="button" key={tab} aria-pressed={sourceTab === tab} className={sourceTab === tab ? "is-active" : ""} onClick={() => { setSourceTab(tab); setSelectedIds([]); }}>
+          {(["All", "MID", "ISCC"] as const).map((tab) => <button type="button" key={tab} aria-pressed={sourceTab === tab} className={sourceTab === tab ? "is-active" : ""} onClick={() => { setSourceTab(tab); setSelectedIds([]); setGridSort(null); }}>
             {tab} <span>{streaming ? "≥ " : ""}{allRows.filter((row) => belongsToTab(row.source, tab) && (showHidden || row.considered)).length.toLocaleString()}</span>
           </button>)}
         </div>
@@ -703,9 +716,9 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
             label="Companies in the current screening"
             loading={loading}
             updating={busy || refreshing}
-            pagination
             groupHeaders
-            onPageRowsChange={loadDescriptions}
+            onPageRowsChange={scheduleVisibleDescriptions}
+            onSortChange={setGridSort}
             emptyText={state.backendRunId ? "No companies match the current filters." : "Approve criteria and run discovery to load companies."}
             storageKey={`ws-companies-v3:${sourceTab}`}
             rowHeight={50}
@@ -735,6 +748,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
             )}
           /></DescriptionTooltip>
         </Suspense>
+        {progress && <p className="ws-grid-more" role="status"><LoaderCircle className="ui-spin" size={13} aria-hidden="true" />{progress}</p>}
       </section>
       {selected && <Suspense fallback={null}>
         <CompanyDrawer

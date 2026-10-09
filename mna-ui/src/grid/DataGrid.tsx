@@ -13,6 +13,7 @@ import {
 import {
   AllCommunityModule,
   themeQuartz,
+  type BodyScrollEvent,
   type ColDef,
   type ColGroupDef,
   type GridApi,
@@ -71,6 +72,7 @@ export type DataGridProps<Row> = {
   updating?: boolean;
   pagination?: boolean;
   groupHeaders?: boolean;
+  /** Paginated: the current page. Unpaginated: the rows rendered in the viewport, reported as the grid scrolls. */
   onPageRowsChange?: (rows: Row[]) => void;
   emptyText?: string;
   filterState?: FilterState;
@@ -87,6 +89,8 @@ export type DataGridProps<Row> = {
   isRowMuted?: (row: Row) => boolean;                 // memoise it: a new function redraws all rows
   onOpenRow?: (row: Row) => void;
   onVisibleRowsChange?: (rows: Row[]) => void;
+  // Called on body scroll when the list is scrollable and within about 10 rows of its end.
+  onScrollNearEnd?: (displayedRowCount: number) => void;
   sidePanelTabs?: SidePanelTab[];
   sidePanelDefaultOpen?: boolean;
   storageKey?: string;
@@ -122,6 +126,7 @@ function SelectionHeader<Row>({ getStatus, onToggle, runtime }: SelectionHeaderP
 }
 
 const gridModules = [AllCommunityModule];
+const nearEndRows = 10;
 const defaultGridColDef: ColDef = { sortable: false, filter: false, resizable: true };
 const gridTheme = themeQuartz.withParams({
   accentColor: "var(--accent)",
@@ -221,6 +226,7 @@ export function DataGrid<Row>({
   isRowMuted,
   onOpenRow,
   onVisibleRowsChange,
+  onScrollNearEnd,
   sidePanelTabs = [],
   sidePanelDefaultOpen = false,
   storageKey,
@@ -450,9 +456,12 @@ export function DataGrid<Row>({
   const pageCallbackRef = useRef(onPageRowsChange);
   pageCallbackRef.current = onPageRowsChange;
   const notifyPage = useCallback(({ api }: { api: GridApi<Row> }) => {
-    const size = pagination ? api.paginationGetPageSize() : displayedRowsRef.current.length;
-    const page = pagination ? api.paginationGetCurrentPage() : 0;
-    pageCallbackRef.current?.(pageRows(displayedRowsRef.current, page, size));
+    const rows = displayedRowsRef.current;
+    // Unpaginated grids report only the rendered slice (AG Grid's row buffer included), never every row.
+    const visible = pagination
+      ? pageRows(rows, api.paginationGetCurrentPage(), api.paginationGetPageSize())
+      : rows.slice(Math.max(0, api.getFirstDisplayedRowIndex()), api.getLastDisplayedRowIndex() + 1);
+    pageCallbackRef.current?.(visible);
   }, [pagination]);
   const resetLayout = useCallback(() => {
     updateVisibleColumnIds(defaultVisibleColumnIds(columns));
@@ -483,6 +492,17 @@ export function DataGrid<Row>({
     if (target instanceof Element && target.closest("button,a,input,select,textarea,[role='button']")) return;
     onOpenRow(event.data);
   }, [onOpenRow]);
+  const scrollNearEndRef = useRef(onScrollNearEnd);
+  scrollNearEndRef.current = onScrollNearEnd;
+  const handleBodyScroll = useCallback(({ api }: BodyScrollEvent<Row>) => {
+    const notify = scrollNearEndRef.current;
+    if (!notify) return;
+    const count = api.getDisplayedRowCount();
+    const { top, bottom } = api.getVerticalPixelRange();
+    const bodyHeight = count * rowHeight;
+    // A list that fits the viewport is not scrolled, so it never reports its end.
+    if (count > 0 && bodyHeight > bottom - top && bodyHeight - bottom <= nearEndRows * rowHeight) notify(count);
+  }, [rowHeight]);
 
   const gridElement = loading ? (
     <Skeleton variant="table" className="dg-loading" label={`Loading ${label}`} rows={7} cols={Math.min(Math.max(visibleColumns.length, 1), 8)} />
@@ -500,6 +520,7 @@ export function DataGrid<Row>({
         paginationPageSizeSelector={pagination ? companyPageSizes : false}
         onPaginationChanged={notifyPage}
         onRowDataUpdated={notifyPage}
+        onViewportChanged={notifyPage}
         onGridReady={({ api }) => {
           try { const saved = storageKey && JSON.parse(localStorage.getItem(`${storageKey}:layout`) ?? "null"); if (Array.isArray(saved)) api.applyColumnState({ state: saved, applyOrder: true }); } catch { /* optional storage */ }
           notifyPage({ api });
@@ -517,6 +538,7 @@ export function DataGrid<Row>({
         rowClassRules={rowClassRules}
         onRowClicked={openRow}
         onCellKeyDown={openRowByKeyboard}
+        onBodyScroll={onScrollNearEnd ? handleBodyScroll : undefined}
         overlayNoRowsTemplate={`<span class="dg-empty">${escapeHtml(emptyText)}</span>`}
       />
     </AgGridProvider>
