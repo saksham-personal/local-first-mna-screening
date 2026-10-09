@@ -665,6 +665,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
       setNotice("Export started. Activity shows progress and the download when ready.");
     }).catch((caught) => setWriteError(caught instanceof Error ? caught.message : "The export could not be started."));
   };
+  const progress = loadingProgress(allRows.length, gridData?.total ?? 0, streaming);
   return (
     <div className="ws-company-layout">
       <section className="ws-company-main">
@@ -672,6 +673,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
         <div className="ws-table-summary">
           <span>
             {loading && !gridData ? "Loading companies…" : <><strong>{(gridData?.consideredCount ?? 0).toLocaleString()}</strong> considered · <strong>{(gridData?.hiddenCount ?? 0).toLocaleString()}</strong> hidden</>}
+            {progress && <span className="ws-summary-progress" role="status"> · {progress}</span>}
           </span>
           <span>
             Source scores <HelpTip label="About source scores">MID and ISCC scores use different retrieval methods and stay separate from each other and from screening scores.</HelpTip>
@@ -685,7 +687,6 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
             {tab} <span>{streaming ? "≥ " : ""}{allRows.filter((row) => belongsToTab(row.source, tab) && (showHidden || row.considered)).length.toLocaleString()}</span>
           </button>)}
         </div>
-        {loadingProgress(allRows.length, gridData?.total ?? 0, streaming) && <p className="ws-grid-progress" role="status">{loadingProgress(allRows.length, gridData?.total ?? 0, streaming)}</p>}
         {descriptionError && <p className="ws-grid-progress" role="status">Descriptions unavailable: {descriptionError}</p>}
         {filteringDescriptions && !descriptionError && descriptions.size < allRows.length && <p className="ws-grid-progress" role="status">Loading descriptions · {descriptions.size.toLocaleString()} of {allRows.length.toLocaleString()}</p>}
         <ScoreDistribution key={sourceTab} rows={rows} columns={columns} rounds={rounds} tab={sourceTab} filterState={filterState} onFilterStateChange={changeFilters} loading={loading} />
@@ -707,7 +708,7 @@ function Companies({ state }: { state: ChatState; onAction: Props["onAction"] })
             onPageRowsChange={loadDescriptions}
             emptyText={state.backendRunId ? "No companies match the current filters." : "Approve criteria and run discovery to load companies."}
             storageKey={`ws-companies-v3:${sourceTab}`}
-            rowHeight={62}
+            rowHeight={50}
             selectable
             selectedIds={selectedIds}
             onSelectedIdsChange={setSelectedIds}

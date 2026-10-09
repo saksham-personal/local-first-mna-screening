@@ -7,7 +7,7 @@ import { plural } from "../lib/format";
 import HelpTip from "../ui/HelpTip";
 import SelectField from "../ui/SelectField";
 import Skeleton from "../ui/Skeleton";
-import { defaultMetric, toggleScoreBucket, type CompanyTab } from "./score-distribution-state";
+import { defaultMetric, initialMinimised, toggleScoreBucket, type CompanyTab } from "./score-distribution-state";
 import "./score-distribution.css";
 
 export default function ScoreDistribution({ rows, columns, rounds, tab, filterState, onFilterStateChange, loading }: {
@@ -16,7 +16,7 @@ export default function ScoreDistribution({ rows, columns, rounds, tab, filterSt
 }) {
   const contentId = useId();
   const storageKey = `ws-score-distribution:${tab}:minimised`;
-  const [minimised, setMinimised] = useState(() => { try { return localStorage.getItem(storageKey) === "true"; } catch { return false; } });
+  const [minimised, setMinimised] = useState(() => { let saved: string | null = null; try { saved = localStorage.getItem(storageKey); } catch { /* storage may be disabled */ } return initialMinimised(saved); });
   const [chosen, setChosen] = useState<string>();
   const metrics = useMemo(() => columns.filter((column) => column.kind === "score"), [columns]);
   const metricId = chosen && metrics.some((column) => column.id === chosen) ? chosen : defaultMetric(tab, metrics, rounds, { has_semantic: rows.some((row) => row.mid_semantic_score !== null), has_iscc: rows.some((row) => row.iscc_relevancy !== null) });
@@ -27,7 +27,7 @@ export default function ScoreDistribution({ rows, columns, rounds, tab, filterSt
   const hasScores = column && rows.some((row) => bucketOf(column.value(row), scheme) !== null);
   const filter = column ? filterState.columns[column.id] : undefined;
   const emptyText = /semantic/i.test(column?.id ?? "") ? "No semantic scores yet — semantic search isn't set up." : /iscc/i.test(column?.id ?? "") ? "No ISCC relevancy scores yet." : /MID/.test(column?.id ?? "") ? "No MID keyword scores yet." : rounds.length ? "No scores from this screening round yet." : "No screening rounds yet.";
-  return <section className="ws-distribution" aria-label="Score distribution">
+  return <section className={`ws-distribution${minimised ? " is-minimised" : ""}`} aria-label="Score distribution">
     <div className="ws-distribution-head">
       <div className="ws-distribution-title"><strong>Score distribution</strong><HelpTip size="sm" label="About score distribution">Counts follow the other column filters. Select a bar to change this score's bucket filter. CHECK stays included until you deselect it.</HelpTip></div>
       {metrics.length > 1 ? <SelectField label="Distribution metric" value={metricId ?? ""} onChange={setChosen} options={metrics.map((metric) => ({ value: metric.id, label: metric.header }))} /> : <span>{column?.header ?? "Screening score"}</span>}

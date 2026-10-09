@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { belongsToTab, defaultMetric, toggleScoreBucket } from "../src/workspace/score-distribution-state";
+import { belongsToTab, defaultMetric, initialMinimised, toggleScoreBucket } from "../src/workspace/score-distribution-state";
 import { filterRows, scoreBuckets } from "../src/grid/grid-filter";
 import type { GridColumnSpec, BucketScheme } from "../src/grid/grid-types";
 import type { RoundColumns } from "../src/lib/grid-client";
 
 const scheme: BucketScheme = { type: "integer", min: 0, max: 10 };
 const column: GridColumnSpec<unknown> = { id: "score", header: "Score", kind: "score", bucketScheme: scheme, value: (row) => row };
+test("distribution starts minimised until the analyst saves an expanded choice", () => {
+  assert.equal(initialMinimised(null), true);
+  assert.equal(initialMinimised(undefined), true);
+  assert.equal(initialMinimised("true"), true);
+  assert.equal(initialMinimised("false"), false);
+});
 test("source tabs include both-source companies and preserve unknown-source rows in All", () => {
   assert.equal(belongsToTab("both", "MID"), true);
   assert.equal(belongsToTab("both", "ISCC"), true);

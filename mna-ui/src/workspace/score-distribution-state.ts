@@ -14,6 +14,10 @@ export function defaultMetric<Row>(tab: CompanyTab, columns: GridColumnSpec<Row>
   return preferences.find(id => scores.some(column => column.id === id)) ?? scores[0]?.id;
 }
 
+/** The saved choice decides. With none saved the distribution starts minimised, so the grid gets the height on first visit. */
+export function initialMinimised(saved: string | null | undefined): boolean {
+  return saved !== "false";
+}
 export function toggleScoreBucket(filter: ColumnFilter | undefined, key: BucketKey, scheme: BucketScheme): ColumnFilter {
   const current = filter?.kind === "score" ? filter : defaultFilter("score") as Extract<ColumnFilter, { kind: "score" }>;
   const numericKeys = Array.from({ length: scheme.type === "integer" ? scheme.max - scheme.min + 1 : scheme.count }, (_, index) => scheme.type === "integer" ? scheme.min + index : index);
