@@ -267,13 +267,15 @@ impl Store {
             "get_labelled_examples" => self.get_labels(parse(tool, arguments)?),
             "get_representative_examples" => self.get_representative(parse(tool, arguments)?),
             "label_company" => self.label_company(parse(tool, arguments)?),
-            "get_evidence" => self.get_evidence(parse(tool, arguments)?),
+            "get_evidence"
+            | "get_previous_research"
+            | "search_research_memory"
+            | "get_search_history" => {
+                crate::data::DataService::new(self.clone()).execute(tool, arguments)
+            }
             "save_evidence" => self.save_evidence(parse(tool, arguments)?),
             "get_missing_evidence" => self.get_missing_evidence(parse(tool, arguments)?),
-            "search_research_memory" => self.search_memory(parse(tool, arguments)?),
-            "get_previous_research" => self.get_previous_research(parse(tool, arguments)?),
             "get_recent_agent_events" => self.get_events(parse(tool, arguments)?),
-            "get_search_history" => self.get_search_history(parse(tool, arguments)?),
             "get_open_questions" => self.get_questions(parse(tool, arguments)?),
             "add_open_question" => self.add_question(parse(tool, arguments)?),
             "resolve_open_question" => self.resolve_question(parse(tool, arguments)?),
@@ -1245,18 +1247,6 @@ fn valid_label(value: &str) -> Result<()> {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct EvidenceArgs {
-    run_id: String,
-    company_id: String,
-    #[serde(default)]
-    claims: Option<Vec<String>>,
-    #[serde(default)]
-    source_types: Option<Vec<String>>,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 struct SaveEvidenceArgs {
     run_id: String,
     company_id: String,
@@ -1281,24 +1271,6 @@ struct MissingEvidenceArgs {
     #[serde(default)]
     required_attributes: Option<Vec<String>>,
 }
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct SearchMemoryArgs {
-    run_id: String,
-    query: String,
-    #[serde(default)]
-    company_id: Option<String>,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct PreviousResearchArgs {
-    company_id: String,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-
 fn evidence_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     Ok(
         json!({"evidence_id":row.get::<_,String>(0)?,"run_id":row.get::<_,String>(1)?,"company_id":row.get::<_,String>(2)?,"claim":row.get::<_,String>(3)?,"value":decode(row.get(4)?)?,"source_type":row.get::<_,String>(5)?,"source_reference":row.get::<_,String>(6)?,"source_url":row.get::<_,Option<String>>(7)?,"confidence":row.get::<_,String>(8)?,"extraction_method":row.get::<_,Option<String>>(9)?,"retrieved_at":row.get::<_,String>(10)?,"content_hash":row.get::<_,String>(11)?}),
@@ -1306,32 +1278,6 @@ fn evidence_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 }
 
 impl Store {
-    fn get_evidence(&self, args: EvidenceArgs) -> Result<Value> {
-        self.require_run(&args.run_id)?;
-        self.require_company(&args.company_id)?;
-        let cap = limit(args.limit, 200, 1000)?;
-        let claims = args.claims.unwrap_or_default();
-        let sources = args.source_types.unwrap_or_default();
-        let conn = self.conn()?;
-        let mut stmt=conn.prepare("SELECT evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash FROM evidence WHERE run_id=? AND company_id=? ORDER BY retrieved_at DESC")?;
-        let rows = stmt.query_map(params![args.run_id, args.company_id], evidence_row)?;
-        let mut out = Vec::new();
-        for row in rows {
-            let mut row = row?;
-            crate::trust::attach(&conn, &mut row)?;
-            if !claims.is_empty() && !claims.iter().any(|v| row["claim"] == *v) {
-                continue;
-            }
-            if !sources.is_empty() && !sources.iter().any(|v| row["source_type"] == *v) {
-                continue;
-            }
-            out.push(row);
-            if out.len() == cap {
-                break;
-            }
-        }
-        Ok(Value::Array(out))
-    }
     fn save_evidence(&self, args: SaveEvidenceArgs) -> Result<Value> {
         self.save_evidence_inner(args, false)
     }
@@ -1408,13 +1354,14 @@ impl Store {
         if required.len() > MAX_LIST {
             return Err(Error::Validation("too many required attributes".into()));
         }
-        let evidence = self.get_evidence(EvidenceArgs {
-            run_id: args.run_id.clone(),
-            company_id: args.company_id.clone(),
-            claims: None,
-            source_types: None,
-            limit: Some(1000),
-        })?;
+        let evidence = crate::data::get_evidence(
+            self,
+            &json!({
+                "run_id": args.run_id.clone(),
+                "company_id": args.company_id.clone(),
+                "limit": 1000
+            }),
+        )?;
         let found: BTreeSet<&str> = evidence
             .as_array()
             .into_iter()
@@ -1431,79 +1378,6 @@ impl Store {
             .collect();
         Ok(json!({"run_id":args.run_id,"company_id":args.company_id,"missing":missing}))
     }
-    fn search_memory(&self, args: SearchMemoryArgs) -> Result<Value> {
-        self.require_run(&args.run_id)?;
-        bounded("query", &args.query, 10_000)?;
-        let cap = limit(args.limit, 20, 200)?;
-        let terms: Vec<String> = normalize(&args.query)
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect();
-        let conn = self.conn()?;
-        let mut stmt=conn.prepare("SELECT evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash FROM evidence WHERE run_id=? ORDER BY retrieved_at DESC")?;
-        let rows = stmt.query_map([&args.run_id], evidence_row)?;
-        let mut scored = Vec::new();
-        for row in rows {
-            let mut row = row?;
-            crate::trust::attach(&conn, &mut row)?;
-            if args
-                .company_id
-                .as_ref()
-                .is_some_and(|id| row["company_id"] != *id)
-            {
-                continue;
-            }
-            let text = row.to_string().to_lowercase();
-            let score = terms.iter().filter(|t| text.contains(t.as_str())).count();
-            if score > 0 {
-                scored.push((score, row));
-            }
-        }
-        drop(stmt);
-        drop(conn);
-        let labels = self.get_labels(LabelsArgs {
-            run_id: args.run_id.clone(),
-            labels: None,
-            company_id: args.company_id.clone(),
-            limit: Some(500),
-        })?;
-        let questions = self.get_questions(QuestionsArgs {
-            run_id: args.run_id,
-            company_id: args.company_id,
-            include_resolved: Some(true),
-            limit: Some(500),
-        })?;
-        for (kind, records) in [("analyst_label", labels), ("research_question", questions)] {
-            for mut record in records.as_array().cloned().unwrap_or_default() {
-                let text = record.to_string().to_lowercase();
-                let score = terms
-                    .iter()
-                    .filter(|term| text.contains(term.as_str()))
-                    .count();
-                if score > 0 {
-                    record["memory_type"] = json!(kind);
-                    scored.push((score, record));
-                }
-            }
-        }
-        scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-        Ok(Value::Array(
-            scored.into_iter().take(cap).map(|(_, v)| v).collect(),
-        ))
-    }
-    fn get_previous_research(&self, args: PreviousResearchArgs) -> Result<Value> {
-        self.require_company(&args.company_id)?;
-        let cap = limit(args.limit, 100, 500)?;
-        let conn = self.conn()?;
-        let mut stmt=conn.prepare("SELECT evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash FROM evidence WHERE company_id=? ORDER BY retrieved_at DESC LIMIT ?")?;
-        let mut rows = stmt
-            .query_map(params![args.company_id, cap as i64], evidence_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for row in &mut rows {
-            crate::trust::attach(&conn, row)?;
-        }
-        Ok(Value::Array(rows))
-    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -1514,15 +1388,6 @@ struct EventsArgs {
     limit: Option<usize>,
     #[serde(default)]
     event_types: Option<Vec<String>>,
-}
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct SearchHistoryArgs {
-    run_id: String,
-    #[serde(default)]
-    source: Option<String>,
-    #[serde(default)]
-    limit: Option<usize>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1565,25 +1430,6 @@ impl Store {
         for row in rows {
             let row = row?;
             if !wanted.is_empty() && !wanted.iter().any(|t| row["event_type"] == *t) {
-                continue;
-            }
-            out.push(row);
-            if out.len() == cap {
-                break;
-            }
-        }
-        Ok(Value::Array(out))
-    }
-    fn get_search_history(&self, args: SearchHistoryArgs) -> Result<Value> {
-        self.require_run(&args.run_id)?;
-        let cap = limit(args.limit, 50, 500)?;
-        let conn = self.conn()?;
-        let mut stmt=conn.prepare("SELECT query_id,run_id,source,query,parameters_json,results_json,created_at FROM search_queries WHERE run_id=? ORDER BY created_at DESC")?;
-        let rows=stmt.query_map([&args.run_id],|r|Ok(json!({"query_id":r.get::<_,String>(0)?,"run_id":r.get::<_,Option<String>>(1)?,"source":r.get::<_,String>(2)?,"query":r.get::<_,String>(3)?,"parameters":decode(r.get(4)?)?,"results":decode(r.get(5)?)?,"created_at":r.get::<_,String>(6)?})))?;
-        let mut out = Vec::new();
-        for row in rows {
-            let row = row?;
-            if args.source.as_ref().is_some_and(|s| row["source"] != *s) {
                 continue;
             }
             out.push(row);
@@ -2143,13 +1989,9 @@ pub fn input_schema(tool: &str) -> Option<Value> {
         "get_labelled_examples" => schema!(LabelsArgs),
         "get_representative_examples" => schema!(RepresentativeArgs),
         "label_company" => schema!(LabelCompanyArgs),
-        "get_evidence" => schema!(EvidenceArgs),
         "save_evidence" => schema!(SaveEvidenceArgs),
         "get_missing_evidence" => schema!(MissingEvidenceArgs),
-        "search_research_memory" => schema!(SearchMemoryArgs),
-        "get_previous_research" => schema!(PreviousResearchArgs),
         "get_recent_agent_events" => schema!(EventsArgs),
-        "get_search_history" => schema!(SearchHistoryArgs),
         "get_open_questions" => schema!(QuestionsArgs),
         "add_open_question" => schema!(AddQuestionArgs),
         "resolve_open_question" => schema!(ResolveQuestionArgs),

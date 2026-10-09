@@ -24,6 +24,11 @@ function templatesFrom(input) {
 
 function message(error) { return error instanceof Error ? error.message : String(error); }
 function timestamp(now) { return new Date(now()).toISOString(); }
+function isConnectionError(error) {
+  const code = error?.code ?? error?.cause?.code;
+  if (typeof code === 'string' && /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)$/.test(code)) return true;
+  return /(?:econn(?:refused|reset)|ehostunreach|enetunreach|eai_again|enotfound|fetch failed|socket hang up|network (?:error|failure)|connection (?:refused|reset|closed|failed|lost|timed out)|timed? ?out|provider connection.*(?:unavailable|lost)|bing is not connected|http 5\d\d)/i.test(message(error));
+}
 
 export function createBingResearch({ call, connected = () => false, storeFile, now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
   const previews = new Map();
@@ -31,6 +36,7 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
   const byPlan = new Map();
   const timers = new Map();
   const pumps = new Map();
+  const starts = new Map();
   let saveQueue = Promise.resolve();
   let loaded = false;
 
@@ -91,8 +97,8 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
     const state = saved.state;
     const sendState = state === 'running' ? 'running' : state === 'queued' ? 'queued' : state === 'paused' ? 'paused' :
       state === 'failed' ? 'failed' : state === 'cancelling' ? 'running' : 'completed';
-    const saveState = saved.savedObservations > 0 ? 'completed' : state === 'running' ? 'running' :
-      state === 'failed' ? 'failed' : state === 'cancelled' ? 'cancelled' : 'queued';
+    const saveState = state === 'completed' ? 'completed' : state === 'running' || state === 'cancelling' ? 'running' :
+      state === 'paused' ? 'paused' : state === 'failed' ? 'failed' : state === 'cancelled' ? 'cancelled' : 'queued';
     return {
       id: saved.id, kind: 'bing', runId: saved.runId, sessionId: saved.sessionId,
       planId: saved.planId, title: saved.title, state,
@@ -226,7 +232,8 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
     }
     if (saved.cancelRequested) return finishCancel(saved, tracer([]));
     if (!connected()) {
-      saved.state = 'failed'; saved.message = 'Bing is not connected; no queries were sent.';
+      saved.state = 'paused'; saved.pauseRequested = false;
+      saved.message = 'Bing is not connected — paused; resume when connected';
       saved.updatedAt = timestamp(now); await persist(); return;
     }
     saved.state = 'running'; saved.message = 'Research is running in the background.';
@@ -235,6 +242,8 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
     try {
       let cachedBatchStart = -1;
       let pendingQueries = [];
+      let disconnected = false;
+      let fatalError;
       while (saved.nextQueryIndex < saved.queryCount) {
         if (saved.cancelRequested || saved.pauseRequested) break;
         const companyIndex = Math.floor(saved.nextQueryIndex / saved.templates.length);
@@ -246,14 +255,25 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
         if (saved.cancelRequested || saved.pauseRequested) break;
         const query = pendingQueries.shift();
         if (!query) throw new Error('The research service returned no query at the saved cursor.');
+        if (!connected()) { disconnected = true; break; }
         saved.updatedAt = timestamp(now); await persist();
         try {
           await traced('bing_search', { run_id: saved.runId, plan_id: saved.planId, step_id: saved.stepId,
             ...(query.company_id ? { company_id: query.company_id } : {}), query: query.query, max_results: 5 });
           saved.savedObservations++;
-        } catch {
+        } catch (error) {
+          if (!connected() || isConnectionError(error)) {
+            disconnected = true;
+            break;
+          }
+          if (/bing research plan was discarded/i.test(message(error))) {
+            fatalError = error;
+            break;
+          }
           saved.failedQueries++;
         }
+        // Save the cursor only after bing_search returns and any observation has been saved.
+        // A crash can therefore re-send at most the current query after restart.
         saved.processedQueries++;
         saved.nextQueryIndex++;
         saved.updatedAt = timestamp(now);
@@ -264,6 +284,13 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
       }
       if (saved.cancelRequested) {
         await finishCancel(saved, traced);
+      } else if (disconnected) {
+        saved.state = 'paused'; saved.pauseRequested = false;
+        saved.message = 'Bing is not connected — paused; resume when connected';
+        saved.updatedAt = timestamp(now); await persist();
+      } else if (fatalError) {
+        saved.state = 'failed'; saved.message = message(fatalError);
+        saved.updatedAt = timestamp(now); await persist();
       } else if (saved.pauseRequested) {
         saved.state = 'paused'; saved.pauseRequested = false;
         saved.message = 'Paused after the current query.'; saved.updatedAt = timestamp(now);
@@ -285,7 +312,20 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
     return pending;
   }
 
-  async function start({ token, approved, sessionId }) {
+  function start(input) {
+    if (input?.approved !== true) return Promise.reject(new Error('Review and approve the query templates first.'));
+    const token = input?.token;
+    if (typeof token !== 'string') return Promise.reject(new Error('Research preview expired. Preview and approve it again.'));
+    const pending = starts.get(token);
+    if (pending) return pending;
+    const inFlight = startApproved(input).finally(() => {
+      if (starts.get(token) === inFlight) starts.delete(token);
+    });
+    starts.set(token, inFlight);
+    return inFlight;
+  }
+
+  async function startApproved({ token, approved, sessionId }) {
     await init();
     if (approved !== true) throw new Error('Review and approve the query templates first.');
     let savedRun = runs.get(token);
@@ -313,13 +353,14 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
       id: randomUUID(), token, runId: saved.runId, sessionId: sessionId && SAFE_ID.test(sessionId) ? sessionId : undefined,
       planId: plan.plan_id, stepId: saved.stepId, title: saved.mode === 'company' ? 'Bing company research' : 'Bing research',
       mode: saved.mode, templates: saved.templates, ids: context.ids, selectionRevision: context.revision,
-      state: connected() ? 'queued' : 'failed', nextQueryIndex: 0, processedQueries: 0, queryCount,
+      state: connected() ? 'queued' : 'paused', nextQueryIndex: 0, processedQueries: 0, queryCount,
       failedQueries: 0, savedObservations: 0, pauseRequested: false, cancelRequested: false,
       startedAt: timestamp(now), updatedAt: timestamp(now),
-      message: connected() ? 'Research approved and queued.' : 'Research approved and saved. Bing is not connected; no queries were sent.',
+      message: connected() ? 'Research approved and queued.' : 'Bing is not connected — paused; resume when connected',
     };
     runs.set(token, record); byPlan.set(record.planId, token);
     await persist();
+    previews.delete(token);
     if (record.state === 'queued') schedule(token);
     return snapshot(record);
   }
@@ -351,7 +392,14 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
     if (!saved) throw new Error('Background Bing research was not started.');
     if (saved.nextQueryIndex >= saved.queryCount) return snapshot(saved);
     if (saved.state === 'completed' || saved.state === 'cancelled') return snapshot(saved);
-    saved.pauseRequested = false; saved.cancelRequested = false;
+    if (saved.state === 'cancelling' || saved.cancelRequested) return snapshot(saved);
+    if (!connected()) {
+      saved.state = 'paused'; saved.pauseRequested = false;
+      saved.message = 'Bing is not connected — paused; resume when connected';
+      saved.updatedAt = timestamp(now); await persist();
+      return snapshot(saved);
+    }
+    saved.pauseRequested = false;
     saved.state = 'queued'; saved.message = 'Research queued to resume from the saved query.';
     saved.updatedAt = timestamp(now); await persist();
     schedule(saved.token);

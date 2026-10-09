@@ -45,6 +45,7 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
                 sessionId: item.sessionId, paused: item.paused, staged: item.staged,
                 lastSnapshot: item.lastSnapshot, events: Array.isArray(item.events) ? item.events : [], blocked: item.blocked ?? '',
                 cancelling: item.cancelling === true, cancelled: item.cancelled === true, discarded: item.discarded === true,
+                keepOnCancel: typeof item.keepOnCancel === 'boolean' ? item.keepOnCancel : undefined,
                 updatedAt: item.updatedAt ?? new Date(now()).toISOString() });
             }
           }
@@ -212,9 +213,21 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
       if (!control.paused) schedule(planId);
     } finally {
       running.delete(planId);
-      const wake = pumpWaiters.get(planId);
-      if (wake) { pumpWaiters.delete(planId); wake(); }
+      const waiters = pumpWaiters.get(planId);
+      if (waiters) {
+        pumpWaiters.delete(planId);
+        for (const wake of waiters) wake();
+      }
     }
+  }
+
+  function waitForPump(planId) {
+    if (!running.has(planId)) return Promise.resolve();
+    return new Promise(resolve => {
+      let waiters = pumpWaiters.get(planId);
+      if (!waiters) { waiters = new Set(); pumpWaiters.set(planId, waiters); }
+      waiters.add(resolve);
+    });
   }
 
   async function start({ planId, sessionId, digest, approved }) {
@@ -263,25 +276,40 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     if (typeof keep !== 'boolean') throw new Error('Choose whether to keep or discard completed results.');
     const control = controls.get(planId);
     if (!control) throw new Error('Background screening plan was not started.');
-    if (control.cancelled) return control.lastSnapshot;
+    if (control.cancelled && (control.discarded || control.keepOnCancel === true)) return control.lastSnapshot;
+    if (control.cancelled && control.keepOnCancel === false && keep !== false)
+      throw new Error('Cancellation already chose to discard results. Retry with keep=false.');
+    control.keepOnCancel = keep;
     control.paused = true;
     control.cancelling = true;
+    control.blocked = '';
     control.updatedAt = new Date(now()).toISOString();
     if (timers.has(planId)) { clearTimer(timers.get(planId)); timers.delete(planId); }
     await save();
-    if (running.has(planId)) await new Promise(resolve => pumpWaiters.set(planId, resolve));
+    await waitForPump(planId);
+    let data;
+    let rustCancelled = false;
     try {
-      const data = await planJobs(planId, control.digest);
-      await call('cancel_prepared_plan', { plan_id: planId, cancelled_by: 'screening-ui-analyst' }, true);
+      data = await planJobs(planId, control.digest, { allowStale: true, allowCancelled: true });
+      rustCancelled = data.plan.status === 'CANCELLED';
+      if (!rustCancelled) {
+        const result = await call('cancel_prepared_plan', { plan_id: planId, cancelled_by: 'screening-ui-analyst' }, true);
+        rustCancelled = result?.status === 'CANCELLED';
+        control.cancelled = rustCancelled;
+      }
+      data = await planJobs(planId, control.digest, { allowStale: true, allowCancelled: true });
+      control.cancelled = data.plan.status === 'CANCELLED';
+      rustCancelled = control.cancelled;
+      if (!control.cancelled) throw new Error('Rust did not confirm that this screening plan was cancelled.');
+      control.lastSnapshot = snapshot(data, control, { stale: data.plan.fresh !== true || data.plan.status === 'STALE' });
       if (!keep) {
         await call('discard_plan_results', { run_id: data.plan.run_id, plan_id: planId, kind: 'screening',
           reason: 'Analyst chose to discard results from cancelled screening.' }, true);
       }
-      for (const job of data.jobs) if (ACTIVE.has(job.state)) job.state = 'CANCELLED';
-      control.cancelled = true;
       control.discarded = !keep;
       control.cancelling = false;
       control.paused = true;
+      control.blocked = '';
       control.updatedAt = new Date(now()).toISOString();
       control.lastSnapshot = snapshot(data, control);
       await save();
@@ -291,6 +319,14 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
       control.paused = true;
       control.blocked = message(error);
       control.updatedAt = new Date(now()).toISOString();
+      try {
+        data = await planJobs(planId, control.digest, { allowStale: true, allowCancelled: true });
+        rustCancelled = data.plan.status === 'CANCELLED';
+      } catch { /* Keep the last observed Rust state; retry remains safe. */ }
+      control.cancelled = rustCancelled;
+      if (data?.plan) {
+        control.lastSnapshot = snapshot(data, control, { stale: data.plan.fresh !== true || data.plan.status === 'STALE' });
+      }
       await save();
       throw error;
     }
@@ -320,9 +356,12 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     await init(); planId = id(planId, 'plan');
     const control = controls.get(planId);
     if (!control) throw new Error('Background screening plan was not started.');
+    if (control.cancelled && control.keepOnCancel === false && !control.discarded)
+      throw new Error(control.blocked || 'Cancellation discard has not completed. Retry cancellation before staging results.');
     const data = await planJobs(planId, control.digest, { allowCancelled: control.cancelled });
     const accepted = new Set(data.jobs.filter(job => job.state === 'SUCCEEDED').map(job => job.job_id));
     const persisted = await call('get_model_assessments', { run_id: data.plan.run_id, plan_id: planId });
+    // Kept partial results can be staged after cancellation, while planJobs above still requires the original source snapshot to be fresh.
     const rows = (persisted.assessments ?? []).filter(row =>
       row.plan_id === planId && accepted.has(row.job_id) && (row.eligible_for_current_use === true || (control.cancelled && !control.discarded)));
     const answers = (persisted.question_answers ?? []).filter(row =>

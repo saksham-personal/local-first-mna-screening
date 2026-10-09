@@ -104,7 +104,7 @@ fn discard(store: &Store, args: DiscardArgs) -> Result<Value> {
         match kind {
             "screening" => {
                 let valid: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM prepared_plans WHERE plan_id=? AND run_id=? AND json_extract(spec_json,'$.mode')='screening')",
+                    "SELECT EXISTS(SELECT 1 FROM prepared_plans WHERE plan_id=? AND run_id=? AND json_extract(spec_json,'$.mode') IN ('screening','question'))",
                     params![args.plan_id, args.run_id],
                     |row| row.get(0),
                 )?;

@@ -8,11 +8,12 @@ import { createBingResearch } from '../server/bing-research.mjs';
 
 const templates = ['{company} products', '{company} customers', '{company} competitors'];
 
-function fixture(count = 3, isConnected = true, options: { storeFile?: string; holdQuery?: (args: Record<string, string>) => Promise<void>; setTimer?: (callback: () => void, delay?: number) => number; clearTimer?: (timer: number) => void } = {}) {
+function fixture(count = 3, isConnected = true, options: { storeFile?: string; holdQuery?: (args: Record<string, string>) => Promise<void>; holdProposal?: () => Promise<void>; searchError?: (args: Record<string, any>) => Error | undefined; setTimer?: (callback: () => void, delay?: number) => number; clearTimer?: (timer: number) => void } = {}) {
   const companies = Array.from({ length: count }, (_, index) => `company-${index + 1}`);
   const calls: { tool: string; args: Record<string, any>; approved: boolean }[] = [];
   let planCompanies: string[] = [];
   let planTemplates: string[] = [];
+  let proposalCount = 0;
   let revision: string | number = 'revision-1';
   const call = async (tool: string, args: Record<string, any>, approved = false) => {
     calls.push({ tool, args, approved });
@@ -23,16 +24,19 @@ function fixture(count = 3, isConnected = true, options: { storeFile?: string; h
     }
     if (tool === 'create_run') return { run_id: 'run-1' };
     if (tool === 'propose_action_plan') {
+      await options.holdProposal?.();
       planCompanies = args.steps[0].company_ids;
       planTemplates = args.steps[0].query_templates;
-      return { plan_id: 'plan-1', status: 'PROPOSED' };
+      return { plan_id: `plan-${++proposalCount}`, status: 'PROPOSED' };
     }
-    if (tool === 'approve_action_plan') return { plan_id: 'plan-1', status: 'APPROVED' };
+    if (tool === 'approve_action_plan') return { plan_id: args.plan_id, status: 'APPROVED' };
     if (tool === 'prepare_bing_queries') return { queries: args.company_ids.flatMap((company_id: string) => planTemplates.map(query => ({
       company_id, query: query.replaceAll('{company}', company_id).replaceAll('{website}', `${company_id}.example`),
     }))) };
     if (tool === 'bing_search') {
       await options.holdQuery?.(args);
+      const error = options.searchError?.(args);
+      if (error) throw error;
       return { query_id: `query-${calls.filter(item => item.tool === 'bing_search').length}`, evidence_id: 'evidence-1', results: [{ title: 'Lead', url: 'https://example.test', snippet: 'Unverified result' }] };
     }
     if (tool === 'discard_plan_results') return { discarded: true };
@@ -81,6 +85,31 @@ test('start returns before sending and background queries progress without clien
   assert.equal(f.calls.filter(item => item.tool === 'bing_search').length, 3);
 });
 
+test('nine sequential starts evict each approved preview instead of exhausting the preview limit', async () => {
+  const f = fixture(1, false);
+  for (let index = 0; index < 9; index++) {
+    const preview = await f.service.preview({ runId: 'run-1', mode: 'general', queries: ['Market overview'] });
+    const started = await f.service.start({ token: preview.token, approved: true });
+    assert.equal(started.state, 'paused');
+  }
+  assert.equal((await f.service.list()).length, 9);
+});
+
+test('concurrent starts for one preview share a single approved job', async () => {
+  const held = gate();
+  const f = fixture(1, true, { holdProposal: async () => { held.hold(); } });
+  const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries: ['{company} products'] });
+  const first = f.service.start({ token: preview.token, approved: true });
+  await held.waiting;
+  const second = f.service.start({ token: preview.token, approved: true });
+  assert.strictEqual(second, first);
+  held.release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.id, b.id);
+  assert.equal(f.calls.filter(item => item.tool === 'propose_action_plan').length, 1);
+  assert.equal(f.calls.filter(item => item.tool === 'approve_action_plan').length, 1);
+});
+
 test('pause waits for the active query, then stops before the next query', async () => {
   const held = gate();
   const f = fixture(2, true, { holdQuery: async () => { if (f.calls.filter(item => item.tool === 'bing_search').length === 1) await held.hold(); } });
@@ -88,6 +117,7 @@ test('pause waits for the active query, then stops before the next query', async
   await f.service.start({ token: preview.token, approved: true });
   await until(() => f.calls.filter(item => item.tool === 'bing_search').length === 1);
   await held.waiting;
+  assert.equal((await f.service.list())[0].steps[2].state, 'running');
   const pausing = f.service.pause({ token: preview.token });
   held.release();
   const paused = await pausing;
@@ -98,8 +128,14 @@ test('pause waits for the active query, then stops before the next query', async
 
 test('resume continues at the saved query index without repeating completed queries', async () => {
   const held = gate();
+  const resumed = gate();
   let holdFirst = true;
-  const f = fixture(3, true, { holdQuery: async () => { if (holdFirst && f.calls.filter(item => item.tool === 'bing_search').length === 1) await held.hold(); } });
+  let holdResumed = false;
+  const f = fixture(3, true, { holdQuery: async () => {
+    const sent = f.calls.filter(item => item.tool === 'bing_search').length;
+    if (holdFirst && sent === 1) await held.hold();
+    if (holdResumed && sent === 2) await resumed.hold();
+  } });
   const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries: ['{company} products'] });
   await f.service.start({ token: preview.token, approved: true });
   await until(() => f.calls.filter(item => item.tool === 'bing_search').length === 1);
@@ -108,7 +144,15 @@ test('resume continues at the saved query index without repeating completed quer
   held.release();
   await pausing;
   holdFirst = false;
+  holdResumed = true;
   await f.service.resume({ token: preview.token });
+  await until(() => f.calls.filter(item => item.tool === 'bing_search').length === 2);
+  await resumed.waiting;
+  const progressing = (await f.service.list())[0];
+  assert.equal(progressing.state, 'running');
+  assert.equal(progressing.steps[1].state, 'running');
+  assert.equal(progressing.steps[2].state, 'running');
+  resumed.release();
   await until(async () => (await f.service.list())[0]?.state === 'completed');
   const sent = f.calls.filter(item => item.tool === 'bing_search').map(item => item.args.company_id);
   assert.deepEqual(sent, ['company-1', 'company-2', 'company-3']);
@@ -146,6 +190,52 @@ test('cancel without keep stops after the current query and calls analyst discar
   assert.deepEqual(discard?.args, { run_id: 'run-1', plan_id: 'plan-1', kind: 'research',
     reason: 'Analyst chose to discard observations from cancelled Bing research.' });
   assert.equal(discard?.approved, true);
+});
+
+test('resume during cancellation does not clear the cancellation or its discard choice', async () => {
+  const held = gate();
+  const f = fixture(3, true, { holdQuery: async () => { if (f.calls.filter(item => item.tool === 'bing_search').length === 1) await held.hold(); } });
+  const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries: ['{company} products'] });
+  await f.service.start({ token: preview.token, approved: true });
+  await until(() => f.calls.filter(item => item.tool === 'bing_search').length === 1);
+  await held.waiting;
+  const cancelling = f.service.cancel({ token: preview.token, keep: false });
+  const resumed = await f.service.resume({ token: preview.token });
+  assert.equal(resumed.state, 'cancelling');
+  held.release();
+  assert.equal((await cancelling).state, 'cancelled');
+  assert.equal(f.calls.filter(item => item.tool === 'discard_plan_results').length, 1);
+  assert.equal(f.calls.filter(item => item.tool === 'bing_search').length, 1);
+});
+
+test('legacy run and cancel calls start the runner and can keep processed results', async () => {
+  const f = fixture(1, true, { setTimer: () => 1, clearTimer: () => {} });
+  const preview = await f.service.preview({ runId: 'run-1', mode: 'general', queries: ['Market overview'] });
+  const legacy = await f.service.run({ token: preview.token, approved: true });
+  assert.deepEqual(legacy.rows, []);
+  assert.equal(legacy.more, false);
+  const cancelled = await f.service.cancel({ planId: legacy.planId, keep: true });
+  assert.equal(cancelled.state, 'cancelled');
+  assert.equal(f.calls.filter(item => item.tool === 'discard_plan_results').length, 0);
+});
+
+test('a disconnected search pauses without advancing while a discarded-plan conflict is not counted as a failed query', async () => {
+  const disconnected = fixture(1, true, { searchError: () => Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }) });
+  const preview = await disconnected.service.preview({ runId: 'run-1', mode: 'general', queries: ['Market overview'] });
+  await disconnected.service.start({ token: preview.token, approved: true });
+  await until(async () => (await disconnected.service.list())[0]?.state === 'paused');
+  const paused = (await disconnected.service.list())[0];
+  assert.equal(paused.message, 'Bing is not connected — paused; resume when connected');
+  assert.equal(paused.processedQueries, 0);
+  assert.equal(paused.failedQueries, 0);
+
+  const discarded = fixture(1, true, { searchError: () => new Error('Bing research plan was discarded and cannot send more queries') });
+  const discardedPreview = await discarded.service.preview({ runId: 'run-1', mode: 'general', queries: ['Market overview'] });
+  await discarded.service.start({ token: discardedPreview.token, approved: true });
+  await until(async () => (await discarded.service.list())[0]?.state === 'failed');
+  const failed = (await discarded.service.list())[0];
+  assert.equal(failed.processedQueries, 0);
+  assert.equal(failed.failedQueries, 0);
 });
 
 test('running research reloads as paused and resumes from its persisted cursor', async () => {

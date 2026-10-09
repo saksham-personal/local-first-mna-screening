@@ -162,6 +162,10 @@ fn research_discard_hides_coverage_detail_projection_and_evidence_but_can_be_rea
     let projection =
         projection::execute(&store, "get_run_source_projection", &json!({"run_id":"R"})).unwrap();
     assert!(!projection["rows"][0]["BING:Research"].is_null());
+    let shortlist = store
+        .execute("get_shortlist_context", &json!({"run_id":"R"}))
+        .unwrap();
+    assert_eq!(shortlist["coverage"]["BING"], 1);
     assert_eq!(
         data.execute("get_evidence", &json!({"run_id":"R","company_id":"C1"}))
             .unwrap()
@@ -232,6 +236,10 @@ fn research_discard_hides_coverage_detail_projection_and_evidence_but_can_be_rea
         )
         .unwrap();
     assert_eq!(history.as_array().unwrap().len(), 1);
+    let shortlist = store
+        .execute("get_shortlist_context", &json!({"run_id":"R"}))
+        .unwrap();
+    assert_eq!(shortlist["coverage"]["BING"], 0);
     assert!(matches!(
         run_control::execute(
             &store,
@@ -317,6 +325,25 @@ fn screening_discard_hides_rounds_grid_projection_and_allows_export_without_disc
         )
         .unwrap();
     assert!(std::path::Path::new(export["path"].as_str().unwrap()).exists());
+    let mut workbook = calamine::open_workbook_auto(export["path"].as_str().unwrap()).unwrap();
+    use calamine::Reader;
+    assert!(!workbook
+        .sheet_names()
+        .iter()
+        .any(|name| name == "SIMULATED"));
+    let mut content = String::new();
+    for name in workbook.sheet_names().to_vec() {
+        let range = workbook.worksheet_range(&name).unwrap();
+        for row in range.rows() {
+            for cell in row {
+                content.push_str(&cell.to_string());
+                content.push(' ');
+            }
+        }
+    }
+    assert!(!content.contains("SIMULATED"));
+    assert!(!content.contains("Relevant claims workflow"));
+    assert!(!content.contains("A bounded unverified lead"));
     if let Some(value) = previous {
         std::env::set_var("MNA_EXPORT_DIR", value);
     } else {
@@ -330,6 +357,13 @@ fn discard_refuses_a_running_screening_plan_and_existing_cancel_keeps_finished_a
     seed_screening(&store, "running-plan", &["RUNNING"], false);
     assert!(matches!(
         discard(&store, "R", "running-plan", "screening"),
+        Err(mna_tools::error::Error::Conflict(_))
+    ));
+
+    let store = fixture();
+    seed_screening(&store, "ambiguous-plan", &["AMBIGUOUS"], false);
+    assert!(matches!(
+        discard(&store, "R", "ambiguous-plan", "screening"),
         Err(mna_tools::error::Error::Conflict(_))
     ));
 
@@ -364,6 +398,86 @@ fn discard_refuses_a_running_screening_plan_and_existing_cancel_keeps_finished_a
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn question_mode_prepared_plans_can_be_discarded_without_deleting_answers() {
+    let store = fixture();
+    store
+        .with_connection(|connection| {
+            let spec = json!({"run_id":"R","mode":"question","provider":"llm_suite","question":"What is known?"});
+            connection.execute(
+                "INSERT INTO prepared_plans(plan_id,run_id,schema_version,digest,status,spec_json,snapshot_json,proposed_at,approved_at,approved_by)
+                 VALUES('question-plan','R',2,'question-digest','APPROVED',?,'{}','2026-01-01','2026-01-01','analyst')",
+                [spec.to_string()],
+            )?;
+            connection.execute(
+                "INSERT INTO execution_jobs(job_id,plan_id,run_id,ordinal,state,payload_json,input_hash,created_at,updated_at)
+                 VALUES('question-job','question-plan','R',0,'SUCCEEDED','{}','question-hash','2026-01-01','2026-01-02')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO execution_question_answers(answer_id,run_id,plan_id,job_id,provider,question,answer,attribution_json,created_at)
+                 VALUES('question-answer','R','question-plan','question-job','llm_suite','What is known?','A saved answer','{}','2026-01-02')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let service = ExecutionService::new(store.clone());
+    assert_eq!(
+        service
+            .execute(
+                "get_model_assessments",
+                &json!({"run_id":"R","plan_id":"question-plan"})
+            )
+            .unwrap()["question_answers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    discard(&store, "R", "question-plan", "screening").unwrap();
+    let answers = service
+        .execute(
+            "get_model_assessments",
+            &json!({"run_id":"R","plan_id":"question-plan"}),
+        )
+        .unwrap();
+    assert!(answers["question_answers"].as_array().unwrap().is_empty());
+    assert_eq!(
+        store
+            .with_connection(|connection| Ok(connection.query_row(
+                "SELECT COUNT(*) FROM execution_question_answers WHERE plan_id='question-plan'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn stale_screening_plans_can_be_cancelled_but_running_attempts_still_refuse() {
+    let store = fixture();
+    seed_screening(&store, "stale-plan", &["READY"], false);
+    store
+        .with_connection(|connection| {
+            connection.execute(
+                "UPDATE prepared_plans SET status='STALE' WHERE plan_id='stale-plan'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let service = ExecutionService::new(store);
+    let cancelled = service
+        .execute(
+            "cancel_prepared_plan",
+            &json!({"plan_id":"stale-plan","cancelled_by":"analyst"}),
+        )
+        .unwrap();
+    assert_eq!(cancelled["status"], "CANCELLED");
 }
 
 #[test]

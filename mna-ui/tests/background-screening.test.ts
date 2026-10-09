@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 // @ts-ignore Local controller module is exercised with an injected offline transport.
 import { createBackgroundScreening } from '../server/background-screening.mjs';
 
-function fixture(states = ['READY', 'READY'], isConnected = true) {
+function fixture(states = ['READY', 'READY'], isConnected = true, mode = 'screening') {
   const plan = { plan_id: 'plan-1', run_id: 'run-1', digest: 'digest-1',
-    status: 'APPROVED', executed: false, fresh: true, spec: { provider: 'llm_suite', mode: 'screening' },
+    status: 'APPROVED', executed: false, fresh: true, spec: { provider: 'llm_suite', mode },
     jobs: states.map((state, ordinal) => ({ job_id: `job-${ordinal + 1}`, ordinal,
       state, input_hash: `hash-${ordinal + 1}` })) };
   const jobs = new Map(plan.jobs.map(item => [item.job_id, { ...item,
@@ -23,7 +23,7 @@ function fixture(states = ['READY', 'READY'], isConnected = true) {
     if (tool === 'get_model_assessments') return { assessments: [
       { plan_id: 'plan-1', job_id: 'job-1', eligible_for_current_use: true, result: { score: 4 } },
       { plan_id: 'plan-1', job_id: 'job-2', eligible_for_current_use: false, result: { score: 9 } },
-    ], question_answers: [] };
+    ], question_answers: [{ plan_id: 'plan-1', job_id: 'job-1', eligible_for_current_use: false, answer: 'Partial answer' }] };
     throw new Error(`Unexpected tool ${tool}`);
   };
   const dispatch = async ({ job_id, controller_id }: { job_id: string; controller_id: string }) => {
@@ -310,6 +310,108 @@ test('screening cancellation discards processed results only when the analyst ch
   assert.equal(cancelled.state, 'cancelled');
   assert.deepEqual(calls, ['cancel_prepared_plan', 'discard_plan_results']);
   assert.match(cancelled.message, /discarded/);
+  svc.close();
+});
+
+test('question-mode cancellation discards safely and leaves the control readable', async () => {
+  const f = fixture(['SUCCEEDED', 'READY'], true, 'question');
+  f.jobs.get('job-1')!.executed = true;
+  const calls: string[] = [];
+  const baseCall = f.call;
+  const svc = createBackgroundScreening({ ...f, setTimer: () => 1, clearTimer: () => {},
+    call: async (tool: string, args: Record<string, string>) => {
+      if (tool === 'cancel_prepared_plan') {
+        calls.push(tool); f.plan.status = 'CANCELLED'; f.jobs.get('job-2')!.state = 'CANCELLED';
+        return { status: 'CANCELLED' };
+      }
+      if (tool === 'discard_plan_results') { calls.push(tool); return { discarded: true }; }
+      return baseCall(tool, args);
+    } });
+  await svc.start({ planId: 'plan-1', digest: 'digest-1', approved: true });
+  const cancelled = await svc.cancel({ planId: 'plan-1', keep: false });
+  assert.equal(cancelled.state, 'cancelled');
+  assert.deepEqual(calls, ['cancel_prepared_plan', 'discard_plan_results']);
+  assert.equal((await svc.get({ planId: 'plan-1' }))?.state, 'cancelled');
+  assert.equal((await svc.list())[0]?.state, 'cancelled');
+  svc.close();
+});
+
+test('failed discard can be retried after Rust cancellation without becoming stale', async () => {
+  const f = fixture(['SUCCEEDED', 'READY']);
+  let failDiscard = true;
+  const calls: string[] = [];
+  const baseCall = f.call;
+  const svc = createBackgroundScreening({ ...f, setTimer: () => 1, clearTimer: () => {},
+    call: async (tool: string, args: Record<string, string>) => {
+      if (tool === 'cancel_prepared_plan') {
+        calls.push(tool); f.plan.status = 'CANCELLED'; f.jobs.get('job-2')!.state = 'CANCELLED';
+        return { status: 'CANCELLED' };
+      }
+      if (tool === 'discard_plan_results') {
+        calls.push(tool);
+        if (failDiscard) throw new Error('Discard connection failed temporarily');
+        return { discarded: true };
+      }
+      return baseCall(tool, args);
+    } });
+  await svc.start({ planId: 'plan-1', digest: 'digest-1', approved: true });
+  await assert.rejects(() => svc.cancel({ planId: 'plan-1', keep: false }), /Discard connection failed/);
+  const afterFailure = await svc.get({ planId: 'plan-1' });
+  assert.equal(afterFailure?.state, 'cancelled');
+  assert.match(afterFailure?.message ?? '', /Discard connection failed/);
+  await assert.rejects(() => svc.stage({ planId: 'plan-1' }), /Discard connection failed/);
+  failDiscard = false;
+  const cancelled = await svc.cancel({ planId: 'plan-1', keep: false });
+  assert.equal(cancelled.state, 'cancelled');
+  assert.match(cancelled.message, /discarded/);
+  assert.deepEqual(calls, ['cancel_prepared_plan', 'discard_plan_results', 'discard_plan_results']);
+  svc.close();
+});
+
+test('concurrent cancellation requests both settle after the active dispatch', async () => {
+  const f = fixture();
+  let tick: (() => void) | undefined;
+  let entered!: () => void;
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const baseCall = f.call;
+  const svc = createBackgroundScreening({ ...f,
+    setTimer: (callback: () => void) => { tick = callback; return 1; }, clearTimer: () => {},
+    dispatch: async (args: { job_id: string; controller_id: string }) => { entered(); await held; return f.dispatch(args); },
+    call: async (tool: string, args: Record<string, string>) => {
+      if (tool === 'cancel_prepared_plan') { f.plan.status = 'CANCELLED'; return { status: 'CANCELLED' }; }
+      return baseCall(tool, args);
+    } });
+  await svc.start({ planId: 'plan-1', digest: 'digest-1', approved: true });
+  tick!(); await waiting;
+  const first = svc.cancel({ planId: 'plan-1', keep: true });
+  const second = svc.cancel({ planId: 'plan-1', keep: true });
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.state, 'cancelled');
+  assert.equal(b.state, 'cancelled');
+  svc.close();
+});
+
+test('stale source snapshots can be cancelled but cannot stage kept partial results', async () => {
+  const f = fixture(['SUCCEEDED', 'READY']);
+  const baseCall = f.call;
+  const svc = createBackgroundScreening({ ...f, setTimer: () => 1, clearTimer: () => {},
+    call: async (tool: string, args: Record<string, string>) => {
+      if (tool === 'cancel_prepared_plan') {
+        f.plan.status = 'CANCELLED'; f.jobs.get('job-2')!.state = 'CANCELLED';
+        return { status: 'CANCELLED' };
+      }
+      return baseCall(tool, args);
+    } });
+  await svc.start({ planId: 'plan-1', digest: 'digest-1', approved: true });
+  f.plan.status = 'STALE'; f.plan.fresh = false;
+  const cancelled = await svc.cancel({ planId: 'plan-1', keep: true });
+  assert.equal(cancelled.state, 'cancelled');
+  assert.equal(f.plan.status, 'CANCELLED');
+  f.plan.fresh = false;
+  await assert.rejects(() => svc.stage({ planId: 'plan-1' }), /screening setup is no longer current/);
   svc.close();
 });
 

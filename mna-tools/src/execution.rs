@@ -405,7 +405,6 @@ impl ExecutionService {
         bounded("cancelled_by", &a.cancelled_by, 160)?;
         self.store.with_connection(|conn| {let tx=conn.transaction()?;let p=load_plan(&tx,&a.plan_id)?;
             if p.status=="CANCELLED" {return Ok(json!({"plan_id":a.plan_id,"status":"CANCELLED","idempotent":true}));}
-            if p.status=="STALE" {return Err(Error::Conflict("stale plan cannot be cancelled".into()));}
             let running:i64=tx.query_row("SELECT COUNT(*) FROM execution_jobs WHERE plan_id=? AND state IN ('RUNNING','AMBIGUOUS')",[&a.plan_id],|r|r.get(0))?;
             if running>0 {return Err(Error::Conflict("dispatched jobs must be reconciled before cancellation".into()));}
             let now=timestamp(); tx.execute("UPDATE prepared_plans SET status='CANCELLED',cancelled_at=? WHERE plan_id=?",params![now,a.plan_id])?;

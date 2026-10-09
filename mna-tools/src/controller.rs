@@ -580,3 +580,49 @@ pub fn get_controller_turns(store: &Store, arguments: &Value) -> Result<Value> {
         Ok(json!({"turn_id":turns.iter().rev().find(|t|t["kind"]=="analyst").map(|t|&t["turn_id"]),"conversation_id":active.as_ref().map(|a|&a.0),"rotated":active.as_ref().is_some_and(|a|a.2.is_some()),"rotated_from":active.as_ref().and_then(|a|a.2.as_ref()),"rotation":active.as_ref().filter(|a|a.2.is_some()).map(|a|if turns.iter().any(|t|t["kind"]=="handoff"&&t["conversation_id"]==a.0.as_str()){"token_budget"}else{"new_conversation"}),"estimated_tokens":active.as_ref().map(|a|a.1).unwrap_or(0),"turns":turns}))
     })
 }
+
+#[cfg(test)]
+mod run_summary_tests {
+    use super::run_summary;
+    use crate::{run_control, Store};
+    use serde_json::json;
+
+    #[test]
+    fn summary_round_count_excludes_discarded_plans() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .execute(
+                "create_run",
+                &json!({"run_id":"R","objective":"Screen target","original_criteria":{}}),
+            )
+            .unwrap();
+        store
+            .with_connection(|connection| {
+                connection.execute(
+                    "INSERT INTO prepared_plans(plan_id,run_id,schema_version,digest,status,spec_json,snapshot_json,proposed_at,approved_at,approved_by)
+                     VALUES('summary-plan','R',2,'digest','APPROVED',?,'{}','2026-01-01','2026-01-01','analyst')",
+                    [json!({"mode":"screening"}).to_string()],
+                )?;
+                connection.execute(
+                    "INSERT INTO screening_rounds(run_id,round_no,plan_id,provider,created_at)
+                     VALUES('R',1,'summary-plan','llm_suite','2026-01-01')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(run_summary(&store, "R")
+            .unwrap()
+            .contains("Screening rounds: 1"));
+        run_control::execute(
+            &store,
+            "discard_plan_results",
+            &json!({"run_id":"R","plan_id":"summary-plan","kind":"screening"}),
+            true,
+        )
+        .unwrap();
+        assert!(run_summary(&store, "R")
+            .unwrap()
+            .contains("Screening rounds: 0"));
+    }
+}
