@@ -1,10 +1,16 @@
 use calamine::{open_workbook_auto, Reader};
+use chrono::Local;
 use mna_tools::{data::DataService, export_jobs::ExportJobs, Store};
 use serde_json::{json, Value};
 use std::{
-    fs, thread,
+    fs,
+    sync::Mutex,
+    thread,
     time::{Duration, Instant},
 };
+
+// MNA_EXPORT_DIR is process-wide, so tests that set it must not run at the same time.
+static EXPORT_DIR_LOCK: Mutex<()> = Mutex::new(());
 
 fn wait(jobs: &ExportJobs, store: &Store, id: &str) -> Value {
     let until = Instant::now() + Duration::from_secs(60);
@@ -27,6 +33,9 @@ fn wait(jobs: &ExportJobs, store: &Store, id: &str) -> Value {
 
 #[test]
 fn streams_all_formats_preserves_simulation_and_recovers_status() {
+    let _export_dir = EXPORT_DIR_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let root = dir.path().join("exports");
     std::env::set_var("MNA_EXPORT_DIR", &root);
@@ -178,6 +187,8 @@ fn streams_all_formats_preserves_simulation_and_recovers_status() {
     assert_eq!(status["state"], "failed");
     assert_eq!(status["error"], "interrupted");
     assert!(status["finished_at"].is_string());
+    // A status file written before download_name existed loads without a name.
+    assert!(status["download_name"].is_null());
     let saved: Value =
         serde_json::from_slice(&fs::read(root.join("export-interrupted.json")).unwrap()).unwrap();
     assert_eq!(saved, status);
@@ -210,5 +221,89 @@ fn export_operations_have_real_schemas_and_start_is_admin_only() {
     assert_eq!(start["input_schema"]["additionalProperties"], false);
     for property in ["run_id", "kind", "allow_simulated"] {
         assert!(start["input_schema"]["properties"][property].is_object());
+    }
+}
+
+#[test]
+fn download_names_come_from_the_run_title_and_stay_windows_safe() {
+    let _export_dir = EXPORT_DIR_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    std::env::set_var("MNA_EXPORT_DIR", dir.path().join("exports"));
+    let store = Store::open(dir.path().join("data.db")).unwrap();
+    let long_title = "\u{e9}".repeat(90);
+    for (run_id, objective) in [
+        ("normal", "Insurance software"),
+        (
+            "forbidden",
+            "Insurance: \"software\" / <AI>?\tpilot\\ |*beta*\n\u{7}  list ",
+        ),
+        ("long", long_title.as_str()),
+        ("empty", "placeholder"),
+    ] {
+        store
+            .execute(
+                "create_run",
+                &json!({"run_id":run_id,"objective":objective,"original_criteria":{}}),
+            )
+            .unwrap();
+    }
+    // create_run rejects a blank objective, so the blank title is stored directly.
+    store
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE screening_runs SET objective='' WHERE run_id='empty'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let jobs = ExportJobs::new(&store).unwrap();
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let cases = [
+        (
+            "normal",
+            "pitchbook",
+            "Insurance software - PitchBook".to_string(),
+        ),
+        (
+            "normal",
+            "llm",
+            "Insurance software - LLM Suite".to_string(),
+        ),
+        (
+            "normal",
+            "full",
+            "Insurance software - Full data".to_string(),
+        ),
+        (
+            "forbidden",
+            "full",
+            "Insurance software AI pilot beta list - Full data".to_string(),
+        ),
+        (
+            "long",
+            "llm",
+            format!("{} - LLM Suite", "\u{e9}".repeat(80)),
+        ),
+        ("empty", "pitchbook", "empty - PitchBook".to_string()),
+    ];
+    for (run_id, kind, title) in cases {
+        let started = jobs
+            .execute(
+                &store,
+                "start_export",
+                &json!({"run_id":run_id,"kind":kind}),
+            )
+            .unwrap();
+        let id = started["export_id"].as_str().unwrap();
+        let status = wait(&jobs, &store, id);
+        assert_eq!(
+            status["download_name"],
+            json!(format!("{title} - {today}.xlsx"))
+        );
+        // The stored file keeps its id-based name.
+        assert_eq!(status["file"], json!(format!("{id}-{kind}.xlsx")));
     }
 }

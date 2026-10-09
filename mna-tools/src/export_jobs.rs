@@ -8,7 +8,7 @@ use crate::{
     store::Store,
     tabular,
 };
-use chrono::Utc;
+use chrono::{Local, Utc};
 use rusqlite::Connection;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,10 @@ pub struct ExportStatus {
     pub started_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    // Browser download name, e.g. "Insurance software - Full data - 2026-10-09.xlsx".
+    // The stored file keeps its id-based name; status files from before this field load as None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_name: Option<String>,
 }
 
 pub fn input_schema(tool: &str) -> Option<Value> {
@@ -176,12 +180,20 @@ impl ExportJobs {
             ));
         }
         let kind = args.kind.to_ascii_uppercase();
-        let total = store.with_connection(|c| {
+        let (total, objective) = store.with_connection(|c| {
             if export_has_simulated(c, &args.run_id)? && !args.allow_simulated {
                 return Err(simulated_export_error());
             }
-            export_row_total(c, &args.run_id, &kind)
+            let total = export_row_total(c, &args.run_id, &kind)?;
+            // export_has_simulated already confirmed the run exists.
+            let objective: String = c.query_row(
+                "SELECT objective FROM screening_runs WHERE run_id=?",
+                [&args.run_id],
+                |r| r.get(0),
+            )?;
+            Ok((total, objective))
         })?;
+        let download_name = export_download_name(&args.run_id, &objective, &args.kind);
         let status = ExportStatus {
             export_id: Uuid::new_v4().to_string(),
             run_id: args.run_id.clone(),
@@ -193,6 +205,7 @@ impl ExportJobs {
             error: None,
             started_at: Utc::now().to_rfc3339(),
             finished_at: None,
+            download_name: Some(download_name),
         };
         self.save(status.clone())?;
         let export_id = status.export_id.clone();
@@ -281,4 +294,48 @@ fn validate_id(id: &str) -> Result<()> {
         return Err(Error::Validation("Invalid export id".into()));
     }
     Ok(())
+}
+
+/// Readable download name such as "Insurance software - Full data - 2026-10-09.xlsx".
+/// The title falls back to the run id when the objective is blank after cleaning, and the
+/// date is the local date when the job starts. `kind` was validated by `start`.
+fn export_download_name(run_id: &str, objective: &str, kind: &str) -> String {
+    let title = [
+        clean_download_title(objective),
+        clean_download_title(run_id),
+    ]
+    .into_iter()
+    .find(|title| !title.is_empty())
+    .unwrap_or_else(|| "Export".into());
+    let label = match kind {
+        "pitchbook" => "PitchBook",
+        "llm" => "LLM Suite",
+        "full" => "Full data",
+        _ => "Export",
+    };
+    format!(
+        "{title} - {label} - {}.xlsx",
+        Local::now().format("%Y-%m-%d")
+    )
+}
+
+/// Makes text safe for a Windows file name: forbidden and control characters are removed,
+/// line breaks and tabs become spaces, runs of whitespace collapse, and the result is capped
+/// at 80 characters without splitting one.
+fn clean_download_title(value: &str) -> String {
+    let spaced: String = value
+        .chars()
+        .filter(|c| !"\\/:*?\"<>|".contains(*c))
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .collect();
+    spaced
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(80)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }

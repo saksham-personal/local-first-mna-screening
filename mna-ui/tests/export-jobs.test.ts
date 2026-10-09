@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 // @ts-expect-error Server-only ESM has no emitted declaration.
-import { resolveExportDownload } from "../server/bridge.mjs";
+import { contentDisposition, resolveExportDownload } from "../server/bridge.mjs";
 import { exportActivity, type ExportJob } from "../src/lib/screening-client";
 
 const job: ExportJob = {
@@ -61,6 +61,20 @@ test("export download accepts only a finished file and rejects ids and paths bef
     assert.ok(directory.startsWith(testRoot + "/") || directory.startsWith(testRoot + "\\"));
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("export download header names the file readably with a printable ASCII fallback", () => {
+  assert.equal(
+    contentDisposition("Insurance software - Full data - 2026-10-09.xlsx"),
+    `attachment; filename="Insurance software - Full data - 2026-10-09.xlsx"; filename*=UTF-8''Insurance%20software%20-%20Full%20data%20-%202026-10-09.xlsx`,
+  );
+  assert.equal(
+    contentDisposition("Café – Données.xlsx"),
+    `attachment; filename="Caf_ _ Donn_es.xlsx"; filename*=UTF-8''Caf%C3%A9%20%E2%80%93%20Donn%C3%A9es.xlsx`,
+  );
+  assert.equal(contentDisposition("a\"b\r\nc.xlsx"), `attachment; filename="a_b__c.xlsx"; filename*=UTF-8''a%22b%0D%0Ac.xlsx`);
+  assert.equal(contentDisposition("it's (draft)*.xlsx"), `attachment; filename="it's (draft)*.xlsx"; filename*=UTF-8''it%27s%20%28draft%29%2A.xlsx`);
+  assert.equal(contentDisposition("../secret/report.xlsx"), `attachment; filename="report.xlsx"; filename*=UTF-8''report.xlsx`);
 });
 
 test("export download rejects a directory link outside the export directory", async () => {
