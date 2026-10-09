@@ -289,6 +289,15 @@ fn screening_discard_hides_rounds_grid_projection_and_allows_export_without_disc
         projection::execute(&store, "get_run_source_projection", &json!({"run_id":"R"})).unwrap();
     assert_eq!(projection["rows"][0]["RESULTS:screen-plan:Fit"], "8");
 
+    // Positive control: before the discard, the round's simulated output labels the export.
+    let before = data
+        .execute(
+            "export_candidate_set",
+            &json!({"run_id":"R","export_type":"FULL","file_name":"kept.xlsx","allow_simulated":true}),
+        )
+        .unwrap();
+    assert!(export_text(before["path"].as_str().unwrap()).contains("SIMULATED"));
+
     discard(&store, "R", "screen-plan", "screening").unwrap();
     let repeated = discard(&store, "R", "screen-plan", "screening").unwrap();
     assert_eq!(repeated["idempotent"], true);
@@ -321,7 +330,7 @@ fn screening_discard_hides_rounds_grid_projection_and_allows_export_without_disc
     let export = data
         .execute(
             "export_candidate_set",
-            &json!({"run_id":"R","export_type":"LLM","file_name":"discarded.xlsx"}),
+            &json!({"run_id":"R","export_type":"FULL","file_name":"discarded.xlsx"}),
         )
         .unwrap();
     assert!(std::path::Path::new(export["path"].as_str().unwrap()).exists());
@@ -341,9 +350,9 @@ fn screening_discard_hides_rounds_grid_projection_and_allows_export_without_disc
             }
         }
     }
+    // Exports carry no round or research text in this fixture, so the simulated label from the
+    // discarded round is the observable effect.
     assert!(!content.contains("SIMULATED"));
-    assert!(!content.contains("Relevant claims workflow"));
-    assert!(!content.contains("A bounded unverified lead"));
     if let Some(value) = previous {
         std::env::set_var("MNA_EXPORT_DIR", value);
     } else {
@@ -455,6 +464,42 @@ fn question_mode_prepared_plans_can_be_discarded_without_deleting_answers() {
             .unwrap(),
         1
     );
+}
+
+fn export_text(path: &str) -> String {
+    use calamine::Reader;
+    let mut workbook = calamine::open_workbook_auto(path).unwrap();
+    let mut content = String::new();
+    for name in workbook.sheet_names().to_vec() {
+        for row in workbook.worksheet_range(&name).unwrap().rows() {
+            for cell in row {
+                content.push_str(&cell.to_string());
+                content.push(' ');
+            }
+        }
+    }
+    content
+}
+
+#[test]
+fn stale_screening_plans_with_a_running_attempt_refuse_cancellation() {
+    let store = fixture();
+    seed_screening(&store, "stale-running", &["RUNNING"], false);
+    store
+        .with_connection(|connection| {
+            connection.execute(
+                "UPDATE prepared_plans SET status='STALE' WHERE plan_id='stale-running'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(ExecutionService::new(store)
+        .execute(
+            "cancel_prepared_plan",
+            &json!({"plan_id":"stale-running","cancelled_by":"analyst"}),
+        )
+        .is_err());
 }
 
 #[test]

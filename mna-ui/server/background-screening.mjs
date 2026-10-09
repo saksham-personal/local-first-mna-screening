@@ -71,10 +71,14 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     return saveQueue;
   }
 
+  // A cancelled plan is never `fresh` (that needs APPROVED); its kept results are still usable
+  // while the source snapshot it was built from is unchanged.
+  function currentSource(plan) { return plan.status === 'CANCELLED' ? plan.source_fresh === true : plan.fresh === true; }
+
   async function planJobs(planId, expectedDigest, { allowStale = false, allowCancelled = false } = {}) {
     const plan = await call('get_execution_progress', { plan_id: planId });
     if (plan?.plan_id !== planId || !(plan.status === 'APPROVED' || (allowStale && plan.status === 'STALE') || (allowCancelled && plan.status === 'CANCELLED')) || plan.digest !== expectedDigest ||
-        plan.executed !== false || (!allowStale && plan.fresh !== true) || !Array.isArray(plan.jobs) || !plan.jobs.length)
+        plan.executed !== false || (!allowStale && !currentSource(plan)) || !Array.isArray(plan.jobs) || !plan.jobs.length)
       throw new Error(STALE_SETUP_MESSAGE);
     if (!['llm_suite', 'copilot'].includes(plan.spec?.provider)) throw new Error('Unsupported screening provider.');
     const jobs = plan.jobs.map(entry => {
@@ -133,8 +137,8 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     if (control.cancelled && control.lastSnapshot) return control.lastSnapshot;
     // Historical progress remains readable after a source edit. Execution,
     // retry and staging still require the current approved inputs.
-    const data = await planJobs(planId, control.digest, { allowStale: true });
-    const result = snapshot(data, control, { stale: data.plan.fresh !== true || data.plan.status === 'STALE' });
+    const data = await planJobs(planId, control.digest, { allowStale: true, allowCancelled: true });
+    const result = snapshot(data, control, { stale: !currentSource(data.plan) || data.plan.status === 'STALE' });
     control.lastSnapshot = result;
     return result;
   }
@@ -288,7 +292,7 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
     await save();
     await waitForPump(planId);
     let data;
-    let rustCancelled = false;
+    let rustCancelled = control.cancelled === true;
     try {
       data = await planJobs(planId, control.digest, { allowStale: true, allowCancelled: true });
       rustCancelled = data.plan.status === 'CANCELLED';
@@ -301,7 +305,7 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
       control.cancelled = data.plan.status === 'CANCELLED';
       rustCancelled = control.cancelled;
       if (!control.cancelled) throw new Error('Rust did not confirm that this screening plan was cancelled.');
-      control.lastSnapshot = snapshot(data, control, { stale: data.plan.fresh !== true || data.plan.status === 'STALE' });
+      control.lastSnapshot = snapshot(data, control, { stale: !currentSource(data.plan) || data.plan.status === 'STALE' });
       if (!keep) {
         await call('discard_plan_results', { run_id: data.plan.run_id, plan_id: planId, kind: 'screening',
           reason: 'Analyst chose to discard results from cancelled screening.' }, true);
@@ -325,7 +329,7 @@ export function createBackgroundScreening({ call, dispatch, connected = () => fa
       } catch { /* Keep the last observed Rust state; retry remains safe. */ }
       control.cancelled = rustCancelled;
       if (data?.plan) {
-        control.lastSnapshot = snapshot(data, control, { stale: data.plan.fresh !== true || data.plan.status === 'STALE' });
+        control.lastSnapshot = snapshot(data, control, { stale: !currentSource(data.plan) || data.plan.status === 'STALE' });
       }
       await save();
       throw error;

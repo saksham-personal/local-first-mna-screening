@@ -27,7 +27,7 @@ function timestamp(now) { return new Date(now()).toISOString(); }
 function isConnectionError(error) {
   const code = error?.code ?? error?.cause?.code;
   if (typeof code === 'string' && /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)$/.test(code)) return true;
-  return /(?:econn(?:refused|reset)|ehostunreach|enetunreach|eai_again|enotfound|fetch failed|socket hang up|network (?:error|failure)|connection (?:refused|reset|closed|failed|lost|timed out)|timed? ?out|provider connection.*(?:unavailable|lost)|bing is not connected|http 5\d\d)/i.test(message(error));
+  return /(?:econn(?:refused|reset)|ehostunreach|enetunreach|eai_again|enotfound|fetch failed|socket hang up|network (?:error|failure)|connection (?:refused|reset|closed|failed|lost|timed out)|provider connection.*(?:unavailable|lost)|bing is not connected)/i.test(message(error));
 }
 
 export function createBingResearch({ call, connected = () => false, storeFile, now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {

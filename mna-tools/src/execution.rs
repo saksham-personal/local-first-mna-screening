@@ -619,7 +619,9 @@ impl ExecutionService {
     fn progress(&self, a: PlanIdArgs) -> Result<Value> {
         self.store.with_connection(|conn| {
             let p=load_plan(conn,&a.plan_id)?;
-            let fresh=p.status=="APPROVED" && require_fresh(conn,&p).is_ok();
+            // source_fresh: the plan's source snapshot still matches (any status). fresh: also APPROVED.
+            let source_fresh=require_fresh(conn,&p).is_ok();
+            let fresh=p.status=="APPROVED" && source_fresh;
             let mut stmt=conn.prepare("SELECT job_id,ordinal,state,input_hash,attempt,repair_attempt,error_text,next_eligible_at,response_hash,lease_expires_at FROM execution_jobs WHERE plan_id=? ORDER BY ordinal")?;
             let mut jobs=Vec::new();
             for row in stmt.query_map([&a.plan_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,i64>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,Option<String>>(9)?)))? {
@@ -627,7 +629,7 @@ impl ExecutionService {
                 let retryable=fresh && state=="FAILED" && response_hash.is_none() && repair<2 && conn.query_row("SELECT COUNT(*) FROM execution_outbox WHERE job_id=? AND kind='JOB_FAILED_REJECTED' AND json_extract(payload_json,'$.attempt')=?",params![job_id,attempt],|r|r.get::<_,i64>(0))?==1;
                 jobs.push(json!({"job_id":job_id,"plan_id":a.plan_id,"ordinal":ordinal,"state":state,"input_hash":input_hash,"attempt":attempt,"error":error,"next_eligible_at":next,"retryable":retryable,"lease_expires_at":lease_expires_at,"executed":attempt>0}));
             }
-            Ok(json!({"plan_id":a.plan_id,"run_id":p.run_id,"digest":p.digest,"status":p.status,"fresh":fresh,"spec":{"provider":p.spec["provider"],"mode":p.spec["mode"],"deployment":p.spec["deployment"]},"jobs":jobs,"executed":false}))
+            Ok(json!({"plan_id":a.plan_id,"run_id":p.run_id,"digest":p.digest,"status":p.status,"fresh":fresh,"source_fresh":source_fresh,"spec":{"provider":p.spec["provider"],"mode":p.spec["mode"],"deployment":p.spec["deployment"]},"jobs":jobs,"executed":false}))
         })
     }
 

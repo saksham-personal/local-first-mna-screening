@@ -17,7 +17,9 @@ function fixture(states = ['READY', 'READY'], isConnected = true, mode = 'screen
   const call = async (tool: string, args: Record<string, string>) => {
     if (tool === 'get_execution_progress') {
       assert.equal(args.plan_id, plan.plan_id);
-      return { ...plan, jobs: plan.jobs.map(item => ({ ...jobs.get(item.job_id)! })) };
+      // Mirror Rust: `fresh` needs APPROVED; `source_fresh` is the snapshot check alone.
+      return { ...plan, source_fresh: plan.fresh, fresh: plan.status === 'APPROVED' && plan.fresh,
+        jobs: plan.jobs.map(item => ({ ...jobs.get(item.job_id)! })) };
     }
     if (tool === 'get_execution_job') return { ...jobs.get(args.job_id) };
     if (tool === 'get_model_assessments') return { assessments: [
@@ -285,6 +287,9 @@ test('screening cancellation waits for an active batch, cancels pending Rust job
   const staged = await svc.stage({ planId: 'plan-1' });
   assert.equal(staged.rows.length, 1);
   assert.equal(staged.rows[0].job_id, 'job-1');
+  // Kept results of a cancelled plan stage only while its source snapshot is unchanged.
+  f.plan.fresh = false;
+  await assert.rejects(svc.stage({ planId: 'plan-1' }), /no longer current/);
   svc.close();
 });
 
