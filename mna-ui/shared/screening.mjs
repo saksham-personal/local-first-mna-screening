@@ -273,7 +273,8 @@ export function defaultScreeningConfig(
     provider,
     mode,
     model: "",
-    batchSize: 25,
+    // Keep in step with defaultBatchSize() in src/lib/screening-contract.ts: M365 10, LLMSuite 25.
+    batchSize: provider === "copilot" ? 10 : 25,
     prompt: recommendedPrompt(mode, criteriaText, request, outputColumns),
     request: String(request ?? "").trim(),
     inputColumns: [...DEFAULT_INPUTS],
@@ -310,12 +311,18 @@ export function validateConfig(config, catalog, _requireModel = false) {
     config.model.trim().length > 160
   )
     throw new Error("The selected model name is invalid.");
+  // Keep these limits in step with batchLimit() in src/lib/screening-contract.ts
+  // (tests/setup-batch-limit.test.ts checks that the two agree): M365 50, LLMSuite 200.
+  const m365 = config.provider === "copilot";
+  const batchLimit = m365 ? 50 : 200;
   if (
     !Number.isSafeInteger(config.batchSize) ||
     config.batchSize < 1 ||
-    config.batchSize > 200
+    config.batchSize > batchLimit
   )
-    throw new Error("Batch size must be between 1 and 200.");
+    throw new Error(
+      `Batch size must be between 1 and ${batchLimit}${m365 ? " for M365" : ""}.`,
+    );
   if (
     typeof config.prompt !== "string" ||
     !config.prompt.trim() ||

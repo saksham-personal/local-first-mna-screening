@@ -14,6 +14,9 @@ export async function loadScreeningModels(): Promise<ScreeningModels> {
   return models;
 }
 export function selectedModel(models: ScreeningModel[], current = "") { return models.find(model => model.id === current)?.id ?? models[0]?.id ?? ""; }
+// Keep in step with shared/screening.mjs (validateConfig enforces batchLimit, defaultScreeningConfig uses
+// defaultBatchSize). The numbers are duplicated because the shared module has no declared exports for them;
+// tests/setup-batch-limit.test.ts checks that both sides agree.
 export function batchLimit(provider: ScreeningProvider) { return provider === "copilot" ? 50 : 200; }
 export function defaultBatchSize(provider: ScreeningProvider) { return provider === "copilot" ? 10 : 25; }
 export function syncBatchSize(provider: ScreeningProvider, value: number | string) { return Math.max(1, Math.min(batchLimit(provider), Math.round(Number(value) || 1))); }
