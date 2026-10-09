@@ -348,7 +348,8 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
     run_id: "rust-run-1",
     include_hidden: true,
     include_company_payload: true,
-    limit: 2000,
+    columns: [],
+    limit: 1000,
   });
   assert.equal(names.at(-1), "save_checkpoint");
   assert.equal(calls.find((call) => call.tool === "get_candidate_set")?.args.include_hidden, true);
@@ -444,7 +445,7 @@ test("discovery reads more than 1,000 saved candidates and keeps late hidden row
   assert.equal(completed?.result.companies[2000].row.considered, false);
   assert.equal(completed?.result.companies[2000].row.score, 0.91);
   assert.equal(completed?.result.companies[2000].detail.name, "Company 2000");
-  assert.deepEqual(calls.filter(({ tool, args }) => tool === "get_screening_grid" && args.limit === 2000).map(({ args }) => args.after_company_id), [undefined, "MID-1999"]);
+  assert.deepEqual(calls.filter(({ tool, args }) => tool === "get_screening_grid" && args.limit === 1000).map(({ args }) => args.after_company_id), [undefined, "MID-0999", "MID-1999"]);
   assert.equal(calls.some(({ tool }) => ["get_company", "get_source_rows", "get_company_context"].includes(tool)), false);
   assert.equal(calls.find(({ tool }) => tool === "get_candidate_set")?.args.limit, 1000);
   assert.equal((calls.find(({ tool }) => tool === "save_checkpoint")?.args.state as { company_ids: string[] }).company_ids.length, 2000);
@@ -461,7 +462,7 @@ test("discovery retries oversized grid pages at half size and continues from the
     calls.push({ tool, args });
     if (tool === "search_mid") return { query_id: "empty", results: [] };
     if (tool === "get_screening_grid") {
-      if (Number(args.limit) > 1000) throw new Error("Response exceeds byte limit");
+      if (Number(args.limit) > 500) throw new Error("Response exceeds byte limit");
       return screeningGridPage(saved, args);
     }
     if (tool === "get_shortlist_context") return shortlistPage(saved, args);
@@ -477,8 +478,8 @@ test("discovery retries oversized grid pages at half size and continues from the
   const completed = await jobs.wait(jobs.create({ ...input, backendRunId: "approved-run" }).id);
   assert.equal(completed?.state, "completed");
   assert.equal(completed?.result.companies.length, 1500);
-  assert.deepEqual(calls.filter(({ tool }) => tool === "get_screening_grid").map(({ args }) => args.limit), [2000, 1000, 1000]);
-  assert.deepEqual(calls.filter(({ tool }) => tool === "get_screening_grid").map(({ args }) => args.after_company_id), [undefined, undefined, "MID-0999"]);
+  assert.deepEqual(calls.filter(({ tool }) => tool === "get_screening_grid").map(({ args }) => args.limit), [1000, 500, 500, 500]);
+  assert.deepEqual(calls.filter(({ tool }) => tool === "get_screening_grid").map(({ args }) => args.after_company_id), [undefined, undefined, "MID-0499", "MID-0999"]);
 });
 
 test("discovery rejects a shortlist changed between pages", async () => {

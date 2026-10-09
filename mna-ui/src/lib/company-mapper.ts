@@ -42,7 +42,8 @@ export async function readRunCompanies(runId: string): Promise<Company[]> {
   while (more) {
     let page: ToolResult;
     try {
-      page = await callTool("get_screening_grid", { run_id: runId, include_hidden: true, include_company_payload: true, limit, ...(cursor ? { after_company_id: cursor } : {}) });
+      // columns: [] skips the per-column values; the mapper only reads the payload, so pages hold more rows.
+      page = await callTool("get_screening_grid", { run_id: runId, include_hidden: true, include_company_payload: true, columns: [], limit, ...(cursor ? { after_company_id: cursor } : {}) });
     } catch (error) {
       if (limit > 1 && /too large|exceeds|2 MB/i.test(String(error))) { limit = Math.max(1, Math.floor(limit / 2)); continue; }
       throw error;

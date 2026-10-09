@@ -364,7 +364,7 @@ export function createJobRegistry(options) {
 
     const savedRows = new Map();
     let cursor, expectedTotal, consideredCount, sourceHash, selectionRevision, criteriaRevision;
-    let pageSize = 2000;
+    let pageSize = 1000; // the grid clamps larger requests to 1,000
     do {
       let page;
       while (true) {
@@ -373,6 +373,8 @@ export function createJobRegistry(options) {
             run_id: runId,
             include_hidden: true,
             include_company_payload: true,
+            // Only the payload is mapped; per-column values would double each row.
+            columns: [],
             limit: pageSize,
             ...(cursor ? { after_company_id: cursor } : {}),
           });
