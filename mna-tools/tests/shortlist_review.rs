@@ -305,7 +305,7 @@ fn schema_revision_survives_reopen() {
     let version: i64 = reopened
         .with_connection(|conn| Ok(conn.pragma_query_value(None, "user_version", |r| r.get(0))?))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     drop(reopened);
     assert!(Store::open(&path).is_ok());
 }

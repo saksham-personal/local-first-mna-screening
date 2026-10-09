@@ -25,7 +25,8 @@ const SHORTLIST_REVIEW_MIGRATION: &str = include_str!("../migrations/007_shortli
 const INTAKE_REPORTS_MIGRATION: &str = include_str!("../migrations/008_intake_reports.sql");
 const PHASE2_MIGRATION: &str = include_str!("../migrations/009_phase2.sql");
 const CONTROLLER_MIGRATION: &str = include_str!("../migrations/010_controller.sql");
-const SCHEMA_VERSION: i64 = 10;
+const RUN_CONTROL_MIGRATION: &str = include_str!("../migrations/011_run_control.sql");
+const SCHEMA_VERSION: i64 = 11;
 const MAX_TEXT: usize = 100_000;
 const MAX_LIST: usize = 1_000;
 
@@ -96,6 +97,7 @@ impl Store {
         }
         transaction.execute_batch(PHASE2_MIGRATION)?;
         transaction.execute_batch(CONTROLLER_MIGRATION)?;
+        transaction.execute_batch(RUN_CONTROL_MIGRATION)?;
         // Labelled simulated output (009). One probe per column: older-schema rebuilds above
         // can recreate model_assessments without it.
         for table in ["source_rows", "model_assessments", "evidence"] {
@@ -103,6 +105,11 @@ impl Store {
             if !present {
                 transaction.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0 CHECK(simulated IN (0,1))"))?;
             }
+        }
+        // Discarded research evidence (011): one nullable, indexed column.
+        let present: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('evidence') WHERE name='discarded_plan_id')",[],|r|r.get(0))?;
+        if !present {
+            transaction.execute_batch("ALTER TABLE evidence ADD COLUMN discarded_plan_id TEXT; CREATE INDEX IF NOT EXISTS evidence_discarded_plan ON evidence(discarded_plan_id);")?;
         }
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
