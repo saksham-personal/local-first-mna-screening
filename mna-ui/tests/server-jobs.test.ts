@@ -383,6 +383,11 @@ test("background job runs the real-tool sequence, preserves native rows, and pai
   }
   assert.equal(jobs.get(started.id)?.state, "completed");
   assert.equal(jobs.list()[0].id, started.id);
+  // The polled summary list omits the (large) result but says one exists.
+  const summary = jobs.list({ summary: true })[0];
+  assert.equal(summary.result, undefined);
+  assert.equal(summary.hasResult, true);
+  assert.ok(jobs.get(started.id)?.result);
 });
 
 test("discovery uses the approved criteria run and retains hidden candidates after another search", async () => {

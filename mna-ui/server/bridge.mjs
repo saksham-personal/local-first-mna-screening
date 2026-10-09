@@ -85,7 +85,8 @@ function textExcerpt(bytes) {
   return text;
 }
 
-function quotedFilename(name) {
+// Attachment header: an ASCII-only filename fallback plus the full UTF-8 name in filename*.
+export function contentDisposition(name) {
   const ascii = basename(name).replace(/[\r\n"\\]/g, '_').replace(/[^\x20-\x7e]/g, '_') || 'attachment';
   const encoded = encodeURIComponent(basename(name)).replace(/['()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
@@ -96,7 +97,7 @@ async function sendStagedFile(res, record) {
   res.writeHead(200, {
     'Content-Type': record.contentType,
     'Content-Length': String(bytes.length),
-    'Content-Disposition': quotedFilename(record.name),
+    'Content-Disposition': contentDisposition(record.name),
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   });
@@ -356,7 +357,7 @@ export async function startBridge() {
         if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(runId)) throw new Error('Use a valid screening run ID.');
         return respond(res, 200, await call('get_controller_turns', { run_id: runId }));
       }
-      if (req.method === 'GET' && url.pathname === '/api/jobs') return respond(res, 200, { jobs: jobs.list() });
+      if (req.method === 'GET' && url.pathname === '/api/jobs') return respond(res, 200, { jobs: jobs.list({ summary: url.searchParams.get('summary') === '1' }) });
       const jobMatch = url.pathname.match(/^\/api\/jobs\/([A-Za-z0-9-]+)$/);
       if (req.method === 'GET' && jobMatch) {
         const job = jobs.get(jobMatch[1]);
@@ -372,7 +373,7 @@ export async function startBridge() {
         try {
           const info = await handle.stat();
           if (!info.isFile()) throw new Error('Export file is unavailable.');
-          res.writeHead(200, { 'Content-Type': fileKinds.get('.xlsx').contentType, 'Content-Length': String(info.size), 'Content-Disposition': quotedFilename(status.file), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+          res.writeHead(200, { 'Content-Type': fileKinds.get('.xlsx').contentType, 'Content-Length': String(info.size), 'Content-Disposition': contentDisposition(status.download_name || status.file),'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
           await pipeline(handle.createReadStream({ autoClose: false }), res);
         } finally { await handle.close(); }
         return;

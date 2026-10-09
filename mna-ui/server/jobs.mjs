@@ -205,7 +205,7 @@ export function companyEntryFromGridRow(candidate) {
   };
 }
 
-function publicJob(job) {
+function publicJob(job, { summary = false } = {}) {
   const output = {
     id: job.id,
     sessionId: job.sessionId,
@@ -214,7 +214,10 @@ function publicJob(job) {
     events: job.events,
   };
   if (job.finishedAt) output.finishedAt = job.finishedAt;
-  if (job.result) output.result = job.result;
+  // Finished discovery results hold every company payload (tens of MB for large runs);
+  // the polled list sends a flag and clients fetch one job's result when they need it.
+  if (job.result && summary) output.hasResult = true;
+  else if (job.result) output.result = job.result;
   if (job.error) output.error = job.error;
   return safeClone(output);
 }
@@ -537,10 +540,10 @@ export function createJobRegistry(options) {
     return job ? publicJob(job) : undefined;
   }
 
-  function list() {
+  function list({ summary = false } = {}) {
     return [...jobs.values()]
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-      .map(publicJob);
+      .map((job) => publicJob(job, { summary }));
   }
 
   function cancel(id) {

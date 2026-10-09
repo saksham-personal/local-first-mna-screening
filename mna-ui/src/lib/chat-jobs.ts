@@ -392,6 +392,12 @@ export async function stopJob(id: string): Promise<void> {
       "The previous search is still stopping. Wait until it stops before starting another search.",
     );
 }
+function jobOutcomeRecorded(job: JobSnapshot): boolean {
+  return !!sessionStore
+    .getSnapshot()
+    .sessions.find((s) => s.id === job.sessionId)
+    ?.events.some((e) => e.kind === "message" && e.role === "assistant" && e.jobId === job.id);
+}
 export async function refreshJobs(): Promise<void> {
   const knownBeforeRequest = new Set(
     sessionStore
@@ -399,9 +405,16 @@ export async function refreshJobs(): Promise<void> {
       .sessions.map((session) => getChatState(session.id).jobId)
       .filter(Boolean),
   );
-  const result = await jsonRequest("/api/jobs");
-  const remote = result.jobs as JobSnapshot[];
-  remote.forEach(syncJob);
+  // The polled list omits finished results; fetch a job in full only when this
+  // client has not yet recorded its outcome.
+  const result = await jsonRequest("/api/jobs?summary=1");
+  const remote = result.jobs as (JobSnapshot & { hasResult?: boolean })[];
+  for (const job of remote) {
+    if (job.hasResult && !jobOutcomeRecorded(job)) {
+      const full = await jsonRequest(`/api/jobs/${encodeURIComponent(job.id)}`);
+      syncJob(full.job as JobSnapshot);
+    } else syncJob(job);
+  }
   for (const session of sessionStore.getSnapshot().sessions) {
     const state = getChatState(session.id);
     if (
