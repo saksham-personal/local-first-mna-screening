@@ -354,6 +354,11 @@ export async function startBridge() {
       }
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
       if (req.method === 'GET' && url.pathname === '/api/research/runs') return respond(res, 200, { jobs: await research.list() });
+      if (req.method === 'GET' && url.pathname === '/api/research/runs/rows') {
+        const runId = url.searchParams.get('id');
+        if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(runId)) throw new Error('Use a valid research run ID.');
+        return respond(res, 200, await research.rows({ id: runId }));
+      }
       if (req.method === 'GET' && url.pathname === '/api/controller/turns') {
         const runId = url.searchParams.get('runId');
         if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(runId)) throw new Error('Use a valid screening run ID.');

@@ -85,6 +85,35 @@ test('start returns before sending and background queries progress without clien
   assert.equal(f.calls.filter(item => item.tool === 'bing_search').length, 3);
 });
 
+test('a run keeps its result rows for the chat outcome (file-backed), and a discarded run returns none', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bing-rows-'));
+  try {
+    const f = fixture(2, true, { storeFile: join(dir, 'research.json') });
+    const preview = await f.service.preview({ runId: 'run-1', mode: 'company', queries: templates });
+    const started = await f.service.start({ token: preview.token, approved: true, sessionId: 'session-1' });
+    await until(async () => (await f.service.list())[0]?.state === 'completed');
+    const result = await f.service.rows({ id: started.id });
+    assert.equal(result.rows.length, 6);
+    assert.equal(result.total, 6);
+    assert.equal(result.capped, false);
+    assert.deepEqual(Object.keys(result.rows[0]).sort(), ['Excerpt', 'Query', 'Title', 'URL', 'Verification', 'evidence_id', 'pk'].sort());
+    assert.equal(result.rows[0].pk, 'company-1');
+    assert.equal(result.rows[0].Verification, 'Unverified research lead');
+
+    const held = gate();
+    const g = fixture(3, true, { holdQuery: async () => { if (g.calls.filter(item => item.tool === 'bing_search').length === 2) await held.hold(); } });
+    const second = await g.service.preview({ runId: 'run-1', mode: 'company', queries: ['{company} products'] });
+    const run = await g.service.start({ token: second.token, approved: true });
+    await until(() => g.calls.filter(item => item.tool === 'bing_search').length === 2);
+    await held.waiting;
+    const cancelling = g.service.cancel({ token: second.token, keep: false });
+    held.release();
+    await cancelling;
+    const discarded = await g.service.rows({ id: run.id });
+    assert.deepEqual([discarded.rows.length, discarded.discarded], [0, true]);
+  } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }); }
+});
+
 test('nine sequential starts evict each approved preview instead of exhausting the preview limit', async () => {
   const f = fixture(1, false);
   for (let index = 0; index < 9; index++) {
@@ -257,7 +286,7 @@ test('running research reloads as paused and resumes from its persisted cursor',
     await restored.resume({ planId: 'plan-1' });
     await until(async () => (await restored!.list())[0]?.state === 'completed');
     assert.equal((await restored.list())[0].processedQueries, 2);
-  } finally { restored?.close(); await rm(dir, { recursive: true, force: true }); }
+  } finally { restored?.close(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }); }
 });
 
 test('preview keeps strict templates, pages company scope, and approves only the reviewed selection', async () => {

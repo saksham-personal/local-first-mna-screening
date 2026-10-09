@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const PAGE_SIZE = 500;
 const SEND_BATCH = 25;
+// Result rows the chat shows for a run; every observation stays saved in the evidence store.
+const MAX_ROWS = 500;
 const TTL = 15 * 60_000;
 
 function templatesFrom(input) {
@@ -189,6 +191,44 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
     timer?.unref?.();
   }
 
+  // Rows live in a per-run side file (or memory without a store file) so the state file stays small.
+  const memoryRows = new Map();
+  const rowsFile = (saved) => storeFile ? join(dirname(storeFile), 'bing-rows', `${saved.id}.jsonl`) : undefined;
+  function resultRows(saved, query, result) {
+    const verification = result?.simulated ? 'SIMULATED — Unverified research lead' : 'Unverified research lead';
+    const base = { pk: query.company_id ?? '', Query: query.query, Verification: verification, evidence_id: result?.evidence_id ?? '' };
+    const rows = (result?.results ?? []).map(source => ({ ...base, Title: source.title, URL: source.url, Excerpt: source.snippet }));
+    if (!rows.length && result?.answer) rows.push({ ...base, Answer: result.answer });
+    return rows;
+  }
+  async function recordRows(saved, query, result) {
+    const rows = resultRows(saved, query, result);
+    saved.totalRows = (saved.totalRows ?? 0) + rows.length;
+    const room = Math.max(0, MAX_ROWS - (saved.rowCount ?? 0));
+    const kept = rows.slice(0, room);
+    if (!kept.length) return;
+    saved.rowCount = (saved.rowCount ?? 0) + kept.length;
+    const file = rowsFile(saved);
+    if (!file) { memoryRows.set(saved.id, [...(memoryRows.get(saved.id) ?? []), ...kept]); return; }
+    await mkdir(dirname(file), { recursive: true });
+    await appendFile(file, kept.map(row => JSON.stringify(row)).join('\n') + '\n');
+  }
+  /** Result rows of one run for the chat outcome. Discarded runs return none. */
+  async function rows(input = {}) {
+    await init();
+    const saved = typeof input.id === 'string' ? [...runs.values()].find(item => item.id === input.id) : find(input);
+    if (!saved) throw new Error('Bing research run was not found.');
+    const job = snapshot(saved);
+    if (saved.state === 'cancelled' && saved.keepOnCancel === false) return { job, rows: [], total: 0, capped: false, discarded: true };
+    let list = memoryRows.get(saved.id) ?? [];
+    const file = rowsFile(saved);
+    if (file) {
+      try { list = (await readFile(file, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line)); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; list = []; }
+    }
+    return { job, rows: list.slice(0, MAX_ROWS), total: saved.totalRows ?? list.length, capped: (saved.totalRows ?? 0) > list.length, discarded: false };
+  }
+
   function find(input = {}) {
     const token = typeof input.token === 'string' ? input.token : byPlan.get(input.planId);
     return token ? runs.get(token) : undefined;
@@ -258,9 +298,10 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
         if (!connected()) { disconnected = true; break; }
         saved.updatedAt = timestamp(now); await persist();
         try {
-          await traced('bing_search', { run_id: saved.runId, plan_id: saved.planId, step_id: saved.stepId,
+          const result = await traced('bing_search', { run_id: saved.runId, plan_id: saved.planId, step_id: saved.stepId,
             ...(query.company_id ? { company_id: query.company_id } : {}), query: query.query, max_results: 5 });
           saved.savedObservations++;
+          await recordRows(saved, query, result);
         } catch (error) {
           if (!connected() || isConnectionError(error)) {
             disconnected = true;
@@ -437,5 +478,5 @@ export function createBingResearch({ call, connected = () => false, storeFile, n
     timers.clear();
   }
 
-  return { init, preview, start, list, pause, resume, cancel, run, close };
+  return { init, preview, start, list, rows, pause, resume, cancel, run, close };
 }
