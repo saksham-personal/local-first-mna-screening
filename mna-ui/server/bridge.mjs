@@ -20,9 +20,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = `http://127.0.0.1:${ports.rust}`;
-const admin = { start_export: '/admin/export-start', start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
+const admin = { start_export: '/admin/export-start', start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', cancel_prepared_plan: '/admin/prepared-plan-cancel', discard_plan_results: '/admin/plan-discard', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
 const allowed = new Set(['get_controller_turns', 'get_export', 'list_exports', 'get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
-for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'get_screening_rounds', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_grid_descriptions', 'get_company_detail', 'get_enrichment_report', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
+for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'get_screening_rounds', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_discarded_plans', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_grid_descriptions', 'get_company_detail', 'get_enrichment_report', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
 Object.assign(admin, { space_sync: '/admin/space-sync', space_add_to_run: '/admin/space-add-to-run', space_export: '/admin/space-export' });
 for (const tool of ['space_sync_status', 'space_browse', 'space_search_lexical', 'space_search_semantic', 'space_search_iscc', 'space_recent']) allowed.add(tool);
 const simulate = process.env.SCREENING_SIMULATE === '1';
@@ -117,7 +117,7 @@ export async function resolveExportDownload(exportRoot, id, status) {
 async function rustCall(apiKey, analystKey, controllerKey, staged, tool, args, analystApproved, signal) {
   if (typeof tool !== 'string' || (!Object.hasOwn(admin, tool) && !allowed.has(tool))) throw new Error('This tool is not enabled in the local example.');
   if (tool === 'space_add_to_run' && analystApproved !== true) throw new Error('Approve adding the selected companies to the screening run.');
-  if ((['start_index_build', 'cancel_index_build', 'activate_mid_bundle', 'delete_mid_bundle'].includes(tool) || tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'apply_enrichment_review' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
+  if ((['start_index_build', 'cancel_index_build', 'activate_mid_bundle', 'delete_mid_bundle'].includes(tool) || tool === 'approve_screening_profile' || tool === 'create_run' || tool === 'approve_prepared_plan' || tool === 'cancel_prepared_plan' || tool === 'discard_plan_results' || tool === 'approve_action_plan' || tool === 'review_shortlist' || tool === 'apply_enrichment_review' || tool === 'save_criteria_revision' || tool === 'approve_criteria_revision') && analystApproved !== true) throw new Error('Approve the screening setup before changing a screening run.');
   if (tool === 'import_company_files' || tool === 'import_enrichment_files' || tool === 'inspect_enrichment_files') {
     if (!Array.isArray(args.files) || !args.files.length || !args.files.every(file => typeof file === 'string' && staged.has(file))) throw new Error('Select files through the upload controls.');
   }
@@ -328,7 +328,8 @@ export async function startBridge() {
   };
   const background = createBackgroundScreening({ call: controllerCall, dispatch: args => controllerCall('dispatch_execution_job', args), connected: providerReady, storeFile: resolve(data, 'background-runs.json') });
   await background.init().catch(error => { rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); throw error; });
-  const research = createBingResearch({ call, connected: () => providerReady('bing') });
+  const research = createBingResearch({ call, connected: () => providerReady('bing'), storeFile: resolve(data, 'research-runs.json') });
+  await research.init().catch(error => { background.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); throw error; });
   const conversation = createProviderConversation({ dispatch: args => controllerCall('dispatch_provider_text', args), connected: externalReady,
     deployment: providerDeployment, stagedFiles, call });
   const server = createServer(async (req, res) => {
@@ -352,6 +353,7 @@ export async function startBridge() {
         return sendStagedFile(res, { path, name: exportMatch[1], bytes: info.size, ...fileKinds.get('.xlsx') });
       }
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
+      if (req.method === 'GET' && url.pathname === '/api/research/runs') return respond(res, 200, { jobs: await research.list() });
       if (req.method === 'GET' && url.pathname === '/api/controller/turns') {
         const runId = url.searchParams.get('runId');
         if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(runId)) throw new Error('Use a valid screening run ID.');
@@ -434,13 +436,18 @@ export async function startBridge() {
         if (typeof input.message !== 'string' || !input.message.trim() || [...input.message].length > 4000 || (input.newConversation != null && typeof input.newConversation !== 'boolean')) throw new Error('Use an analyst message of 1..4000 characters and a boolean newConversation.');
         return respond(res, 200, await controllerCall('run_controller_turn', { run_id: input.runId, analyst_message: input.message, new_conversation: input.newConversation ?? false }));
       }
-      const backgroundMatch = url.pathname.match(/^\/api\/background-runs\/(start|pause|resume|retry|stage)$/);
+      const backgroundMatch = url.pathname.match(/^\/api\/background-runs\/(start|pause|resume|cancel|retry|stage)$/);
       if (backgroundMatch) {
         const result = await background[backgroundMatch[1]](input);
         return respond(res, 200, backgroundMatch[1] === 'stage' ? result : { job: result });
       }
-      const researchMatch = url.pathname.match(/^\/api\/research\/(preview|run|cancel)$/);
-      if (researchMatch) return respond(res, 200, await research[researchMatch[1]](input));
+      const researchMatch = url.pathname.match(/^\/api\/research\/(preview|start|run|pause|resume|cancel)$/);
+      if (researchMatch) {
+        const action = researchMatch[1];
+        const payload = action === 'cancel' && input.keep == null ? { ...input, keep: true } : input;
+        const result = await research[action](payload);
+        return respond(res, 200, ['start', 'pause', 'resume', 'cancel'].includes(action) ? { job: result } : result);
+      }
       const conversationMatch = url.pathname.match(/^\/api\/conversation\/(ask|generate)$/);
       if (conversationMatch) return respond(res, 200, await conversation[conversationMatch[1]](input));
       const screeningMatch = url.pathname.match(/^\/api\/screening\/(catalog|preview|approve|list|build)$/);
@@ -502,5 +509,5 @@ export async function startBridge() {
     rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill();
     throw error;
   }
-  return { close: () => { background.close(); server.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); }, rust, jobs };
+  return { close: () => { background.close(); research.close(); server.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); }, rust, jobs };
 }

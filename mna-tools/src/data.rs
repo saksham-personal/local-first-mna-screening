@@ -99,6 +99,54 @@ struct CandidateSourceDataArgs {
     #[serde(default)]
     limit: Option<usize>,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EvidenceArgs {
+    run_id: String,
+    company_id: String,
+    #[serde(default)]
+    claims: Option<Vec<String>>,
+    #[serde(default)]
+    source_types: Option<Vec<String>>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    include_discarded: bool,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PreviousResearchArgs {
+    company_id: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchMemoryArgs {
+    run_id: String,
+    query: String,
+    #[serde(default)]
+    company_id: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchHistoryArgs {
+    run_id: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MissingEvidenceArgs {
+    run_id: String,
+    company_id: String,
+    #[serde(default)]
+    required_attributes: Option<Vec<String>>,
+}
 
 pub fn input_schema(tool: &str) -> Option<Value> {
     let schema = match tool {
@@ -110,6 +158,11 @@ pub fn input_schema(tool: &str) -> Option<Value> {
         "get_company_identifiers" => schemars::schema_for!(CompanyArgs),
         "get_source_rows" => schemars::schema_for!(SourceRowsArgs),
         "get_candidate_source_data" => schemars::schema_for!(CandidateSourceDataArgs),
+        "get_evidence" => schemars::schema_for!(EvidenceArgs),
+        "get_previous_research" => schemars::schema_for!(PreviousResearchArgs),
+        "search_research_memory" => schemars::schema_for!(SearchMemoryArgs),
+        "get_search_history" => schemars::schema_for!(SearchHistoryArgs),
+        "get_missing_evidence" => schemars::schema_for!(MissingEvidenceArgs),
         _ => {
             return crate::enrichment_report::input_schema(tool)
                 .or_else(|| crate::grid::input_schema(tool))
@@ -133,11 +186,181 @@ impl DataService {
             "get_company_identifiers" => self.get_company_identifiers(parse(arguments)?),
             "get_source_rows" => self.get_source_rows(parse(arguments)?),
             "get_candidate_source_data" => self.get_candidate_source_data(parse(arguments)?),
+            "get_evidence" => get_evidence(&self.store, arguments),
+            "get_previous_research" => self.get_previous_research(parse(arguments)?),
+            "search_research_memory" => self.search_research_memory(parse(arguments)?),
+            "get_search_history" => self.get_search_history(parse(arguments)?),
+            "get_missing_evidence" => self.get_missing_evidence(parse(arguments)?),
             "get_enrichment_report" => crate::enrichment_report::get_report(&self.store, arguments),
             "get_screening_grid" => crate::grid::screening_grid(&self.store, arguments),
             "get_company_detail" => crate::grid::company_detail(&self.store, arguments),
             _ => Err(Error::Validation(format!("unknown data tool: {tool}"))),
         }
+    }
+
+    fn get_previous_research(&self, args: PreviousResearchArgs) -> Result<Value> {
+        let cap = args.limit.unwrap_or(100);
+        if cap == 0 || cap > 500 {
+            return Err(Error::Validation("limit must be within 1..=500".into()));
+        }
+        self.store.with_connection(|connection| {
+            let company_exists: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM companies WHERE company_id=?)",
+                [&args.company_id],
+                |row| row.get(0),
+            )?;
+            if !company_exists {
+                return Err(Error::NotFound(format!("company not found: {}", args.company_id)));
+            }
+            let mut statement = connection.prepare(
+                "SELECT evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash
+                 FROM evidence WHERE company_id=? AND discarded_plan_id IS NULL ORDER BY retrieved_at DESC LIMIT ?",
+            )?;
+            let rows = statement.query_map(params![args.company_id, cap as i64], evidence_value)?;
+            let mut output = Vec::new();
+            for row in rows {
+                let mut row = row?;
+                crate::trust::attach(connection, &mut row)?;
+                output.push(row);
+            }
+            Ok(Value::Array(output))
+        })
+    }
+
+    fn search_research_memory(&self, args: SearchMemoryArgs) -> Result<Value> {
+        self.store
+            .with_connection(|connection| require_run(connection, &args.run_id))?;
+        if args.query.trim().is_empty() || args.query.len() > 10_000 {
+            return Err(Error::Validation(
+                "query must contain 1..=10000 bytes".into(),
+            ));
+        }
+        let cap = args.limit.unwrap_or(20);
+        if cap == 0 || cap > 200 {
+            return Err(Error::Validation("limit must be within 1..=200".into()));
+        }
+        let terms: Vec<String> = args
+            .query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        let mut scored = self.store.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash
+                 FROM evidence WHERE run_id=? AND discarded_plan_id IS NULL ORDER BY retrieved_at DESC",
+            )?;
+            let rows = statement.query_map([&args.run_id], evidence_value)?;
+            let mut scored = Vec::new();
+            for row in rows {
+                let mut row = row?;
+                crate::trust::attach(connection, &mut row)?;
+                if args
+                    .company_id
+                    .as_ref()
+                    .is_some_and(|company| row["company_id"] != *company)
+                {
+                    continue;
+                }
+                let text = row.to_string().to_lowercase();
+                let score = terms.iter().filter(|term| text.contains(term.as_str())).count();
+                if score > 0 {
+                    scored.push((score, row));
+                }
+            }
+            Ok(scored)
+        })?;
+        let labels = self.store.execute(
+            "get_labelled_examples",
+            &json!({"run_id":args.run_id,"company_id":args.company_id,"limit":500}),
+        )?;
+        let questions = self.store.execute(
+            "get_open_questions",
+            &json!({"run_id":args.run_id,"company_id":args.company_id,"include_resolved":true,"limit":500}),
+        )?;
+        for (kind, records) in [("analyst_label", labels), ("research_question", questions)] {
+            for mut record in records.as_array().cloned().unwrap_or_default() {
+                let text = record.to_string().to_lowercase();
+                let score = terms
+                    .iter()
+                    .filter(|term| text.contains(term.as_str()))
+                    .count();
+                if score > 0 {
+                    record["memory_type"] = json!(kind);
+                    scored.push((score, record));
+                }
+            }
+        }
+        scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        Ok(Value::Array(
+            scored.into_iter().take(cap).map(|(_, item)| item).collect(),
+        ))
+    }
+
+    fn get_search_history(&self, args: SearchHistoryArgs) -> Result<Value> {
+        let cap = args.limit.unwrap_or(50);
+        if cap == 0 || cap > 500 {
+            return Err(Error::Validation("limit must be within 1..=500".into()));
+        }
+        self.store.with_connection(|connection| {
+            require_run(connection, &args.run_id)?;
+            let mut statement = connection.prepare(
+                "SELECT query_id,run_id,source,query,parameters_json,results_json,created_at
+                 FROM search_queries q WHERE run_id=? AND (? IS NULL OR source=?)
+                   AND NOT (source='bing_search' AND json_extract(parameters_json,'$.plan_id') IN
+                     (SELECT plan_id FROM discarded_plans WHERE run_id=? AND kind='research'))
+                 ORDER BY created_at DESC LIMIT ?",
+            )?;
+            let rows = statement.query_map(
+                params![args.run_id, args.source, args.source, args.run_id, cap as i64],
+                |row| {
+                    let parameters: String = row.get(4)?;
+                    let results: String = row.get(5)?;
+                    Ok(json!({
+                        "query_id":row.get::<_,String>(0)?,
+                        "run_id":row.get::<_,Option<String>>(1)?,
+                        "source":row.get::<_,String>(2)?,
+                        "query":row.get::<_,String>(3)?,
+                        "parameters":serde_json::from_str::<Value>(&parameters).unwrap_or(Value::Null),
+                        "results":serde_json::from_str::<Value>(&results).unwrap_or(Value::Null),
+                        "created_at":row.get::<_,String>(6)?
+                    }))
+                },
+            )?;
+            Ok(Value::Array(rows.collect::<std::result::Result<Vec<_>, _>>()?))
+        })
+    }
+
+    fn get_missing_evidence(&self, args: MissingEvidenceArgs) -> Result<Value> {
+        let required = args.required_attributes.unwrap_or_else(|| {
+            vec![
+                "products".into(),
+                "business_model".into(),
+                "customer_segment".into(),
+            ]
+        });
+        if required.len() > 1000 {
+            return Err(Error::Validation("too many required attributes".into()));
+        }
+        let evidence = get_evidence(
+            &self.store,
+            &json!({"run_id":args.run_id,"company_id":args.company_id,"limit":1000,"include_discarded":false}),
+        )?;
+        let found: BTreeSet<&str> = evidence
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item["verification_status"] == "VERIFIED")
+            .filter(|item| {
+                !item["value"].is_null()
+                    && item["value"].as_str().is_none_or(|s| !s.trim().is_empty())
+            })
+            .filter_map(|item| item["claim"].as_str())
+            .collect();
+        let missing: Vec<String> = required
+            .into_iter()
+            .filter(|claim| !found.contains(claim.as_str()))
+            .collect();
+        Ok(json!({"run_id":args.run_id,"company_id":args.company_id,"missing":missing}))
     }
 
     /// The search gateway sends original ISCC row objects here after obtaining
@@ -392,7 +615,7 @@ impl DataService {
             let saved_total: usize=connection.query_row("SELECT COUNT(*) FROM candidates WHERE run_id=?",[&args.run_id],|r|r.get(0))?;
             let pb: usize=connection.query_row("SELECT COUNT(*) FROM candidates x JOIN company_enrichment e ON e.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 AND (e.pb_name IS NOT NULL OR e.pb_description IS NOT NULL)",[&args.run_id],|r|r.get(0))?;
             let rogo: usize=connection.query_row("SELECT COUNT(*) FROM candidates x JOIN company_enrichment e ON e.company_id=x.company_id WHERE x.run_id=? AND x.considered=1 AND e.rogo_json!='{}'",[&args.run_id],|r|r.get(0))?;
-            let bing: usize=connection.query_row("SELECT COUNT(DISTINCT x.company_id) FROM candidates x JOIN evidence b ON b.company_id=x.company_id AND b.run_id=x.run_id WHERE x.run_id=? AND x.considered=1 AND b.claim='bing_research_observation' AND b.source_type='bing'",[&args.run_id],|r|r.get(0))?;
+            let bing: usize=connection.query_row("SELECT COUNT(DISTINCT x.company_id) FROM candidates x JOIN evidence b ON b.company_id=x.company_id AND b.run_id=x.run_id WHERE x.run_id=? AND x.considered=1 AND b.claim='bing_research_observation' AND b.source_type='bing' AND b.discarded_plan_id IS NULL",[&args.run_id],|r|r.get(0))?;
             let mut recommended=Vec::new();
             if total>0 && total<1000 {recommended.push("PITCHBOOK_ENRICHMENT");recommended.push("BING_HYDRATION");}
             if total>500 && total<2000 {recommended.push("ROGO_ENRICHMENT");}
@@ -924,6 +1147,79 @@ impl DataService {
     }
 }
 
+pub(crate) fn get_evidence(store: &Store, arguments: &Value) -> Result<Value> {
+    let args: EvidenceArgs = parse(arguments)?;
+    store.with_connection(|connection| {
+        require_run(connection, &args.run_id)?;
+        let company_exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM companies WHERE company_id=?)",
+            [&args.company_id],
+            |row| row.get(0),
+        )?;
+        if !company_exists {
+            return Err(Error::NotFound(format!("company not found: {}", args.company_id)));
+        }
+        let cap = args.limit.unwrap_or(200);
+        if cap == 0 || cap > 1000 {
+            return Err(Error::Validation("limit must be within 1..=1000".into()));
+        }
+        let claims = args.claims.unwrap_or_default();
+        let source_types = args.source_types.unwrap_or_default();
+        let mut statement = connection.prepare(
+            "SELECT evidence_id,run_id,company_id,claim,value_json,source_type,source_reference,source_url,confidence,extraction_method,retrieved_at,content_hash
+             FROM evidence WHERE run_id=?1 AND company_id=?2 AND (?3 OR discarded_plan_id IS NULL)
+             ORDER BY retrieved_at DESC,evidence_id DESC",
+        )?;
+        let rows = statement.query_map(
+            params![args.run_id, args.company_id, args.include_discarded],
+            |row| {
+                let raw: String = row.get(4)?;
+                let value: Value = serde_json::from_str(&raw).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                Ok(json!({
+                    "evidence_id":row.get::<_,String>(0)?,
+                    "run_id":row.get::<_,String>(1)?,
+                    "company_id":row.get::<_,String>(2)?,
+                    "claim":row.get::<_,String>(3)?,
+                    "value":value,
+                    "source_type":row.get::<_,String>(5)?,
+                    "source_reference":row.get::<_,String>(6)?,
+                    "source_url":row.get::<_,Option<String>>(7)?,
+                    "confidence":row.get::<_,String>(8)?,
+                    "extraction_method":row.get::<_,Option<String>>(9)?,
+                    "retrieved_at":row.get::<_,String>(10)?,
+                    "content_hash":row.get::<_,String>(11)?
+                }))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let mut row = row?;
+            crate::trust::attach(connection, &mut row)?;
+            if !claims.is_empty() && !claims.iter().any(|claim| row["claim"] == *claim) {
+                continue;
+            }
+            if !source_types.is_empty()
+                && !source_types
+                    .iter()
+                    .any(|source| row["source_type"] == *source)
+            {
+                continue;
+            }
+            out.push(row);
+            if out.len() == cap {
+                break;
+            }
+        }
+        Ok(Value::Array(out))
+    })
+}
+
 fn source_value_present(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -1198,6 +1494,26 @@ struct IdentityResult {
 
 fn parse<T: serde::de::DeserializeOwned>(arguments: &Value) -> Result<T> {
     Ok(serde_json::from_value(arguments.clone())?)
+}
+fn evidence_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let raw: String = row.get(4)?;
+    let value: Value = serde_json::from_str(&raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(json!({
+        "evidence_id":row.get::<_,String>(0)?,
+        "run_id":row.get::<_,String>(1)?,
+        "company_id":row.get::<_,String>(2)?,
+        "claim":row.get::<_,String>(3)?,
+        "value":value,
+        "source_type":row.get::<_,String>(5)?,
+        "source_reference":row.get::<_,String>(6)?,
+        "source_url":row.get::<_,Option<String>>(7)?,
+        "confidence":row.get::<_,String>(8)?,
+        "extraction_method":row.get::<_,Option<String>>(9)?,
+        "retrieved_at":row.get::<_,String>(10)?,
+        "content_hash":row.get::<_,String>(11)?
+    }))
 }
 fn validate_files(files: &[String]) -> Result<()> {
     if files.is_empty() || files.len() > tabular::MAX_FILES {
@@ -1989,8 +2305,8 @@ pub(crate) fn export_has_simulated(connection: &Connection, run_id: &str) -> Res
     require_run(connection, run_id)?;
     Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM candidates c WHERE c.run_id=?1 AND c.considered=1 AND (
         EXISTS(SELECT 1 FROM source_rows s WHERE s.company_id=c.company_id AND s.simulated=1 AND (s.source='MID' OR s.run_scope=c.run_id)) OR
-        EXISTS(SELECT 1 FROM model_assessments a WHERE a.run_id=c.run_id AND a.simulated=1 AND (a.company_id=c.company_id OR EXISTS(SELECT 1 FROM company_identifiers i WHERE i.kind='PK' AND i.identifier=a.company_id AND i.company_id=c.company_id))) OR
-        EXISTS(SELECT 1 FROM evidence e WHERE e.run_id=c.run_id AND e.simulated=1 AND (e.company_id=c.company_id OR EXISTS(SELECT 1 FROM company_identifiers i WHERE i.kind='PK' AND i.identifier=e.company_id AND i.company_id=c.company_id)))))", [run_id], |r| r.get(0))?)
+        EXISTS(SELECT 1 FROM model_assessments a WHERE a.run_id=c.run_id AND a.simulated=1 AND a.plan_id NOT IN (SELECT plan_id FROM discarded_plans) AND (a.company_id=c.company_id OR EXISTS(SELECT 1 FROM company_identifiers i WHERE i.kind='PK' AND i.identifier=a.company_id AND i.company_id=c.company_id))) OR
+        EXISTS(SELECT 1 FROM evidence e WHERE e.run_id=c.run_id AND e.simulated=1 AND e.discarded_plan_id IS NULL AND (e.company_id=c.company_id OR EXISTS(SELECT 1 FROM company_identifiers i WHERE i.kind='PK' AND i.identifier=e.company_id AND i.company_id=c.company_id)))))", [run_id], |r| r.get(0))?)
 }
 
 fn write_simulated_note(workbook: &mut rust_xlsxwriter::Workbook) -> Result<()> {
@@ -2455,7 +2771,7 @@ pub(crate) fn hydrate_source_rows(
             for column in columns {
                 sources["RESULTS"][format!("{plan}:{column}")] = Value::Null;
             }
-            let assessment:Option<(String,String,String)>=connection.query_row("SELECT assessment_id,result_json,created_at FROM model_assessments WHERE run_id=? AND plan_id=? AND company_id=? ORDER BY created_at DESC,assessment_id DESC LIMIT 1",params![run_id,plan,company_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+            let assessment:Option<(String,String,String)>=connection.query_row("SELECT assessment_id,result_json,created_at FROM model_assessments WHERE run_id=? AND plan_id=? AND company_id=? AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) ORDER BY created_at DESC,assessment_id DESC LIMIT 1",params![run_id,plan,company_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
             if let Some((assessment_id, raw, created_at)) = assessment {
                 let result: Value = serde_json::from_str(&raw)?;
                 for column in columns {
@@ -2465,9 +2781,9 @@ pub(crate) fn hydrate_source_rows(
                 provenance["RESULTS"].as_array_mut().expect("RESULTS lineage").push(json!({"assessment_id":assessment_id,"plan_id":plan,"created_at":created_at}));
             }
         }
-        let bing_total:i64=connection.query_row("SELECT COUNT(*) FROM evidence WHERE run_id=? AND company_id=? AND claim='bing_research_observation' AND source_type='bing'",params![run_id,company_id],|r|r.get(0))?;
+        let bing_total:i64=connection.query_row("SELECT COUNT(*) FROM evidence WHERE run_id=? AND company_id=? AND claim='bing_research_observation' AND source_type='bing' AND discarded_plan_id IS NULL",params![run_id,company_id],|r|r.get(0))?;
         if bing_total > 0 {
-            let mut bing_stmt=connection.prepare("SELECT evidence_id,value_json,source_reference,retrieved_at FROM evidence WHERE run_id=? AND company_id=? AND claim='bing_research_observation' AND source_type='bing' ORDER BY retrieved_at DESC,evidence_id DESC LIMIT 5")?;
+            let mut bing_stmt=connection.prepare("SELECT evidence_id,value_json,source_reference,retrieved_at FROM evidence WHERE run_id=? AND company_id=? AND claim='bing_research_observation' AND source_type='bing' AND discarded_plan_id IS NULL ORDER BY retrieved_at DESC,evidence_id DESC LIMIT 5")?;
             let mut observations = Vec::new();
             let mut evidence_ids = Vec::new();
             for record in bing_stmt.query_map(params![run_id, company_id], |r| {

@@ -44,7 +44,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 - [Analyst examples](#analyst-examples): `label_company`, `get_labelled_examples`, `get_representative_examples`
 - [Evidence](#evidence): `save_evidence`, `get_evidence`, `get_missing_evidence`
 - [Research](#research): `bing_search`, `m365_research`, `fetch_url`, `extract_url_context`
-- [Durable memory](#durable-memory): `search_research_memory`, `get_previous_research`, `get_recent_agent_events`, `get_search_history`, `get_open_questions`, `add_open_question`, `resolve_open_question`
+- [Durable memory](#durable-memory): `search_research_memory`, `get_previous_research`, `get_recent_agent_events`, `get_search_history`, `get_discarded_plans`, `get_open_questions`, `add_open_question`, `resolve_open_question`
 - [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `get_screening_grid`, `get_grid_descriptions`, `get_company_detail`, `update_candidate_status`, `get_discovery_summary`
 - [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `get_enrichment_report`, `export_candidate_set`, `get_export`, `list_exports`
 - [Search Space](#search-space): `space_sync_status`, `space_browse`, `space_search_lexical`, `space_search_semantic`, `space_search_iscc`, `space_recent`
@@ -1072,12 +1072,13 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 **Purpose:** Read evidence for one company in one run.
 
-**How it works:** Optional claims and source_types narrow the read; an omitted or empty filter does not narrow it. limit defaults to 200, maximum 1,000. Records retain source references, evidence_confidence (with confidence as a compatibility alias), claim_provenance and analyst verification status. New or unreviewed claims are UNKNOWN. They are observations rather than an automatically reconciled fact table.
+**How it works:** Optional claims and source_types narrow the read; an omitted or empty filter does not narrow it. Discarded plan results are omitted by default; set include_discarded=true for audit recovery. limit defaults to 200, maximum 1,000. Records retain source references, evidence_confidence (with confidence as a compatibility alias), claim_provenance and analyst verification status. New or unreviewed claims are UNKNOWN. They are observations rather than an automatically reconciled fact table.
 
 | Argument | Required by schema | Type | Schema default |
 |---|---|---|---|
 | `claims` | No | array or null | `null` |
 | `company_id` | Yes | string | — |
+| `include_discarded` | No | boolean | `false` |
 | `limit` | No | integer or null | `null` |
 | `run_id` | Yes | string | — |
 | `source_types` | No | array or null | `null` |
@@ -1357,7 +1358,27 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 48. `get_open_questions`
+### 48. `get_discarded_plans`
+
+**Purpose:** List result plans an analyst chose to discard.
+
+**How it works:** Reads the run's soft-discard audit records. Discarding marks plan results for exclusion from ordinary readers; it never deletes assessments, observations or evidence.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** Discarded plan IDs, kind, analyst attribution, optional reason, timestamp and count. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42"
+}
+```
+
+### 49. `get_open_questions`
 
 **Purpose:** Read unresolved screening criteria ambiguities or company research gaps.
 
@@ -1383,7 +1404,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 49. `add_open_question`
+### 50. `add_open_question`
 
 **Purpose:** Persist a relevant ambiguity without guessing an answer.
 
@@ -1408,7 +1429,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 50. `resolve_open_question`
+### 51. `resolve_open_question`
 
 **Purpose:** Record an explicit answer and link the evidence that supports it.
 
@@ -1434,7 +1455,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Candidate funnel
 
-### 51. `add_candidates`
+### 52. `add_candidates`
 
 **Purpose:** Form the unique broad funnel while preserving every retrieval path.
 
@@ -1471,7 +1492,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 52. `get_candidate_set`
+### 53. `get_candidate_set`
 
 **Purpose:** Read a bounded page of run candidates and their discovery history.
 
@@ -1500,7 +1521,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 53. `get_shortlist_context`
+### 54. `get_shortlist_context`
 
 **Purpose:** Page the current considered selection or complete saved candidate history.
 
@@ -1525,7 +1546,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 54. `get_screening_grid`
+### 55. `get_screening_grid`
 
 **Purpose:** Page every candidate of a run with the fields the company grid needs.
 
@@ -1553,7 +1574,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 55. `get_grid_descriptions`
+### 56. `get_grid_descriptions`
 
 **Purpose:** Read the description text behind the grid's Description tooltip.
 
@@ -1578,7 +1599,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 56. `get_company_detail`
+### 57. `get_company_detail`
 
 **Purpose:** Read everything known about one candidate for the company drawer.
 
@@ -1601,7 +1622,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 57. `update_candidate_status`
+### 58. `update_candidate_status`
 
 **Purpose:** Record a considered funnel state and supporting reason.
 
@@ -1627,7 +1648,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 58. `get_discovery_summary`
+### 59. `get_discovery_summary`
 
 **Purpose:** Report the full unique funnel and the next-step default.
 
@@ -1649,7 +1670,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Enrichment and exports
 
-### 59. `inspect_enrichment_files`
+### 60. `inspect_enrichment_files`
 
 **Purpose:** Identify staged spreadsheet roles before hydration or run selection.
 
@@ -1674,7 +1695,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 60. `import_enrichment_files`
+### 61. `import_enrichment_files`
 
 **Purpose:** Classify and join a mixed analyst upload into compact company context.
 
@@ -1704,7 +1725,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 61. `get_enrichment_report`
+### 62. `get_enrichment_report`
 
 **Purpose:** Read a saved PitchBook or ROGO import match report.
 
@@ -1726,7 +1747,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 62. `export_candidate_set`
+### 63. `export_candidate_set`
 
 **Purpose:** Create one of the analyst's three exact workbook formats.
 
@@ -1751,7 +1772,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 63. `get_export`
+### 64. `get_export`
 
 **Purpose:** Read the progress of a background export job.
 
@@ -1771,7 +1792,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 64. `list_exports`
+### 65. `list_exports`
 
 **Purpose:** List the background export jobs of a run.
 
@@ -1793,7 +1814,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Search Space
 
-### 65. `space_sync_status`
+### 66. `space_sync_status`
 
 **Purpose:** Read the Search Space lexical index state.
 
@@ -1810,7 +1831,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 {}
 ```
 
-### 66. `space_browse`
+### 67. `space_browse`
 
 **Purpose:** Page through every company of the active MID bundle.
 
@@ -1833,7 +1854,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 67. `space_search_lexical`
+### 68. `space_search_lexical`
 
 **Purpose:** Keyword search over the whole MID population.
 
@@ -1868,7 +1889,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 68. `space_search_semantic`
+### 69. `space_search_semantic`
 
 **Purpose:** Meaning-based search over the whole MID population.
 
@@ -1893,7 +1914,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 69. `space_search_iscc`
+### 70. `space_search_iscc`
 
 **Purpose:** Pull ISCC results for a query without a screening run.
 
@@ -1915,7 +1936,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 70. `space_recent`
+### 71. `space_recent`
 
 **Purpose:** List recent Search Space searches.
 
@@ -1937,7 +1958,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## LLM Suite controller
 
-### 71. `get_controller_turns`
+### 72. `get_controller_turns`
 
 **Purpose:** Read the stored LLM Suite controller turns of a run.
 
@@ -1961,7 +1982,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Approved action graphs and screening
 
-### 72. `propose_action_plan`
+### 73. `propose_action_plan`
 
 **Purpose:** Turn an interpreted analyst request into a durable dependency graph.
 
@@ -2008,7 +2029,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 73. `get_action_plan`
+### 74. `get_action_plan`
 
 **Purpose:** Read a plan, its approval metadata and completed dependencies.
 
@@ -2030,7 +2051,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 74. `propose_prepared_plan`
+### 75. `propose_prepared_plan`
 
 **Purpose:** Freeze an immutable version-2 screening or question handoff.
 
@@ -2112,7 +2133,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 75. `get_prepared_plan`
+### 76. `get_prepared_plan`
 
 **Purpose:** Read a frozen handoff, its approval state and durable batch jobs.
 
@@ -2132,7 +2153,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 76. `get_execution_progress`
+### 77. `get_execution_progress`
 
 **Purpose:** Poll approval freshness and durable batch progress without large frozen inputs.
 
@@ -2152,7 +2173,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 77. `get_execution_job`
+### 78. `get_execution_job`
 
 **Purpose:** Inspect a durable provider batch and its parser or dispatch state.
 
@@ -2172,7 +2193,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 78. `get_model_assessments`
+### 79. `get_model_assessments`
 
 **Purpose:** Read accepted provider assessments separately from retrieval and evidence.
 
@@ -2195,7 +2216,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 79. `get_screening_rounds`
+### 80. `get_screening_rounds`
 
 **Purpose:** Read approved scored-screening rounds for a run.
 
@@ -2215,7 +2236,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 80. `prepare_screening_batch`
+### 81. `prepare_screening_batch`
 
 **Purpose:** Legacy compatibility handoff for scored screening batches.
 
@@ -2254,7 +2275,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 81. `prepare_bing_queries`
+### 82. `prepare_bing_queries`
 
 **Purpose:** Expand approved fit questions using the best available company identity.
 
@@ -2283,7 +2304,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 82. `save_screening_results`
+### 83. `save_screening_results`
 
 **Purpose:** Legacy compatibility endpoint for batch scores.
 
@@ -2317,7 +2338,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 83. `get_screening_results`
+### 84. `get_screening_results`
 
 **Purpose:** Read a company's external screening history within the current run.
 
@@ -2341,7 +2362,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 84. `complete_action_step`
+### 85. `complete_action_step`
 
 **Purpose:** Release dependent graph work only after successful operations are proven.
 
@@ -2371,7 +2392,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Recovery
 
-### 85. `save_checkpoint`
+### 86. `save_checkpoint`
 
 **Purpose:** Persist the orchestrator's restart state with optimistic concurrency.
 
@@ -2404,7 +2425,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 86. `get_checkpoint`
+### 87. `get_checkpoint`
 
 **Purpose:** Resume from the latest or a named historical checkpoint.
 
@@ -2475,7 +2496,8 @@ These operations are excluded from the model tool catalog. The criteria, shortli
 | `review_shortlist` | `/admin/shortlist-review` | Controller-only analyst selection: keep named IDs, hide others, and save chosen result columns. Require the current selection revision when available. History is retained. |
 | `approve_action_plan` | `/admin/actions/approve` | Approve or reject an immutable proposal at its original profile version; stale proposals must be rebuilt. |
 | `approve_prepared_plan` | `/admin/prepared-plan-approve` | Approve a version-2 plan by its exact backend digest; creates durable jobs but leaves `executed=false`. |
-| `cancel_prepared_plan` | `/admin/prepared-plan-cancel` | Cancel an undispatched prepared plan through the controller. |
+| `cancel_prepared_plan` | `/admin/prepared-plan-cancel` | Cancel non-terminal prepared-plan jobs through the controller while retaining finished assessments. |
+| `discard_plan_results` | `/admin/plan-discard` | Analyst-approved soft discard for a screening or research plan. Screening jobs must be cancelled first; research discard marks linked Bing evidence. Nothing is deleted. |
 | `lease_execution_job` | `/admin/execution-lease` | Controller-only lease for one eligible durable job. |
 | `mark_execution_dispatch` | `/admin/execution-mark` | Controller-only record that a provider request is about to be sent. |
 | `dispatch_execution_job` | `/admin/execution-dispatch` | Controller-only provider dispatch using the leased immutable payload. External execution occurs only here. |

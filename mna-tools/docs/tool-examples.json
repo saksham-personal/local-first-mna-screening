@@ -329,6 +329,9 @@
     "source": "search_iscc",
     "limit": 20
   },
+  "get_discarded_plans": {
+    "run_id": "R42"
+  },
   "get_open_questions": {
     "run_id": "R42",
     "company_id": "100-101",

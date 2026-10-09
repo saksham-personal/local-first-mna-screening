@@ -203,9 +203,10 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         (
             "get_evidence",
             "Read evidence with provenance, scoped to run and company",
-            "state",
+            "data",
             false,
         ),
+        ("get_discarded_plans", "List result plans discarded by an analyst in a run", "data", false),
         (
             "save_evidence",
             "Persist a claim with source provenance and confidence",
@@ -215,19 +216,19 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         (
             "get_missing_evidence",
             "Identify attributes still lacking evidence",
-            "state",
+            "data",
             false,
         ),
         (
             "search_research_memory",
             "Search persisted research in a run",
-            "state",
+            "data",
             false,
         ),
         (
             "get_previous_research",
             "Explicitly retrieve company research across runs",
-            "state",
+            "data",
             false,
         ),
         (
@@ -239,7 +240,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         (
             "get_search_history",
             "Read discovery queries and their provenance",
-            "state",
+            "data",
             false,
         ),
         (
@@ -450,7 +451,9 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                             | "fetch_url"
                             | "extract_url_context"
                     ),
-                input_schema: crate::store::input_schema(name)
+                input_schema: crate::run_control::input_schema(name)
+                    .or_else(|| crate::data::input_schema(name))
+                    .or_else(|| crate::store::input_schema(name))
                     .or_else(|| crate::search_space::input_schema(name))
                     .or_else(|| crate::context::input_schema(name))
                     .or_else(|| crate::search::input_schema(name))
@@ -582,7 +585,9 @@ impl Runtime {
             let owned_tool = tool.to_owned();
             let owned_arguments = arguments.clone();
             tokio::task::spawn_blocking(move || {
-                if crate::export_jobs::input_schema(&owned_tool).is_some() {
+                if crate::run_control::input_schema(&owned_tool).is_some() {
+                    crate::run_control::execute(&store, &owned_tool, &owned_arguments, admin)
+                } else if crate::export_jobs::input_schema(&owned_tool).is_some() {
                     exports.execute(&store, &owned_tool, &owned_arguments)
                 } else if owned_tool == "get_controller_turns" {
                     crate::controller::get_controller_turns(&store, &owned_arguments)
@@ -964,6 +969,7 @@ async fn admin(
         "mid-bundle-delete" => "delete_mid_bundle",
         "prepared-plan-approve" => "approve_prepared_plan",
         "prepared-plan-cancel" => "cancel_prepared_plan",
+        "plan-discard" => "discard_plan_results",
         "execution-lease" => "lease_execution_job",
         "execution-mark" => "mark_execution_dispatch",
         "execution-response" => "record_execution_response",
@@ -1044,6 +1050,7 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("space_sync", "/admin/space-sync"), ("space_add_to_run", "/admin/space-add-to-run"), ("space_export", "/admin/space-export"),
         ("import_company_files", "/admin/company-files"), ("approve_action_plan", "/admin/actions/approve"),
         ("approve_prepared_plan", "/admin/prepared-plan-approve"), ("cancel_prepared_plan", "/admin/prepared-plan-cancel"),
+        ("discard_plan_results", "/admin/plan-discard"),
         ("review_evidence_claim", "/admin/evidence-review"),
         ("lease_execution_job", "/admin/execution-lease"), ("mark_execution_dispatch", "/admin/execution-mark"),
         ("record_execution_response", "/admin/execution-response"), ("reserve_llmsuite_slot", "/admin/llmsuite-slot"),
@@ -1061,7 +1068,7 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("cancel_index_build", "/admin/index-build-cancel"),
         ("activate_mid_bundle", "/admin/mid-bundle-activate"),
         ("delete_mid_bundle", "/admin/mid-bundle-delete"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"run_controller_turn"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="run_controller_turn"{Some(crate::controller::turn_input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::store::input_schema(name).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::export_jobs::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"run_controller_turn"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="run_controller_turn"{Some(crate::controller::turn_input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::run_control::input_schema(name).or_else(||crate::data::input_schema(name)).or_else(||crate::store::input_schema(name)).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::export_jobs::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 

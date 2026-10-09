@@ -1631,7 +1631,7 @@
   {
     "name": "get_evidence",
     "description": "Read evidence with provenance, scoped to run and company",
-    "category": "state",
+    "category": "data",
     "mutates_state": false,
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1649,6 +1649,10 @@
         },
         "company_id": {
           "type": "string"
+        },
+        "include_discarded": {
+          "default": false,
+          "type": "boolean"
         },
         "limit": {
           "default": null,
@@ -1678,6 +1682,26 @@
         "company_id"
       ],
       "title": "EvidenceArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_discarded_plans",
+    "description": "List result plans discarded by an analyst in a run",
+    "category": "data",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunArgs",
       "type": "object"
     }
   },
@@ -1743,7 +1767,7 @@
   {
     "name": "get_missing_evidence",
     "description": "Identify attributes still lacking evidence",
-    "category": "state",
+    "category": "data",
     "mutates_state": false,
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1777,7 +1801,7 @@
   {
     "name": "search_research_memory",
     "description": "Search persisted research in a run",
-    "category": "state",
+    "category": "data",
     "mutates_state": false,
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1817,7 +1841,7 @@
   {
     "name": "get_previous_research",
     "description": "Explicitly retrieve company research across runs",
-    "category": "state",
+    "category": "data",
     "mutates_state": false,
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1885,7 +1909,7 @@
   {
     "name": "get_search_history",
     "description": "Read discovery queries and their provenance",
-    "category": "state",
+    "category": "data",
     "mutates_state": false,
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",

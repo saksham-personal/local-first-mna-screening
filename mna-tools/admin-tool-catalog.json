@@ -625,6 +625,49 @@
   },
   {
     "controller_only": false,
+    "endpoint": "/admin/plan-discard",
+    "input_schema": {
+      "$defs": {
+        "DiscardKind": {
+          "enum": [
+            "screening",
+            "research"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/DiscardKind"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id",
+        "kind"
+      ],
+      "title": "DiscardArgs",
+      "type": "object"
+    },
+    "name": "discard_plan_results"
+  },
+  {
+    "controller_only": false,
     "endpoint": "/admin/evidence-review",
     "input_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",

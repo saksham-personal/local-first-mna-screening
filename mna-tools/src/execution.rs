@@ -405,7 +405,6 @@ impl ExecutionService {
         bounded("cancelled_by", &a.cancelled_by, 160)?;
         self.store.with_connection(|conn| {let tx=conn.transaction()?;let p=load_plan(&tx,&a.plan_id)?;
             if p.status=="CANCELLED" {return Ok(json!({"plan_id":a.plan_id,"status":"CANCELLED","idempotent":true}));}
-            if p.status=="STALE" {return Err(Error::Conflict("stale plan cannot be cancelled".into()));}
             let running:i64=tx.query_row("SELECT COUNT(*) FROM execution_jobs WHERE plan_id=? AND state IN ('RUNNING','AMBIGUOUS')",[&a.plan_id],|r|r.get(0))?;
             if running>0 {return Err(Error::Conflict("dispatched jobs must be reconciled before cancellation".into()));}
             let now=timestamp(); tx.execute("UPDATE prepared_plans SET status='CANCELLED',cancelled_at=? WHERE plan_id=?",params![now,a.plan_id])?;
@@ -620,7 +619,9 @@ impl ExecutionService {
     fn progress(&self, a: PlanIdArgs) -> Result<Value> {
         self.store.with_connection(|conn| {
             let p=load_plan(conn,&a.plan_id)?;
-            let fresh=p.status=="APPROVED" && require_fresh(conn,&p).is_ok();
+            // source_fresh: the plan's source snapshot still matches (any status). fresh: also APPROVED.
+            let source_fresh=require_fresh(conn,&p).is_ok();
+            let fresh=p.status=="APPROVED" && source_fresh;
             let mut stmt=conn.prepare("SELECT job_id,ordinal,state,input_hash,attempt,repair_attempt,error_text,next_eligible_at,response_hash,lease_expires_at FROM execution_jobs WHERE plan_id=? ORDER BY ordinal")?;
             let mut jobs=Vec::new();
             for row in stmt.query_map([&a.plan_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,i64>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,Option<String>>(9)?)))? {
@@ -628,19 +629,19 @@ impl ExecutionService {
                 let retryable=fresh && state=="FAILED" && response_hash.is_none() && repair<2 && conn.query_row("SELECT COUNT(*) FROM execution_outbox WHERE job_id=? AND kind='JOB_FAILED_REJECTED' AND json_extract(payload_json,'$.attempt')=?",params![job_id,attempt],|r|r.get::<_,i64>(0))?==1;
                 jobs.push(json!({"job_id":job_id,"plan_id":a.plan_id,"ordinal":ordinal,"state":state,"input_hash":input_hash,"attempt":attempt,"error":error,"next_eligible_at":next,"retryable":retryable,"lease_expires_at":lease_expires_at,"executed":attempt>0}));
             }
-            Ok(json!({"plan_id":a.plan_id,"run_id":p.run_id,"digest":p.digest,"status":p.status,"fresh":fresh,"spec":{"provider":p.spec["provider"],"mode":p.spec["mode"],"deployment":p.spec["deployment"]},"jobs":jobs,"executed":false}))
+            Ok(json!({"plan_id":a.plan_id,"run_id":p.run_id,"digest":p.digest,"status":p.status,"fresh":fresh,"source_fresh":source_fresh,"spec":{"provider":p.spec["provider"],"mode":p.spec["mode"],"deployment":p.spec["deployment"]},"jobs":jobs,"executed":false}))
         })
     }
 
     fn assessments(&self, a: AssessmentsArgs) -> Result<Value> {
         self.store.with_connection(|conn|{
-        let mut stmt=conn.prepare("SELECT assessment_id,plan_id,job_id,company_id,row_index,provider,prompt,result_json,created_at FROM model_assessments WHERE run_id=? ORDER BY created_at,row_index")?;
+        let mut stmt=conn.prepare("SELECT assessment_id,plan_id,job_id,company_id,row_index,provider,prompt,result_json,created_at FROM model_assessments WHERE run_id=? AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) ORDER BY created_at,row_index")?;
         let mut out=Vec::new();let rows=stmt.query_map([&a.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?,r.get::<_,String>(8)?)))?;
         let mut eligibility=std::collections::HashMap::new();
         for row in rows {let(id,plan,job,company,index,provider,prompt,result,created)=row?;if a.plan_id.as_ref().is_some_and(|v|v!=&plan)||a.company_id.as_ref().is_some_and(|v|v!=&company){continue;}
             let eligible=*eligibility.entry(plan.clone()).or_insert_with(||load_plan(conn,&plan).is_ok_and(|p|p.status=="APPROVED" && require_fresh(conn,&p).is_ok()));
             out.push(json!({"assessment_id":id,"run_id":a.run_id,"plan_id":plan,"job_id":job,"company_id":company,"index":index,"provider":provider,"prompt":prompt,"result":decoded(result)?,"created_at":created,"eligible_for_current_use":eligible}));}
-        let mut answers=Vec::new();let mut answer_stmt=conn.prepare("SELECT plan_id,job_id,provider,question,answer,created_at FROM execution_question_answers WHERE run_id=? ORDER BY created_at")?;
+        let mut answers=Vec::new();let mut answer_stmt=conn.prepare("SELECT plan_id,job_id,provider,question,answer,created_at FROM execution_question_answers WHERE run_id=? AND plan_id NOT IN (SELECT plan_id FROM discarded_plans) ORDER BY created_at")?;
         for row in answer_stmt.query_map([&a.run_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {let(plan,job,provider,question,answer,created)=row?;if a.plan_id.as_ref().is_some_and(|v|v!=&plan)||a.company_id.is_some(){continue;}let eligible=*eligibility.entry(plan.clone()).or_insert_with(||load_plan(conn,&plan).is_ok_and(|p|p.status=="APPROVED" && require_fresh(conn,&p).is_ok()));answers.push(json!({"plan_id":plan,"job_id":job,"provider":provider,"question":question,"answer":answer,"created_at":created,"eligible_for_current_use":eligible}));}
         Ok(json!({"run_id":a.run_id,"assessments":out,"count":out.len(),"question_answers":answers}))})
     }
@@ -648,7 +649,7 @@ impl ExecutionService {
     fn screening_rounds(&self, a: ScreeningRoundsArgs) -> Result<Value> {
         bounded("run_id", &a.run_id, 160)?;
         self.store.with_connection(|conn| {
-            let mut stmt=conn.prepare("SELECT sr.round_no,sr.plan_id,sr.provider,sr.created_at,ppa.approved_by,p.spec_json FROM screening_rounds sr JOIN prepared_plans p ON p.plan_id=sr.plan_id JOIN prepared_plan_approvals ppa ON ppa.plan_id=sr.plan_id WHERE sr.run_id=? ORDER BY sr.round_no")?;
+            let mut stmt=conn.prepare("SELECT sr.round_no,sr.plan_id,sr.provider,sr.created_at,ppa.approved_by,p.spec_json FROM screening_rounds sr JOIN prepared_plans p ON p.plan_id=sr.plan_id JOIN prepared_plan_approvals ppa ON ppa.plan_id=sr.plan_id WHERE sr.run_id=? AND NOT EXISTS(SELECT 1 FROM discarded_plans d WHERE d.plan_id=sr.plan_id) ORDER BY sr.round_no")?;
             let mut rounds=Vec::new();
             for row in stmt.query_map([&a.run_id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {
                 let(round_no,plan_id,provider,created_at,approved_by,spec_json)=row?;
