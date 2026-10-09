@@ -573,11 +573,13 @@ fn browse_paging_sort_and_limits_work_without_meili() {
         .contains("Meilisearch is not running"));
 }
 #[test]
-fn semantic_streams_compatible_vectors_and_skips_unavailable() {
+fn semantic_cache_matches_streaming_compatible_vectors_and_skips_unavailable() {
     let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let f = Fixture::new(4);
     let rt = rt();
     let space = SearchSpace::new(f.store.clone()).unwrap();
+    let mut streaming_space = SearchSpace::new(f.store.clone()).unwrap();
+    streaming_space.set_semantic_cache_limit_for_test(1);
     let skipped = rt
         .block_on(space.execute("space_search_semantic", &json!({"text":"claims"})))
         .unwrap();
@@ -604,6 +606,24 @@ fn semantic_streams_compatible_vectors_and_skips_unavailable() {
             &json!({"text":"claims","offset":1,"limit":1}),
         ))
         .unwrap();
+    let cached_all = rt
+        .block_on(space.execute(
+            "space_search_semantic",
+            &json!({"text":"claims","limit":10}),
+        ))
+        .unwrap();
+    let streaming_all = rt
+        .block_on(streaming_space.execute(
+            "space_search_semantic",
+            &json!({"text":"claims","limit":10}),
+        ))
+        .unwrap();
+    assert_eq!(cached_all["results"], streaming_all["results"]);
+    assert_eq!(cached_all["total"], streaming_all["total"]);
+    assert_eq!(
+        cached_all["missing_vectors"],
+        streaming_all["missing_vectors"]
+    );
     assert_eq!(found["total"], 2);
     assert_eq!(ids(&found), vec!["E2-C2"]);
     assert_eq!(found["results"][0]["score"], 7.1);
@@ -628,6 +648,125 @@ fn semantic_streams_compatible_vectors_and_skips_unavailable() {
         ))
         .unwrap();
     assert_eq!(export["rows"], 2);
+    server.abort();
+}
+
+#[test]
+fn semantic_cache_rebuilds_when_a_vector_changes() {
+    let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new(4);
+    let rt = rt();
+    let space = SearchSpace::new(f.store.clone()).unwrap();
+    let (server,) = rt.block_on(async {
+        async fn embed(Json(v): Json<Value>) -> Json<Value> {
+            Json(json!({"model":v["model"],"version":v["version"],"dimensions":2,"vectors":[[1.0,0.0]]}))
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::env::set_var(
+            "MNA_EMBED_ENDPOINT",
+            format!("http://{}/embed", listener.local_addr().unwrap()),
+        );
+        (tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/embed", post(embed)))
+                .await
+                .unwrap()
+        }),)
+    });
+    std::env::set_var("MNA_EMBED_MODEL", "fixture");
+    std::env::set_var("MNA_EMBED_VERSION", "1");
+    std::env::set_var("MNA_EMBED_DIMENSIONS", "2");
+    f.store
+        .with_connection(|c| {
+            c.execute("UPDATE mid_bundles SET semantic_status='ready'", [])?;
+            for (id, vector) in [
+                ("E1-C1", vec![1.0f32, 0.0]),
+                ("E2-C2", vec![1.0, 1.0]),
+            ] {
+                let hash: String = c.query_row(
+                    "SELECT desc_hash FROM mid_rows WHERE company_id=?",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                let blob = vector.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>();
+                c.execute(
+                    "INSERT INTO embedding_vectors(company_id,model,model_version,dimensions,text_hash,vector_blob,created_at) VALUES(?,'fixture','1',2,?,?,datetime('now'))",
+                    params![id, hash, blob],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let before = rt
+        .block_on(space.execute("space_search_semantic", &json!({"text":"claims","limit":2})))
+        .unwrap();
+    assert_eq!(ids(&before), vec!["E1-C1", "E2-C2"]);
+    f.store
+        .with_connection(|c| {
+            let blob = [0.0f32, 1.0]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>();
+            c.execute(
+                "UPDATE embedding_vectors SET vector_blob=?,created_at='9999-12-31T23:59:59.999Z' WHERE company_id='E1-C1' AND model='fixture' AND model_version='1'",
+                [blob],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let after = rt
+        .block_on(space.execute("space_search_semantic", &json!({"text":"claims","limit":2})))
+        .unwrap();
+    assert_eq!(ids(&after), vec!["E2-C2", "E1-C1"]);
+    assert_eq!(after["results"][0]["score"], 7.1);
+    server.abort();
+}
+
+#[test]
+fn semantic_cache_five_thousand_vector_timing() {
+    let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new(5_000);
+    let rt = rt();
+    let (server,) = rt.block_on(async {
+        async fn embed(Json(v): Json<Value>) -> Json<Value> {
+            Json(json!({"model":v["model"],"version":v["version"],"dimensions":2,"vectors":[[1.0,0.0]]}))
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::env::set_var(
+            "MNA_EMBED_ENDPOINT",
+            format!("http://{}/embed", listener.local_addr().unwrap()),
+        );
+        (tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/embed", post(embed)))
+                .await
+                .unwrap()
+        }),)
+    });
+    std::env::set_var("MNA_EMBED_MODEL", "fixture");
+    std::env::set_var("MNA_EMBED_VERSION", "1");
+    std::env::set_var("MNA_EMBED_DIMENSIONS", "2");
+    f.store
+        .with_connection(|c| {
+            c.execute("UPDATE mid_bundles SET semantic_status='ready'", [])?;
+            c.execute(
+                "INSERT INTO embedding_vectors(company_id,model,model_version,dimensions,text_hash,vector_blob,created_at) SELECT r.company_id,'fixture','1',2,r.desc_hash,?,'2026-01-01T00:00:00.000Z' FROM mid_rows r WHERE r.bundle_id=(SELECT bundle_id FROM mid_bundles WHERE status='active')",
+                [[1.0f32, 0.0]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let space = SearchSpace::new(f.store.clone()).unwrap();
+    let started = Instant::now();
+    let result = rt
+        .block_on(space.execute("space_search_semantic", &json!({"text":"claims","limit":1})))
+        .unwrap();
+    let elapsed = started.elapsed();
+    println!("semantic cache 5,000-vector fixture: {elapsed:?}");
+    assert_eq!(result["total"], 5_000);
+    assert!(elapsed < Duration::from_secs(10), "search took {elapsed:?}");
     server.abort();
 }
 #[test]

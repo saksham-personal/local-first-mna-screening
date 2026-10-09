@@ -23,8 +23,13 @@ use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap},
     io::Cursor,
     path::PathBuf,
+    sync::{Arc, Mutex},
     time::Duration,
 };
+
+/// Caps the active semantic-vector cache at 1 GB (about 325k 768D vectors);
+/// searches above the cap trade memory savings for the existing SQLite stream.
+const SEMANTIC_CACHE_MAX_BYTES: usize = 1_000_000_000;
 
 #[derive(Clone)]
 pub struct SearchSpace {
@@ -32,7 +37,35 @@ pub struct SearchSpace {
     search: SearchEngine,
     sync_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     sync_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    semantic_cache: Arc<Mutex<Option<Arc<SemanticCache>>>>,
+    semantic_cache_max_bytes: usize,
 }
+
+#[derive(Clone, PartialEq, Eq)]
+struct SemanticCacheKey {
+    bundle_id: String,
+    model: String,
+    model_version: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SemanticCacheFingerprint {
+    vector_count: usize,
+    max_created_at: Option<String>,
+}
+
+struct SemanticCache {
+    key: SemanticCacheKey,
+    fingerprint: SemanticCacheFingerprint,
+    dimensions: usize,
+    vectors: Vec<f32>,
+    norms: Vec<f64>,
+    ids: Vec<String>,
+    names: Vec<String>,
+    missing: usize,
+    estimated_bytes: usize,
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
@@ -259,7 +292,13 @@ impl SearchSpace {
             store,
             sync_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             sync_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            semantic_cache: Arc::new(Mutex::new(None)),
+            semantic_cache_max_bytes: SEMANTIC_CACHE_MAX_BYTES,
         })
+    }
+    #[doc(hidden)]
+    pub fn set_semantic_cache_limit_for_test(&mut self, max_bytes: usize) {
+        self.semantic_cache_max_bytes = max_bytes;
     }
     pub async fn execute(&self, tool: &str, arguments: &Value) -> Result<Value> {
         let bundle = active(&self.store)?;
@@ -305,6 +344,53 @@ impl SearchSpace {
         let record = self.store.record_search(None, source, query, args, &json!({"total":result["total"],"status":result["status"],"bundle_id":result["bundle_id"]}))?;
         result["query_id"] = record["query_id"].clone();
         Ok(())
+    }
+    fn visit_semantic_cached(
+        &self,
+        bundle: &Bundle,
+        context: &SemanticContext,
+        visit: impl FnMut(SemanticHit) -> Result<()>,
+    ) -> Result<SemanticTotals> {
+        let key = SemanticCacheKey {
+            bundle_id: bundle.id.clone(),
+            model: context.model.model.clone(),
+            model_version: context.model.version.clone(),
+        };
+        let fingerprint = semantic_cache_fingerprint(&self.store, bundle, context)?;
+        let cache = {
+            let mut slot = self
+                .semantic_cache
+                .lock()
+                .map_err(|_| Error::Internal("semantic cache lock poisoned".into()))?;
+            if let Some(cache) = slot.as_ref().filter(|cache| {
+                cache.key == key
+                    && cache.fingerprint == fingerprint
+                    && cache.estimated_bytes <= self.semantic_cache_max_bytes
+            }) {
+                Some(Arc::clone(cache))
+            } else {
+                *slot = None;
+                if let Some(cache) = build_semantic_cache(
+                    &self.store,
+                    bundle,
+                    context,
+                    key,
+                    fingerprint,
+                    self.semantic_cache_max_bytes,
+                )? {
+                    let cache = Arc::new(cache);
+                    *slot = Some(Arc::clone(&cache));
+                    Some(cache)
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(cache) = cache {
+            visit_semantic_cache(&cache, context, visit)
+        } else {
+            visit_semantic(&self.store, bundle, context, visit)
+        }
     }
     fn url(&self, path: &str) -> Result<String> {
         Ok(format!(
@@ -665,7 +751,7 @@ impl SearchSpace {
             }
         };
         let mut heap = BinaryHeap::new();
-        let total = visit_semantic(&self.store, bundle, &context, |hit| {
+        let total = self.visit_semantic_cached(bundle, &context, |hit| {
             heap.push(Reverse(hit));
             if heap.len() > k {
                 heap.pop();
@@ -885,7 +971,7 @@ impl SearchSpace {
                     .map_err(Error::ProviderUnavailable)?;
                 let columns = export_columns(bundle, &["score", "cosine"]);
                 write_headers(sheet, &columns)?;
-                let totals = visit_semantic(&self.store, bundle, &context, |hit| {
+                let totals = self.visit_semantic_cached(bundle, &context, |hit| {
                     written += 1;
                     write_row(
                         sheet,
@@ -1203,6 +1289,257 @@ impl Ord for SemanticHit {
             .then_with(|| other.id.cmp(&self.id))
     }
 }
+
+type SemanticDbRow = (
+    i64,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<Vec<u8>>,
+);
+
+fn semantic_cache_fingerprint(
+    store: &Store,
+    bundle: &Bundle,
+    context: &SemanticContext,
+) -> Result<SemanticCacheFingerprint> {
+    store.with_connection(|c| {
+        let (count, max_created_at): (i64, Option<String>) = c.query_row(
+            "SELECT COUNT(e.company_id),MAX(e.created_at) FROM mid_rows r LEFT JOIN embedding_vectors e ON e.company_id=r.company_id AND e.model=? AND e.model_version=? WHERE r.bundle_id=?",
+            params![context.model.model, context.model.version, bundle.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(SemanticCacheFingerprint {
+            vector_count: count.max(0) as usize,
+            max_created_at,
+        })
+    })
+}
+
+fn semantic_page(
+    store: &Store,
+    bundle: &Bundle,
+    context: &SemanticContext,
+    after: i64,
+) -> Result<Vec<SemanticDbRow>> {
+    store.with_connection(|c| {
+        let mut stmt = c.prepare("SELECT r.row_no,r.company_id,c.name,r.desc_hash,e.text_hash,e.dimensions,e.vector_blob FROM mid_rows r JOIN companies c USING(company_id) LEFT JOIN embedding_vectors e ON e.company_id=r.company_id AND e.model=? AND e.model_version=? WHERE r.bundle_id=? AND r.row_no>? ORDER BY r.row_no LIMIT 256")?;
+        let rows = stmt.query_map(
+            params![context.model.model, context.model.version, bundle.id, after],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            },
+        )?.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
+
+fn valid_semantic_vector(
+    row: &SemanticDbRow,
+    model: &retrieval::ModelIdentity,
+) -> Option<Vec<f32>> {
+    let vector = row
+        .6
+        .as_ref()
+        .filter(|v| v.len() == model.dimensions * 4)
+        .map(|v| {
+            v.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect::<Vec<_>>()
+        });
+    if row.5 != Some(model.dimensions as i64)
+        || row.4.as_ref() != Some(&row.3)
+        || vector
+            .as_ref()
+            .is_none_or(|v| retrieval::validate_vector(v, model).is_err())
+    {
+        return None;
+    }
+    vector
+}
+
+fn semantic_norm(vector: &[f32]) -> f64 {
+    vector
+        .iter()
+        .map(|n| f64::from(*n).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
+fn semantic_hit(
+    id: String,
+    name: String,
+    vector: &[f32],
+    query: &[f32],
+    norm_vector: f64,
+    norm_query: f64,
+) -> SemanticHit {
+    let dot = vector
+        .iter()
+        .zip(query)
+        .map(|(a, b)| f64::from(*a) * f64::from(*b))
+        .sum::<f64>();
+    let cosine = (dot / (norm_vector * norm_query)).clamp(-1.0, 1.0);
+    let score = (100.0 * cosine.max(0.0)).round() / 10.0;
+    SemanticHit {
+        id,
+        name,
+        cosine,
+        score,
+    }
+}
+
+fn semantic_cache_fixed_bytes(vector_count: usize, dimensions: usize) -> Option<usize> {
+    let vector_bytes = vector_count
+        .checked_mul(dimensions)?
+        .checked_mul(std::mem::size_of::<f32>())?;
+    let metadata_bytes =
+        vector_count.checked_mul(std::mem::size_of::<f64>() + 2 * std::mem::size_of::<String>())?;
+    vector_bytes.checked_add(metadata_bytes)
+}
+
+fn build_semantic_cache(
+    store: &Store,
+    bundle: &Bundle,
+    context: &SemanticContext,
+    key: SemanticCacheKey,
+    fingerprint: SemanticCacheFingerprint,
+    max_bytes: usize,
+) -> Result<Option<SemanticCache>> {
+    // The cache uses raw vectors and norms so the memory cap includes the row-major
+    // f32 matrix, f64 norms, String slots, and stored identifier/name text.
+    // Keeping this memory saves repeated SQLite reads at the cost of up to 1 GB
+    // per active SearchSpace; oversized bundles retain the streaming behavior.
+    if semantic_cache_fixed_bytes(fingerprint.vector_count, context.model.dimensions)
+        .is_none_or(|bytes| bytes > max_bytes)
+    {
+        return Ok(None);
+    }
+    let vector_capacity = match fingerprint
+        .vector_count
+        .checked_mul(context.model.dimensions)
+    {
+        Some(capacity) => capacity,
+        None => return Ok(None),
+    };
+    let mut vectors = Vec::new();
+    let mut norms = Vec::new();
+    let mut ids = Vec::new();
+    let mut names = Vec::new();
+    if vectors.try_reserve_exact(vector_capacity).is_err()
+        || norms.try_reserve_exact(fingerprint.vector_count).is_err()
+        || ids.try_reserve_exact(fingerprint.vector_count).is_err()
+        || names.try_reserve_exact(fingerprint.vector_count).is_err()
+    {
+        return Ok(None);
+    }
+    let allocated_bytes = vectors
+        .capacity()
+        .checked_mul(std::mem::size_of::<f32>())
+        .and_then(|bytes| {
+            norms
+                .capacity()
+                .checked_mul(std::mem::size_of::<f64>())
+                .and_then(|norm_bytes| bytes.checked_add(norm_bytes))
+        })
+        .and_then(|bytes| {
+            ids.capacity()
+                .checked_add(names.capacity())
+                .and_then(|count| count.checked_mul(std::mem::size_of::<String>()))
+                .and_then(|string_bytes| bytes.checked_add(string_bytes))
+        });
+    let Some(allocated_bytes) = allocated_bytes.filter(|bytes| *bytes <= max_bytes) else {
+        return Ok(None);
+    };
+
+    let mut cache = SemanticCache {
+        key,
+        fingerprint,
+        dimensions: context.model.dimensions,
+        vectors,
+        norms,
+        ids,
+        names,
+        missing: 0,
+        estimated_bytes: allocated_bytes,
+    };
+    let mut string_bytes = 0usize;
+    let mut cursor = 0;
+    loop {
+        let rows = semantic_page(store, bundle, context, cursor)?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            cursor = row.0;
+            let Some(vector) = valid_semantic_vector(&row, &context.model) else {
+                cache.missing += 1;
+                continue;
+            };
+            let additional_string_bytes = row.1.capacity().checked_add(row.2.capacity());
+            let Some(projected_bytes) = additional_string_bytes
+                .and_then(|bytes| string_bytes.checked_add(bytes))
+                .and_then(|bytes| allocated_bytes.checked_add(bytes))
+            else {
+                return Ok(None);
+            };
+            if projected_bytes > max_bytes {
+                return Ok(None);
+            }
+            string_bytes += additional_string_bytes.expect("checked string bytes");
+            cache.norms.push(semantic_norm(&vector));
+            cache.vectors.extend_from_slice(&vector);
+            cache.ids.push(row.1);
+            cache.names.push(row.2);
+        }
+    }
+    cache.estimated_bytes = allocated_bytes + string_bytes;
+    Ok(Some(cache))
+}
+
+fn visit_semantic_cache(
+    cache: &SemanticCache,
+    context: &SemanticContext,
+    mut visit: impl FnMut(SemanticHit) -> Result<()>,
+) -> Result<SemanticTotals> {
+    let mut totals = SemanticTotals {
+        valid: cache.norms.len(),
+        missing: cache.missing,
+        matched: 0,
+    };
+    let norm_query = semantic_norm(&context.query);
+    for index in 0..cache.norms.len() {
+        let start = index * cache.dimensions;
+        let vector = &cache.vectors[start..start + cache.dimensions];
+        let hit = semantic_hit(
+            cache.ids[index].clone(),
+            cache.names[index].clone(),
+            vector,
+            &context.query,
+            cache.norms[index],
+            norm_query,
+        );
+        if hit.score < context.min {
+            continue;
+        }
+        totals.matched += 1;
+        visit(hit)?;
+    }
+    Ok(totals)
+}
+
 fn visit_semantic(
     store: &Store,
     bundle: &Bundle,
@@ -1215,55 +1552,31 @@ fn visit_semantic(
         missing: 0,
         matched: 0,
     };
-    let norm = |v: &[f32]| v.iter().map(|n| f64::from(*n).powi(2)).sum::<f64>().sqrt();
     loop {
-        let rows = store.with_connection(|c| {
-            let mut stmt = c.prepare("SELECT r.row_no,r.company_id,c.name,r.desc_hash,e.text_hash,e.dimensions,e.vector_blob FROM mid_rows r JOIN companies c USING(company_id) LEFT JOIN embedding_vectors e ON e.company_id=r.company_id AND e.model=? AND e.model_version=? WHERE r.bundle_id=? AND r.row_no>? ORDER BY r.row_no LIMIT 256")?;
-            let rows = stmt.query_map(params![context.model.model,context.model.version,bundle.id,cursor],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<i64>>(5)?,r.get::<_,Option<Vec<u8>>>(6)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
-            Ok(rows)
-        })?;
+        let rows = semantic_page(store, bundle, context, cursor)?;
         if rows.is_empty() {
             break;
         }
-        for (row_no, id, name, hash, vector_hash, dimensions, blob) in rows {
-            cursor = row_no;
-            let vector = blob
-                .filter(|v| v.len() == context.model.dimensions * 4)
-                .map(|v| {
-                    v.as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|b| f32::from_le_bytes(*b))
-                        .collect::<Vec<_>>()
-                });
-            if dimensions != Some(context.model.dimensions as i64)
-                || vector_hash.as_ref() != Some(&hash)
-                || vector
-                    .as_ref()
-                    .is_none_or(|v| retrieval::validate_vector(v, &context.model).is_err())
-            {
+        for row in rows {
+            cursor = row.0;
+            let Some(vector) = valid_semantic_vector(&row, &context.model) else {
                 totals.missing += 1;
                 continue;
-            }
-            let vector = vector.expect("validated vector");
-            let dot = vector
-                .iter()
-                .zip(&context.query)
-                .map(|(a, b)| f64::from(*a) * f64::from(*b))
-                .sum::<f64>();
-            let cosine = (dot / (norm(&vector) * norm(&context.query))).clamp(-1.0, 1.0);
-            let score = (100.0 * cosine.max(0.0)).round() / 10.0;
+            };
             totals.valid += 1;
-            if score < context.min {
+            let hit = semantic_hit(
+                row.1,
+                row.2,
+                &vector,
+                &context.query,
+                semantic_norm(&vector),
+                semantic_norm(&context.query),
+            );
+            if hit.score < context.min {
                 continue;
             }
             totals.matched += 1;
-            visit(SemanticHit {
-                id,
-                name,
-                cosine,
-                score,
-            })?;
+            visit(hit)?;
         }
     }
     Ok(totals)
