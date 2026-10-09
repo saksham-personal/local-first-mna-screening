@@ -148,8 +148,18 @@ export function createDurableScreeningPreparation({ call, now = () => Date.now()
       const data = { rows: page.rows, catalog: buildCatalog(page.rows), expires: now() + PREVIEW_TTL };
       data.catalog.total = context.considered_count;
       // Coverage is run-wide: hydration need not be in the five sampled companies.
-      for (const source of data.catalog.sources) if (Number.isSafeInteger(context.coverage?.[source.source])) {
-        source.companyCount = context.coverage[source.source];
+      // MID, ISCC and earlier screening results are also counted run-wide, so the setup never
+      // hides a source just because the sampled companies lack it.
+      const coverage = { ...(context.coverage ?? {}) };
+      if (id) {
+        const summary = await traced("get_discovery_summary", { run_id: id }).catch(() => undefined);
+        if (Number.isSafeInteger(summary?.mid_only) && Number.isSafeInteger(summary?.both)) coverage.MID = summary.mid_only + summary.both;
+        if (Number.isSafeInteger(summary?.iscc_only) && Number.isSafeInteger(summary?.both)) coverage.ISCC = summary.iscc_only + summary.both;
+        const rounds = await traced("get_screening_rounds", { run_id: id }).catch(() => undefined);
+        if (Array.isArray(rounds?.rounds)) coverage.RESULTS = rounds.rounds.length ? context.considered_count : 0;
+      }
+      for (const source of data.catalog.sources) if (Number.isSafeInteger(coverage[source.source])) {
+        source.companyCount = coverage[source.source];
         source.hydrated = source.companyCount > 0;
       }
       catalogs.set(id, data);

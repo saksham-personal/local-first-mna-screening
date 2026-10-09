@@ -34,6 +34,7 @@ import { hasPitchBookData, type SetupBuild } from "../lib/screening-client";
 import HelpTip from "../ui/HelpTip";
 import { plural } from "../lib/format";
 import ColumnChips from "./ColumnChips";
+import { IDENTITY_ORDER, availableSources, withAvailableSources } from "./source-availability";
 import "./screening-setup.css";
 
 type Props = {
@@ -58,8 +59,6 @@ type Props = {
   onInvalidateBuild?: () => void;
 };
 
-const SOURCES: DataSource[] = ["MID", "ISCC", "PB", "ROGO", "RESULTS", "BING"];
-const IDENTITY_SOURCES: DataSource[] = ["PB", "MID", "ISCC"];
 const IDENTITY_LABELS: { key: keyof IdentitySources; label: string }[] = [
   { key: "name", label: "Company name" },
   { key: "website", label: "Website" },
@@ -76,26 +75,20 @@ function unique(values: string[]) {
   });
 }
 
-function normalized(config: ScreeningConfig): ScreeningConfig {
-  const sources = {} as IdentitySources;
-  for (const { key } of IDENTITY_LABELS) {
-    sources[key] = IDENTITY_SOURCES.filter((source) =>
-      config.identitySources[key].includes(source),
-    );
-  }
+function normalized(config: ScreeningConfig, available: readonly DataSource[]): ScreeningConfig {
+  const limited = withAvailableSources(config, available);
   return {
-    ...config,
+    ...limited,
     model: config.model,
     batchSize: syncBatchSize(config.provider, config.batchSize),
     inputColumns: [
       "index",
-      ...unique(config.inputColumns).filter((column) => column.toLocaleLowerCase() !== "index"),
+      ...unique(limited.inputColumns).filter((column) => column.toLocaleLowerCase() !== "index"),
     ],
     outputColumns: [
       "index",
       ...unique(config.outputColumns).filter((column) => column.toLocaleLowerCase() !== "index"),
     ],
-    identitySources: sources,
   };
 }
 
@@ -127,8 +120,11 @@ export default function ScreeningSetup({
   onInvalidateBuild,
 }: Props) {
   const headingId = useId();
+  // Only sources with data for this run are offered in setup. Saved references to other sources are dropped.
+  const available = availableSources(catalog);
+  const identityOptions = IDENTITY_ORDER.filter((source) => available.includes(source));
   const offerLinkedIn = hasPitchBookData(catalog);
-  const keepLinkedIn = provider === "copilot" && catalog.sources.some(source => source.source === "PB" && source.fields.some(field => /linkedin/i.test(field.id) && field.count > 0));
+  const keepLinkedIn = provider === "copilot" && available.includes("PB") && catalog.sources.some(source => source.source === "PB" && source.fields.some(field => /linkedin/i.test(field.id) && field.count > 0));
   const [config, setConfig] = useState<ScreeningConfig>(() => {
     const config = normalized(
       (initialConfig && { ...initialConfig, request: initialConfig.request ?? initialPrompt ?? "" }) ||
@@ -138,10 +134,11 @@ export default function ScreeningSetup({
           criteriaText,
           initialPrompt,
         ),
+      available,
     );
     config.model = selectedModel(models, config.model);
     if (!initialConfig) config.batchSize = defaultBatchSize(provider);
-    if (!initialConfig) config.inputColumns = [...config.inputColumns, ...catalog.sources.filter(source => source.source === "BING" || source.source === "RESULTS").flatMap(source => source.fields.map(field => field.id))];
+    if (!initialConfig) config.inputColumns = [...config.inputColumns, ...catalog.sources.filter(source => (source.source === "BING" || source.source === "RESULTS") && available.includes(source.source)).flatMap(source => source.fields.map(field => field.id))];
     if (keepLinkedIn && !config.inputColumns.includes("LinkedIn URL")) config.inputColumns.push("LinkedIn URL");
     if (!offerLinkedIn) config.inputColumns = config.inputColumns.filter(column => column !== "LinkedIn URL");
     return config;
@@ -150,6 +147,8 @@ export default function ScreeningSetup({
   // The number box keeps what the analyst types (even empty) until it is valid or loses focus.
   const [batchDraft, setBatchDraft] = useState<string | null>(null);
   const [pickerSource, setPickerSource] = useState<DataSource>("MID");
+  // The picker opens on the first available source when the remembered one is not offered.
+  const activePicker: DataSource | undefined = available.includes(pickerSource) ? pickerSource : available[0];
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploadError, setUploadError] = useState("");
   const [uploadSuccess, setUploadSuccess] = useState("");
@@ -167,7 +166,7 @@ export default function ScreeningSetup({
   const fileInput = useRef<HTMLInputElement>(null);
   const busy = previewing || approving;
   const selectedSource = catalog.sources.find(
-    (source) => source.source === pickerSource,
+    (source) => source.source === activePicker,
   );
   const catalogSignature = JSON.stringify(catalog);
 
@@ -175,7 +174,7 @@ export default function ScreeningSetup({
     onInvalidateBuild?.();
     if (keepLinkedIn && !next.inputColumns.includes("LinkedIn URL")) next = { ...next, inputColumns: [...next.inputColumns, "LinkedIn URL"] };
     version.current += 1;
-    setConfig(normalized(next));
+    setConfig(normalized(next, available));
     setPreview(null);
     setError("");
   };
@@ -183,7 +182,14 @@ export default function ScreeningSetup({
   useEffect(() => {
     version.current += 1;
     setPreview(null);
-    if (keepLinkedIn) setConfig(current => current.inputColumns.includes("LinkedIn URL") ? current : { ...current, inputColumns: [...current.inputColumns, "LinkedIn URL"] });
+    // A catalog change can hide a source that the setup still names. Drop it without an error.
+    setConfig((current) => {
+      const limited = withAvailableSources(current, available);
+      const next = keepLinkedIn && !limited.inputColumns.includes("LinkedIn URL")
+        ? { ...limited, inputColumns: [...limited.inputColumns, "LinkedIn URL"] }
+        : limited;
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
   }, [catalogSignature]);
 
   useEffect(() => {
@@ -203,6 +209,8 @@ export default function ScreeningSetup({
   const firstBuild = useRef(true);
   const configRef = useRef(config);
   configRef.current = config;
+  const availableRef = useRef(available);
+  availableRef.current = available;
   const [buildingPrompt, setBuildingPrompt] = useState(false);
 
   const rebuildPrompt = async (manual: boolean) => {
@@ -211,13 +219,13 @@ export default function ScreeningSetup({
     setBuildingPrompt(true);
     if (manual) setPromptNotice("");
     try {
-      const prompt = await onBuildPrompt(normalized(configRef.current));
+      const prompt = await onBuildPrompt(normalized(configRef.current, availableRef.current));
       if (token !== buildToken.current) return;
       promptEdited.current = false;
       onInvalidateBuild?.();
       version.current += 1;
       setPreview(null);
-      setConfig((current) => normalized({ ...current, prompt }));
+      setConfig((current) => normalized({ ...current, prompt }, availableRef.current));
       if (manual) setPromptNotice("Prompt rebuilt from the criteria.");
     } catch (caught) {
       if (token === buildToken.current) setPromptNotice(`Using the built-in template. ${errorMessage(caught)}`);
@@ -253,7 +261,7 @@ export default function ScreeningSetup({
     setGeneratingPrompt(true);
     setPromptNotice("");
     try {
-      const result = await onGeneratePrompt(normalized(config));
+      const result = await onGeneratePrompt(normalized(config, available));
       if (currentVersion !== version.current) return;
       if (!result.executed || !result.text?.trim()) {
         setPromptNotice(result.message || "Prompt generation is unavailable right now.");
@@ -295,7 +303,7 @@ export default function ScreeningSetup({
 
   const runPreview = async () => {
     const currentVersion = version.current;
-    const draft = normalized(config);
+    const draft = normalized(config, available);
     setPreviewing(true);
     setError("");
     try {
@@ -315,7 +323,7 @@ export default function ScreeningSetup({
     setApproving(true);
     setError("");
     try {
-      await onApprove(normalized(config), preview.value);
+      await onApprove(normalized(config, available), preview.value);
       onClose();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -342,11 +350,11 @@ export default function ScreeningSetup({
   };
 
   const upload = async (files = pendingFiles) => {
-    if (!files.length) return;
+    if (!files.length || (activePicker !== "PB" && activePicker !== "ROGO")) return;
     setUploading(true);
     setUploadError("");
     try {
-      await onHydrate(files, pickerSource);
+      await onHydrate(files, activePicker);
       setPendingFiles([]);
       setUploadSuccess(
         "Data added. Source coverage is updated; use /data in chat to view the table.",
@@ -696,48 +704,56 @@ export default function ScreeningSetup({
                     </button>
                   </Dialog.Close>
                 </header>
-                <div
-                  className="ss-source-tabs"
-                  role="group"
-                  aria-label="Data source"
-                >
-                  {SOURCES.map((source) => {
-                    const item = catalog.sources.find(
-                      (entry) => entry.source === source,
-                    );
-                    return (
-                      <button
-                        type="button"
-                        aria-pressed={pickerSource === source}
-                        className={pickerSource === source ? "is-selected" : ""}
-                        key={source}
-                        onClick={() => {
-                          setPickerSource(source);
-                          setPendingFiles([]);
-                          setUploadError("");
-                          setUploadSuccess("");
-                        }}
-                      >
-                        {source === "RESULTS" ? "Saved results" : source === "BING" ? "Bing research" : source}
-                        <small>
-                          {item?.hydrated
-                            ? plural(item.companyCount, "company", "companies")
-                            : "No data"}
-                        </small>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="ss-picker-scroll">
-                  <div className="ss-source-summary">
-                    <strong>{selectedSource?.label ?? pickerSource}</strong>
-                    <span>
-                      {selectedSource?.hydrated
-                        ? `${plural(selectedSource.companyCount, "company", "companies")} available`
-                        : "No saved data for this source"}
-                    </span>
+                {available.length > 0 && (
+                  <div
+                    className="ss-source-tabs"
+                    role="group"
+                    aria-label="Data source"
+                  >
+                    {available.map((source) => {
+                      const item = catalog.sources.find(
+                        (entry) => entry.source === source,
+                      );
+                      return (
+                        <button
+                          type="button"
+                          aria-pressed={activePicker === source}
+                          className={activePicker === source ? "is-selected" : ""}
+                          key={source}
+                          onClick={() => {
+                            setPickerSource(source);
+                            setPendingFiles([]);
+                            setUploadError("");
+                            setUploadSuccess("");
+                          }}
+                        >
+                          {source === "RESULTS" ? "Saved results" : source === "BING" ? "Bing research" : source}
+                          <small>
+                            {typeof item?.companyCount === "number" && item.companyCount > 0
+                              ? plural(item.companyCount, "company", "companies")
+                              : "Available"}
+                          </small>
+                        </button>
+                      );
+                    })}
                   </div>
-                  {(selectedSource?.fields.length ?? 0) > 0 ? (
+                )}
+                <div className="ss-picker-scroll">
+                  {activePicker ? (
+                    <div className="ss-source-summary">
+                      <strong>{selectedSource?.label ?? activePicker}</strong>
+                      <span>
+                        {typeof selectedSource?.companyCount === "number" && selectedSource.companyCount > 0
+                          ? `${plural(selectedSource.companyCount, "company", "companies")} available`
+                          : "Data available for this run"}
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="ss-empty">
+                      No source has data for this run yet. Add company data in chat, then reopen setup.
+                    </p>
+                  )}
+                  {activePicker && ((selectedSource?.fields.length ?? 0) > 0 ? (
                     <fieldset className="ss-fieldset">
                       <legend>Raw fields</legend>
                       <div className="ss-field-list">
@@ -765,39 +781,41 @@ export default function ScreeningSetup({
                     <p className="ss-empty">
                       No raw fields are available from this source yet.
                     </p>
-                  )}
-                  <fieldset className="ss-fieldset">
-                    <legend>Company details <HelpTip label="How company details are built">Name and website use the first available PB, MID, then ISCC value. Descriptions combine selected sources in that order and label each source.</HelpTip></legend>
-                    {offerLinkedIn && <label className="ss-field-option"><input type="checkbox" checked={config.inputColumns.includes("LinkedIn URL")} disabled={keepLinkedIn} onChange={() => toggleInput("LinkedIn URL")} /><span>LinkedIn URL · PitchBook</span></label>}
-                    <div className="ss-identity-grid">
-                      {IDENTITY_LABELS.map(({ key, label }) => (
-                        <div key={key}>
-                          <strong>{label}</strong>
-                          <div>
-                            {IDENTITY_SOURCES.map((source) => (
-                              <label key={source}>
-                                <input
-                                  type="checkbox"
-                                  checked={config.identitySources[key].includes(
-                                    source,
-                                  )}
-                                  onChange={() => toggleIdentity(key, source)}
-                                />
-                                {source}
-                              </label>
-                            ))}
+                  ))}
+                  {identityOptions.length > 0 && (
+                    <fieldset className="ss-fieldset">
+                      <legend>Company details <HelpTip label="How company details are built">Name and website use the first selected source, in the order shown, that has a value. Descriptions combine the selected sources in that order and label each source.</HelpTip></legend>
+                      {offerLinkedIn && <label className="ss-field-option"><input type="checkbox" checked={config.inputColumns.includes("LinkedIn URL")} disabled={keepLinkedIn} onChange={() => toggleInput("LinkedIn URL")} /><span>LinkedIn URL · PitchBook</span></label>}
+                      <div className="ss-identity-grid">
+                        {IDENTITY_LABELS.map(({ key, label }) => (
+                          <div key={key}>
+                            <strong>{label}</strong>
+                            <div>
+                              {identityOptions.map((source) => (
+                                <label key={source}>
+                                  <input
+                                    type="checkbox"
+                                    checked={config.identitySources[key].includes(
+                                      source,
+                                    )}
+                                    onChange={() => toggleIdentity(key, source)}
+                                  />
+                                  {source}
+                                </label>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  </fieldset>
-                  {(pickerSource === "PB" || pickerSource === "ROGO") && (
+                        ))}
+                      </div>
+                    </fieldset>
+                  )}
+                  {(activePicker === "PB" || activePicker === "ROGO") && (
                     <section
                       className="ss-upload"
-                      aria-label={`${pickerSource} upload`}
+                      aria-label={`${activePicker} upload`}
                     >
                       <h3>
-                        <FileSpreadsheet size={17} /> Add {pickerSource === "PB" ? "PitchBook data" : "ROGO data"}
+                        <FileSpreadsheet size={17} /> Add {activePicker === "PB" ? "PitchBook data" : "ROGO data"}
                       </h3>
                       <p>Select CSV or XLSX files, then upload them to add data.</p>
                       <div
