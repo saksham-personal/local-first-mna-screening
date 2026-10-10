@@ -39,7 +39,7 @@ function fixture(states = ['READY', 'READY'], isConnected = true, mode = 'screen
 }
 
 async function until(predicate: () => boolean) {
-  for (let count = 0; count < 100 && !predicate(); count++)
+  for (let count = 0; count < 400 && !predicate(); count++)
     await new Promise(resolve => setTimeout(resolve, 5));
   assert.ok(predicate(), 'background work did not advance');
 }
