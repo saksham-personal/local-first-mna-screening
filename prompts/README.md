@@ -62,7 +62,10 @@ A new LLM Suite `conversation_id` creates a new chat and context. Reuse the id t
 | `format-repair` | `gateway.rs` `provider_text` (`dispatch_provider_text`); retry after a draft format fails. |
 | `tool-command-repair` | `protocol.rs` `repair_prompt`; retry after a legacy controller command fails. |
 | `controller-tools` | `agent_commands.rs` `prompt`; legacy controller grammar. |
-| `controller-instruction-set`, `instruction-feedback`, `conversation-handoff` | Reserved for the future LLM Suite instruction-set controller; no caller yet. |
+| `controller-instruction-set` | `controller.rs` `run_controller_turn`; one controller turn when Loop is off. |
+| `instruction-feedback` | `controller.rs`; up to two correction rounds after instruction validation rejects items. |
+| `conversation-handoff` | `controller.rs` and `controller_loop.rs`; summary that seeds a new conversation id at the context budget. |
+| `controller-loop`, `controller-loop-turn`, `controller-loop-budget` | `controller_loop.rs`; the discovery loop (Loop on): first turn and after rotation, later turns, and the consolidation notice when at most 5 turns remain. |
 | `intake-form-extraction`, `mid-search-planner` | Reserved; no caller yet. |
 
 `GET /api/prompts` lists the browser catalog. `POST /api/prompts/render` lets the browser render `screening-scored`, `screening-question`, `bing-query-writer`, `criteria-from-examples`, and `criteria-from-research`. The browser reads rendered text through routes, not prompt files. The loader conformance tests are `mna-ui/tests/prompts.test.ts` and `mna-tools/tests/prompts_conformance.rs`.

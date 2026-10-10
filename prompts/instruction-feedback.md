@@ -3,13 +3,13 @@
 **ID:** instruction-feedback
 **Description:** Repair rejected controller instructions.
 **What it does:** Provides validation feedback for rejected items. Requests corrected items in the same Markdown shape without repeating accepted work.
-**Context:** Reserved for the future LLM Suite controller loop after instruction validation rejects items; no caller sends it yet. The future controller supplies feedback and allowed actions on the same continuing conversation id.
+**Context:** `mna-tools/src/controller.rs` sends this on the same continuing conversation id after validation rejects items (at most two rounds per turn), with the validator messages and allowed actions.
 **Inputs:** `{{feedback}}` (required) – parser or validator messages; `{{allowed_actions}}` (required) – valid action names and fields.
 **Output:** Corrected Markdown Context, Reasoning, and Instruction set sections for rejected items only.
-**Version:** 1
+**Version:** 2
 
 ===@@=== STARTING ===@@===
-Correct only the rejected instructions below. Keep accepted instructions out of the reply. Use:
+Correct only the rejected instructions below. Accepted instructions already ran; do not repeat them. Fix the named field or action, keep the original intent, and drop an item rather than guess when it cannot be made valid. Use:
 ## Context
 1–3 sentences.
 ## Reasoning

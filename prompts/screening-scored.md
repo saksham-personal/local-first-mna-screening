@@ -6,7 +6,7 @@
 **Context:** `POST /api/prompts/screening-draft` calls `renderScreeningPrompt` for scored screening with analyst inputs; the analyst approves the draft. Send on the continuing LLM Suite screening conversation id or M365 Copilot request.
 **Inputs:** `{{definition}}` (required) – the approved core-business criteria; `{{good_fits}}` (optional) – good-fit examples, one per line; `{{bad_fits}}` (optional) – bad-fit examples, one per line; `{{deferred}}` (optional) – deferred conditions (geography, size, ownership and similar), one per line, shown for context only; `{{input_glossary}}` (required) – one line per input column explaining what it holds; `{{request}}` (required) – the analyst request; `{{output_columns}}` (required) – the requested output columns after index, comma-separated; `{{score_columns}}` (optional) – the requested score columns, comma-separated; when present the unified score rule is included.
 **Output:** The text of the screening prompt. The model's answer to that prompt is one Markdown table with index plus the requested output columns.
-**Version:** 2
+**Version:** 3
 
 ===@@=== STARTING ===@@===
 Screen each company's core business against the approved criteria.
@@ -34,7 +34,7 @@ INPUT COLUMNS (one row per company in each batch)
 Blank cells mean the value is missing, not negative.
 
 TASK
-Use only supplied row data. Explain business fit and missing evidence without inventing facts. Do not filter on financials, size, geography, ownership, or industry codes.
+Judge each company's core business: what it sells, to whom, and how it is delivered. Use only the supplied row data; when sources disagree, prefer the most specific description and say so. Research columns are unverified leads. A company that only uses, resells, or serves the target business is not a fit unless the criteria say so. In text columns such as a rationale, cite the evidence (which column) in one or two sentences and name what is missing. Do not filter on financials, size, geography, ownership, or industry codes.
 
 ANALYST REQUEST
 {{request}}

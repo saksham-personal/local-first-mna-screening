@@ -42,6 +42,9 @@ const ALL_IDS = [
   "batch-repair",
   "bing-query-writer",
   "controller-instruction-set",
+  "controller-loop-budget",
+  "controller-loop-turn",
+  "controller-loop",
   "controller-tools",
   "conversation-handoff",
   "criteria-from-examples",
@@ -282,6 +285,9 @@ const CONFORMANCE: { name: string; id: string; vars: Record<string, string> }[] 
   { name: "batch repair for a direct answer", id: "batch-repair", vars: { error: "question answer is empty", direct_answer: "yes" } },
   { name: "format repair", id: "format-repair", vars: { prompt: "Draft criteria.\nReturn exactly BEGIN_CRITERIA.", format_error: "Return only BEGIN_CRITERIA and END_CRITERIA with the requested content between them" } },
   { name: "tool command repair", id: "tool-command-repair", vars: { reason: "unknown tool", allowed_names: "search_mid, get_company" } },
+  { name: "controller loop first turn", id: "controller-loop", vars: { action_guide: "search_mid: Search MID\n- keywords: keywords (required; list)\nkeep_query_results: Keep a query's results at or above a score\n- query_id: query (required; text)\n- min_score: threshold (required; number)", loop_state: "Turn 1 of 50 (50 remaining)\nQueries: none yet\nConsolidated: 0 companies", analyst_message: "Find claims software vendors for insurers" } },
+  { name: "controller loop later turn", id: "controller-loop-turn", vars: { turn_label: "Turn 7 of 50 (44 remaining)", loop_state: "Q1 MID_KEYWORD claims software · 812 hits · keep >= 0.42 · 455 kept", observations: "Q2 MID_SEMANTIC · 1000 hits · histogram 0:3 1:20 ...", budget_notice: "" } },
+  { name: "controller loop budget", id: "controller-loop-budget", vars: { remaining: "5", final_turn: "50", unkept_queries: "Q4, Q6" } },
   { name: "controller tools", id: "controller-tools", vars: { tool_definitions: "\nsearch_mid: Search MID\n  run_id: text; required\n  query: text; required\n" } },
   { name: "direct question without context", id: "direct-question", vars: { session_id: "session-1", question: "What does Acme make?" } },
   { name: "direct question with context", id: "direct-question", vars: { session_id: "session-1", question: "What does Acme make?", context: '{"totalConsidered":3}' } },
@@ -316,7 +322,7 @@ test("the conformance fixture inputs still render with the current prompt files"
   for (const entry of fixture) {
     assert.equal(renderPrompt(entry.id, entry.vars), entry.expected, entry.name);
   }
-  assert.deepEqual([...new Set(fixture.map((entry) => entry.id))].sort(), ALL_IDS, "every prompt has a fixture");
+  assert.deepEqual([...new Set(fixture.map((entry) => entry.id))].sort(), [...ALL_IDS].sort(), "every prompt has a fixture");
 });
 
 test("new instruction-set prompts render through the shared Node loader", () => {
@@ -449,7 +455,7 @@ test("POST /api/prompts/screening-draft returns the generated prompt and which f
   const result = post("/api/prompts/screening-draft", { sessionId: "session-1", ...draft });
   assert.equal(result.status, 200);
   assert.equal(result.payload.promptId, "screening-scored");
-  assert.equal(result.payload.promptVersion, 2);
+  assert.equal(result.payload.promptVersion, 3);
   assert.match(result.payload.promptHash, /^[a-f0-9]{64}$/);
   assert.equal(result.payload.prompt, renderScreeningPrompt(draft).prompt);
   const question = post("/api/prompts/screening-draft", { mode: "question", request: "Why?" });
