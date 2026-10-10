@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ExternalLink, LoaderCircle, Undo2 } from "lucide-react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { OPEN_WORKSPACE_EVENT } from "../lib/grid-client";
@@ -32,18 +32,24 @@ export function LoopTurnMessage({ data }: { data: LoopTurnPartData }) {
   const [detail, setDetail] = useState<ControllerLoopDetail>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const lastDetailRequestAt = useRef(0);
   const state = loop?.state ?? "running";
   const turns = detail?.turns ?? [];
   useEffect(() => {
-    if (!expanded || !data.loopId) return;
+    if (!data.loopId) return;
     let active = true;
+    const delay = Math.max(0, 2000 - (Date.now() - lastDetailRequestAt.current));
+    const refresh = lastDetailRequestAt.current > 0;
     setLoading(true);
     setError("");
-    void loadControllerLoopDetail(data.loopId).then(value => { if (active) setDetail(value); })
-      .catch(caught => { if (active) setError(caught instanceof Error ? caught.message : String(caught)); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [expanded, data.loopId, loop?.turn]);
+    const timer = window.setTimeout(() => {
+      lastDetailRequestAt.current = Date.now();
+      void loadControllerLoopDetail(data.loopId!, refresh).then(value => { if (active) setDetail(value); })
+        .catch(caught => { if (active) setError(caught instanceof Error ? caught.message : String(caught)); })
+        .finally(() => { if (active) setLoading(false); });
+    }, delay);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [data.loopId, loop?.turn]);
   const latest = latestTurn(detail);
   if (data.error) return <article className="cc-turn ll-turn-card"><header className="cc-header"><strong>LLM Suite loop</strong></header><p className="cc-reason" role="alert">{data.error}</p></article>;
   return <article className="cc-turn ll-turn-card" id={data.loopId ? `loop-live-${data.loopId}` : undefined}>
@@ -53,16 +59,17 @@ export function LoopTurnMessage({ data }: { data: LoopTurnPartData }) {
     </header>
     {latest ? <TurnContent turn={latest} openSetup={() => scope.onAction({ type: "configure-screening", artifactId: "", provider: "llm_suite", mode: "screening" })} />
       : <p className="ll-turn-wait" role="status">{loading ? <><LoaderCircle size={13} className="spin" /> Loading the latest turn…</> : loop?.message ?? "Waiting for the first turn."}</p>}
-    {!!loop?.message && loop.state !== "running" && <p className="ll-loop-message">{loop.message}</p>}
+    {latest && loading && <span className="ll-turn-refresh" role="status"><LoaderCircle size={12} className="spin" /> Updating turn…</span>}
+    {!!loop?.message && loop.state !== "running" && (!latest?.reply_markdown || latest.reply_markdown.trim() !== loop.message.trim()) && <p className="ll-loop-message">{loop.message}</p>}
     {loop && <button className="ca-text-action ll-turn-expand" type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "Hide all turns" : "Show all turns"}</button>}
     {expanded && <div className="ll-turn-history" aria-label="Loop turns">
       {error && <p className="cc-reason" role="alert">{error}</p>}
       {loading && <p className="ll-turn-wait" role="status"><LoaderCircle size={13} className="spin" /> Loading turns…</p>}
-      {!loading && turns.map(turn => <details className="ll-history-turn" key={`${turn.turn_id}:${turn.kind}`}>
+      {turns.filter(turn => turn.kind !== "handoff" && turn.turn_id !== latest?.turn_id).map(turn => <details className="ll-history-turn" key={`${turn.turn_id}:${turn.kind}`}>
         <summary>{buildCollapsedTurnLine(turn, detail?.queries ?? loop?.queries ?? [])}</summary>
         <TurnContent turn={turn} openSetup={() => scope.onAction({ type: "configure-screening", artifactId: "", provider: "llm_suite", mode: "screening" })} />
       </details>)}
-      {!loading && !error && !turns.length && <p className="ll-turn-wait">No turns have been saved yet.</p>}
+      {!loading && !error && !turns.filter(turn => turn.kind !== "handoff" && turn.turn_id !== latest?.turn_id).length && <p className="ll-turn-wait">No earlier turns have been saved.</p>}
     </div>}
   </article>;
 }
@@ -84,11 +91,12 @@ export function LoopSummaryCard({ data }: { data: LoopSummaryEventData }) {
         <thead><tr><th>Query</th><th>Source</th><th>Label</th><th>Hits</th><th>Threshold</th><th>Kept</th><th>Scores</th></tr></thead>
         <tbody>{view.queries.map(query => {
           const max = Math.max(1, ...query.histogram);
+          const hitsCapped = query.hitsCapped === true;
           return <tr key={query.id}>
             <th scope="row">{query.id}</th>
             <td><span className="ll-source-chip">{sourceLabel(query.source)}</span></td>
             <td className="ll-query-label" title={query.labelTitle}>{query.label}</td>
-            <td>{query.hits.toLocaleString()}</td>
+            <td title={hitsCapped ? "capped at the search limit" : undefined}>{query.hitsLabel ?? query.hits.toLocaleString()}</td>
             <td>{query.threshold === null ? "—" : query.threshold.toFixed(2)}</td>
             <td>{query.kept.toLocaleString()}</td>
             <td><div className="ll-histogram" role="img" aria-label={`${query.id} score distribution${query.threshold === null ? "" : `, keep threshold ${query.threshold.toFixed(2)}`}`}>

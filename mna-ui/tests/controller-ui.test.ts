@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { controllerAvailable, controllerViews, shortResult, valueLines, sendControllerTurn, type ControllerResponse, type ControllerTurn } from "../src/lib/controller-client";
 import { setControllerPreferences, getControllerPreferences } from "../src/lib/controller-client";
+import { setLoopToggle } from "../src/lib/loop-client";
 import { sessionStore } from "../src/lib/session-store";
 import { controllerMessageIds, saveControllerTurns, updateChatState } from "../src/lib/chat-store";
 import { createChatAdapter, pendingWorkspaceMessages, transcriptFor } from "../src/lib/chat-driver";
@@ -86,5 +87,29 @@ test("controller send yields a pending card, saves separate feedback messages an
     assert.equal(getControllerPreferences(sessionId).newConversation, false);
     const events = sessionStore.getSnapshot().sessions.find(session => session.id === sessionId)!.events;
     assert.ok(events.filter(event => event.role === "assistant").every(event => event.kind !== "approval"));
+  } finally { globalThis.fetch = original; }
+});
+
+test("a stored Loop preference uses the regular unavailable-controller path", async () => {
+  const sessionId = sessionStore.createSession("Unavailable loop controller");
+  updateChatState(sessionId, { backendRunId: "run-unavailable" });
+  setControllerPreferences(sessionId, { mode: true });
+  setLoopToggle(sessionId, true);
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  try {
+    globalThis.fetch = (async url => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ ready: true, controller: { available: false } }));
+    }) as typeof fetch;
+    const adapter = createChatAdapter(sessionId, { openLog: () => {}, title: () => "Unavailable loop controller" });
+    const analyst = fromThreadMessageLike({ id: "analyst-unavailable", role: "user", content: [{ type: "text", text: "find claims software" }] }, "analyst-unavailable", { type: "complete", reason: "stop" });
+    const updates: any[] = [];
+    for await (const update of adapter.run({ messages: [analyst], abortSignal: new AbortController().signal, unstable_assistantMessageId: "reply-unavailable" } as unknown as Parameters<typeof adapter.run>[0]) as AsyncIterable<unknown>) updates.push(update);
+    assert.deepEqual(calls, ["/api/health"]);
+    const finalParts = updates.at(-1).content;
+    assert.equal(finalParts[0].name, "controller-turn");
+    assert.match(finalParts[0].data.error, /unavailable or disconnected/);
+    assert.equal(finalParts.some((part: any) => part.name === "loop-turn"), false);
   } finally { globalThis.fetch = original; }
 });

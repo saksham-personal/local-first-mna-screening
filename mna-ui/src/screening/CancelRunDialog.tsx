@@ -37,14 +37,14 @@ export default function CancelRunDialog({ run, busy = false, onBack, onCancel }:
           <Dialog.Description className="crd-progress">{run.source === "loop" ? run.secondaryText : `${run.processed} of ${run.total} processed.`}</Dialog.Description>
         </header>
         <fieldset className="crd-options" disabled={locked}>
-          <legend>What should happen to processed results?</legend>
+          <legend>{run.source === "loop" ? "How should the shortlist change?" : "What should happen to processed results?"}</legend>
           <label htmlFor={keepId}>
             <input id={keepId} type="radio" name="run-cancel-choice" checked={keep} onChange={() => setKeep(true)} />
             <span>{run.source === "loop" ? `Keep — apply the companies kept so far (${run.keptCount ?? 0})` : `Keep the ${run.processed} results processed so far`}</span>
           </label>
           <label htmlFor={discardId}>
             <input id={discardId} type="radio" name="run-cancel-choice" checked={!keep} onChange={() => setKeep(false)} />
-            <span>{run.source === "loop" ? "Discard — change nothing; searches stay in history" : "Discard all results from this run (they stay in the audit history but won’t appear in companies, context, or exports)"}</span>
+            <span>{run.source === "loop" ? "Discard — change nothing; searches stay in history." : "Discard all results from this run (they stay in the audit history but won’t appear in companies, context, or exports)"}</span>
           </label>
         </fieldset>
         {error && <p className="crd-error" role="alert">{error}</p>}

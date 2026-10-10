@@ -132,7 +132,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     ...researchJobs.map(job => mapBingJobToActivity(job, { now: clockNow })),
     ...loopJobs.map(job => mapLoopJobToActivity(job, { now: clockNow })),
   ];
-  const hasActiveRun = runRows.some(row => ["queued", "running", "cancelling"].includes(row.state));
+  const hasActiveRun = runRows.some(row => ["queued", "running", "consolidating", "cancelling"].includes(row.state));
   useEffect(() => {
     if (!hasActiveRun) return;
     const timer = setInterval(() => setClockNow(Date.now()), 1000);
@@ -152,7 +152,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
   const cancelRow = cancelTarget ? runRows.find(row => row.source === cancelTarget.source && row.id === cancelTarget.id) : undefined;
   const cancelRowGone = !!cancelTarget && !cancelRow;
   useEffect(() => { if (cancelRowGone) setCancelTarget(undefined); }, [cancelRowGone]);
-    const items = indexBuilds.length + searches.length + jobs.length + researchJobs.length + loopJobs.length + exports.length + builds.length;
+  const items = indexBuilds.length + searches.length + jobs.length + researchJobs.length + loopJobs.length + exports.length + builds.length;
   const visible = !dismissed && (items > 0 || expanded || !!exportError);
   useLayoutEffect(() => {
     const host = hostRef.current, main = host?.parentElement;

@@ -60,7 +60,7 @@ import {
   controllerPart,
 } from "../lib/chat-store";
 import { controllerAvailable, controllerHealth, getControllerPreferences, readControllerTurns, setControllerPreferences, subscribeControllerPreferences, type ControllerView } from "../lib/controller-client";
-import { getLoopJobs, getLoopToggle, isLoopActiveForRun, setLoopToggle, subscribeLoopPreferences, subscribeLoops } from "../lib/loop-client";
+import { getLoopJobs, getLoopToggle, isLoopActiveForRun, setLoopToggle, shouldBlockLoopSubmission, subscribeLoopPreferences, subscribeLoops } from "../lib/loop-client";
 import ControllerMessage, { type ControllerData } from "./ControllerMessage";
 import { LoopSummaryCard, LoopTurnMessage } from "./LoopMessage";
 import { appendWorkspaceMessages } from "../lib/workspace-message-sync";
@@ -578,20 +578,10 @@ function ModelMenu({ state }: { state: ChatState }) {
     />
   );
 }
-function ControllerMode({ state }: { state: ChatState }) {
+function ControllerMode({ state, available, error }: { state: ChatState; available: boolean; error: string }) {
   const preferences = useSyncExternalStore(subscribeControllerPreferences, () => getControllerPreferences(state.sessionId));
   const loopEnabled = useSyncExternalStore(subscribeLoopPreferences, () => getLoopToggle(state.sessionId));
   const loopJobs = useSyncExternalStore(subscribeLoops, getLoopJobs, getLoopJobs);
-  const [health, setHealth] = useState<Awaited<ReturnType<typeof controllerHealth>>>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let active = true;
-    const refresh = () => controllerHealth().then(value => { if (active) { setHealth(value); setError(""); } }).catch(() => { if (active) { setHealth(undefined); setError("LLM Suite is disconnected."); } });
-    void refresh();
-    const timer = window.setInterval(() => { void refresh(); }, 15000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [state.backendRunId]);
-  const available = controllerAvailable(state.backendRunId, health);
   const loopActive = loopJobs.some(job => job.runId === state.backendRunId && ["queued", "running", "paused", "consolidating", "cancelling"].includes(job.state));
   if (!available && !preferences.mode) return null;
   return <div className="cc-mode" aria-label="Chat send mode">
@@ -603,7 +593,7 @@ function ControllerMode({ state }: { state: ChatState }) {
       event.currentTarget.closest("details")?.removeAttribute("open");
     }}>New conversation</button></div></details>}
     {preferences.mode && preferences.newConversation && <span>Next message starts a new conversation</span>}
-    {preferences.mode && loopEnabled && loopActive && <span className="cc-loop-note" role="status">A loop is already running for this screening</span>}
+    {preferences.mode && available && loopEnabled && loopActive && <span className="cc-loop-note" role="status">A loop is already running for this screening</span>}
     {!available && <span role="status">{error || "LLM Suite controller is unavailable."}</span>}
   </div>;
 }
@@ -626,7 +616,17 @@ function Conversation({
   const controllerPreferences = useSyncExternalStore(subscribeControllerPreferences, () => getControllerPreferences(state.sessionId));
   const loopEnabled = useSyncExternalStore(subscribeLoopPreferences, () => getLoopToggle(state.sessionId));
   const loopJobs = useSyncExternalStore(subscribeLoops, getLoopJobs, getLoopJobs);
-  const loopOn = controllerPreferences.mode && loopEnabled;
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof controllerHealth>>>();
+  const [controllerError, setControllerError] = useState("");
+  useEffect(() => {
+    let active = true;
+    const refresh = () => controllerHealth().then(value => { if (active) { setHealth(value); setControllerError(""); } }).catch(() => { if (active) { setHealth(undefined); setControllerError("LLM Suite is disconnected."); } });
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [state.backendRunId]);
+  const controllerIsAvailable = controllerAvailable(state.backendRunId, health);
+  const loopOn = controllerPreferences.mode && loopEnabled && controllerIsAvailable;
   const loopBlocked = loopOn && loopJobs.some(job => job.runId === state.backendRunId && ["queued", "running", "paused", "consolidating", "cancelling"].includes(job.state));
   const [attachmentFailure, setAttachmentFailure] = useState("");
   useAuiEvent("composer.attachmentAddError", (event) => {
@@ -783,7 +783,7 @@ function Conversation({
           </div>
         )}
         <Queue />
-        <ControllerMode state={state} />
+        <ControllerMode state={state} available={controllerIsAvailable} error={controllerError} />
         <div className="ct-composer-context">
           <button type="button" onClick={scope.openContext}>
             <span
@@ -815,6 +815,12 @@ function Conversation({
           <ComposerPrimitive.Input
             placeholder={loopOn ? "Describe what the loop should find…" : "Describe a business, ask for a next step, or type /…"}
             aria-label="Message the screening assistant"
+            onKeyDownCapture={event => {
+              if (shouldBlockLoopSubmission(loopBlocked, event.key, event.shiftKey, event.nativeEvent.isComposing)) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
           />
           <div className="ct-composer-footer">
             <div className="ct-composer-tools">

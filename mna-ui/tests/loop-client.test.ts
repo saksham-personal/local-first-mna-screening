@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildCollapsedTurnLine, buildLoopCancelRequest, buildLoopStartRequest, buildLoopSummaryViewModel, LOOP_OUTCOMES_KEY, readLoopToggle, writeLoopToggle } from "../src/lib/loop-client";
+import { buildCollapsedTurnLine, buildLoopCancelRequest, buildLoopStartRequest, buildLoopSummaryViewModel, LOOP_OUTCOMES_KEY, mergeLoopPollSnapshot, readLoopToggle, shouldBlockLoopSubmission, writeLoopToggle } from "../src/lib/loop-client";
 import { createOutcomeOnceGuard, mapLoopJobToActivity, type LoopActivityJob } from "../src/lib/run-activity";
 
 const loop = (overrides: Partial<LoopActivityJob> = {}): LoopActivityJob => ({
@@ -20,6 +20,9 @@ test("loop activity mapping includes state actions, turn percent, and kept count
   assert.equal(running.percent, 30);
   assert.equal(running.secondaryText, "1 query · 4 companies kept");
   assert.equal(running.elapsedMs, 10_000);
+  const consolidating = mapLoopJobToActivity(loop({ state: "consolidating" }));
+  assert.deepEqual(consolidating.actions, ["cancel"]);
+  assert.equal(consolidating.stateLabel, "Consolidating");
   assert.deepEqual(mapLoopJobToActivity(loop({ state: "paused" })).actions, ["resume", "cancel"]);
   assert.deepEqual(mapLoopJobToActivity(loop({ state: "completed" })).actions, ["summary", "undo"]);
   assert.deepEqual(mapLoopJobToActivity(loop({ state: "cancelled" })).actions, ["dismiss"]);
@@ -49,7 +52,17 @@ test("loop outcome once guard persists completed summary IDs across instances", 
 test("collapsed loop turn line shows action count and the threshold set on that turn", () => {
   const instructions = Array.from({ length: 3 }, (_, index) => ({ index, action: "search_mid", title: null, status: "executed" as const, arguments: null, result_summary: null, reason: null }));
   assert.equal(buildCollapsedTurnLine({ turn: 2, instructions }, loop().queries), "Turn 2 · 3 actions · kept Q1 ≥ 0.80");
+  const second = { ...loop().queries[0], id: "Q2", min_score: 0.42, keep_turn: 2 };
+  assert.equal(buildCollapsedTurnLine({ turn: 2, instructions, kind: "analyst" }, [...loop().queries, second]), "Turn 2 · 3 actions · kept Q1 ≥ 0.80, Q2 ≥ 0.42");
   assert.equal(buildCollapsedTurnLine({ turn: 1, instructions: [] }, loop().queries), "Turn 1 · 0 actions");
+  assert.equal(buildCollapsedTurnLine({ turn: 3, instructions: [], kind: "handoff" }, loop().queries), null);
+});
+
+test("a blocked loop consumes plain Enter but keeps Shift+Enter and IME input", () => {
+  assert.equal(shouldBlockLoopSubmission(true, "Enter", false, false), true);
+  assert.equal(shouldBlockLoopSubmission(true, "Enter", true, false), false);
+  assert.equal(shouldBlockLoopSubmission(true, "Enter", false, true), false);
+  assert.equal(shouldBlockLoopSubmission(false, "Enter", false, false), false);
 });
 
 test("summary query model includes a threshold bin and no-keeps heading", () => {
@@ -59,9 +72,26 @@ test("summary query model includes a threshold bin and no-keeps heading", () => 
   assert.equal(kept.queries[0].thresholdBinIndex, 8);
   assert.equal(kept.queries[0].histogram.length, 10);
   assert.equal(kept.queries[0].labelTitle, "claims software");
+  const capped = buildLoopSummaryViewModel(loop({ state: "completed", finalCount: 9000, queries: [{ ...loop().queries[0], total: 5000 }] }), { considered: 4, total: 9 });
+  assert.equal(capped.heading, "Loop finished · 4 companies considered");
+  assert.equal(capped.queries[0].hitsLabel, "5,000+");
+  assert.equal(capped.queries[0].hitsCapped, true);
   const noKeeps = buildLoopSummaryViewModel(loop({ state: "completed", queries: [{ ...loop().queries[0], min_score: null, kept_count: null }] }), { considered: 9, total: 9 });
   assert.equal(noKeeps.noKeeps, true);
   assert.equal(noKeeps.heading, "No keep decisions — shortlist unchanged");
+});
+
+test("a poll keeps a locally started loop until a newer server snapshot includes it", () => {
+  const local = loop({ id: "local-loop", updatedAt: "2026-10-10T00:00:05.000Z" });
+  const localJobs = new Map([[local.id, local]]);
+  const localGenerations = new Map([[local.id, 2]]);
+  assert.deepEqual(mergeLoopPollSnapshot([], localJobs, localGenerations, 1), [local]);
+  assert.equal(localJobs.has(local.id), true);
+  const remote = { ...local, state: "completed" as const, updatedAt: "2026-10-10T00:00:06.000Z" };
+  assert.deepEqual(mergeLoopPollSnapshot([remote], localJobs, localGenerations, 1), [local], "an in-flight poll cannot overwrite the newer local snapshot");
+  assert.deepEqual(mergeLoopPollSnapshot([remote], localJobs, localGenerations, 2), [remote]);
+  assert.equal(localJobs.has(local.id), false);
+  assert.equal(localGenerations.has(local.id), false);
 });
 
 test("Loop toggle storage is per session and defaults off", () => {

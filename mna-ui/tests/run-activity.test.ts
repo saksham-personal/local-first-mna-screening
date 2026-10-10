@@ -37,6 +37,9 @@ test("Activity mapper presents screening progress, steps, and controls per state
   assert.deepEqual(mapScreeningJobToActivity({ ...screening, state: "paused" }).actions, ["resume", "cancel"]);
   assert.deepEqual(mapScreeningJobToActivity({ ...screening, state: "error", completed: 2 }).actions, ["retry", "stage", "dismiss"]);
   assert.deepEqual(mapScreeningJobToActivity({ ...screening, state: "cancelled", completed: 2, message: "Cancelled; processed results were discarded." }).actions, ["dismiss"]);
+  const cancelled = mapScreeningJobToActivity({ ...screening, state: "cancelled", total: 288, completed: 7, failed: 281 });
+  assert.equal(cancelled.processed, 7);
+  assert.equal(cancelled.percent, 7 / 288 * 100);
 });
 
 test("Activity mapper presents Bing progress, steps, and controls per state", () => {
