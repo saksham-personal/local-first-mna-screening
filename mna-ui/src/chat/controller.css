@@ -28,4 +28,13 @@
 .cc-mode button { border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); border-radius: 5px; padding: 5px 8px; cursor: pointer; }
 .cc-mode button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .cc-mode-menu { position: relative; }.cc-mode-menu > div { position: absolute; bottom: 100%; right: 0; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: 10; white-space: nowrap; }
+.cc-mode .cc-loop-switch { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; color: var(--text); border-color: transparent; background: transparent; }
+.cc-loop-switch[aria-checked="true"] { color: var(--accent); }
+.cc-loop-track { display: inline-flex; width: 26px; height: 15px; align-items: center; padding: 2px; border-radius: 20px; background: var(--border); transition: background-color 120ms ease; }
+.cc-loop-track i { width: 11px; height: 11px; border-radius: 50%; background: var(--surface); transition: transform 120ms ease; }
+.cc-loop-switch[aria-checked="true"] .cc-loop-track { background: var(--accent); }
+.cc-loop-switch[aria-checked="true"] .cc-loop-track i { transform: translateX(11px); }
+.cc-loop-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cc-mode .cc-loop-note { color: var(--warning); }
+@media (prefers-reduced-motion: reduce) { .cc-loop-track, .cc-loop-track i { transition: none; } }
 @media (max-width: 500px) { .cc-pending { flex-wrap: wrap; }.cc-feedback { padding-left: 8px; } }

@@ -56,6 +56,7 @@ import { processStagedUploads } from "./import-pipeline";
 import { approveDurableCriteria, persistCriteriaDraft, flushCriteriaDraft, refreshShortlist } from "./review-client";
 import { askProvider, generateDraft } from "./conversation-client";
 import { controllerAvailable, controllerHealth, getControllerPreferences, sendControllerTurn, setControllerPreferences } from "./controller-client";
+import { buildLoopStartRequest, getLoopToggle, isLoopActiveForRun, persistLoopTurnMessage, startLoop } from "./loop-client";
 
 type Part = ThreadAssistantMessagePart;
 export function transcriptFor(sessionId: string): ThreadMessageLike[] {
@@ -441,6 +442,18 @@ export function createChatAdapter(
       };
       try {
         let state = getChatState(sessionId);
+        if (!action && getControllerPreferences(sessionId).mode && getLoopToggle(sessionId)) {
+          const health = await controllerHealth();
+          if (!controllerAvailable(state.backendRunId, health)) throw new Error("LLM Suite controller is unavailable or disconnected. A saved screening run and connected provider are required.");
+          if (!state.backendRunId) throw new Error("Find companies before starting a discovery loop.");
+          if (isLoopActiveForRun(state.backendRunId)) throw new Error("A loop is already running for this screening.");
+          const request = buildLoopStartRequest(state.backendRunId, text, sessionId, callbacks.title());
+          const loop = await startLoop(request);
+          const part = { type: "data" as const, name: "loop-turn", data: { loopId: loop.id } } as Part;
+          persistLoopTurnMessage(sessionId, loop, messageId, begun, [part]);
+          yield { content: [part] };
+          return;
+        }
         if (!action && getControllerPreferences(sessionId).mode) {
           yield { content: [{ type: "data", name: "controller-turn", data: { pending: true, startedAt: begun } }] };
           const health = await controllerHealth();
@@ -953,7 +966,9 @@ export function createChatAdapter(
             abortSignal.aborted ? "cancelled" : "error",
             message,
           );
-        content.push(!action && getControllerPreferences(sessionId).mode ? {
+        content.push(!action && getControllerPreferences(sessionId).mode && getLoopToggle(sessionId) ? {
+          type: "data", name: "loop-turn", data: { error: message },
+        } : !action && getControllerPreferences(sessionId).mode ? {
           type: "data", name: "controller-turn", data: { error: abortSignal.aborted ? "LLM Suite request stopped. Completed work remains saved." : message },
         } : {
           type: "text",

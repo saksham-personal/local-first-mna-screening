@@ -8,9 +8,25 @@ import { shortResult, valueLines, type ControllerView } from "../lib/controller-
 import "./controller.css";
 
 export type ControllerData = { pending: true; startedAt: string } | { turn: ControllerView } | { error: string };
-function ControllerMarkdown({ text }: { text: string }) {
+export function ControllerMarkdown({ text }: { text: string }) {
   // The enclosing part is structured data; provide its Markdown field explicitly.
   return <MarkdownTextPrimitive className="ca-markdown" smooth={false} preprocess={() => text} />;
+}
+export function ControllerInstructionList({ instructions, openSetup }: { instructions: ControllerView["instructions"]; openSetup: () => void }) {
+  if (!instructions.length) return null;
+  return <section aria-label="Instruction set"><h4>Instruction set</h4><ol className="cc-instructions">
+    {instructions.map(instruction => <li key={instruction.index} className={`cc-instruction cc-${instruction.status}`}>
+      <span className="cc-status-icon" aria-hidden="true">{instruction.status === "executed" ? "✓" : instruction.status === "rejected" ? "⨯" : "!"}</span>
+      <div><div className="cc-instruction-title"><code>{instruction.action}</code><span className="cc-status-label">{instruction.status}</span></div>
+        {instruction.title && <p>{instruction.title}</p>}
+        {instruction.action === "propose_prepared_plan" && instruction.status === "executed"
+          ? <p>Proposed — review in <button type="button" className="ca-text-action" onClick={openSetup}>Screening setup</button></p>
+          : instruction.result_summary != null && <p className="cc-result">{shortResult(instruction.result_summary)}</p>}
+        {instruction.reason && <p className="cc-reason">{instruction.reason}</p>}
+        {instruction.arguments && Object.keys(instruction.arguments).length > 0 && <details><summary>Details</summary><ul className="cc-arguments">{valueLines(instruction.arguments).map((line, index) => <li key={index}>{line}</li>)}</ul></details>}
+      </div>
+    </li>)}
+  </ol></section>;
 }
 function Pending({ startedAt }: { startedAt: string }) {
   const running = useAuiState(s => s.message.status?.type === "running");
@@ -48,19 +64,7 @@ export default function ControllerMessage({ data, openSetup }: { data: Controlle
     {turn.context && <ControllerMarkdown text={turn.context} />}
     {turn.kind === "handoff" && !turn.context && turn.reply_markdown && <ControllerMarkdown text={turn.reply_markdown} />}
     {turn.reasoning && <details className="cc-reasoning"><summary>Show reasoning</summary><ControllerMarkdown text={turn.reasoning} /></details>}
-    {turn.instructions.length > 0 && <section aria-label="Instruction set"><h4>Instruction set</h4><ol className="cc-instructions">
-      {turn.instructions.map(instruction => <li key={instruction.index} className={`cc-instruction cc-${instruction.status}`}>
-        <span className="cc-status-icon" aria-hidden="true">{instruction.status === "executed" ? "✓" : instruction.status === "rejected" ? "⨯" : "!"}</span>
-        <div><div className="cc-instruction-title"><code>{instruction.action}</code><span className="cc-status-label">{instruction.status}</span></div>
-          {instruction.title && <p>{instruction.title}</p>}
-          {instruction.action === "propose_prepared_plan" && instruction.status === "executed"
-            ? <p>Proposed — review in <button type="button" className="ca-text-action" onClick={openSetup}>Screening setup</button></p>
-            : instruction.result_summary != null && <p className="cc-result">{shortResult(instruction.result_summary)}</p>}
-          {instruction.reason && <p className="cc-reason">{instruction.reason}</p>}
-          {instruction.arguments && Object.keys(instruction.arguments).length > 0 && <details><summary>Details</summary><ul className="cc-arguments">{valueLines(instruction.arguments).map((line, index) => <li key={index}>{line}</li>)}</ul></details>}
-        </div>
-      </li>)}
-    </ol></section>}
+    <ControllerInstructionList instructions={turn.instructions} openSetup={openSetup} />
     {turn.notes && <aside className="cc-notes"><strong>Notes for the analyst</strong><ControllerMarkdown text={turn.notes} /></aside>}
     {!!turn.warnings?.length && <p className="cc-warnings">Some of the reply could not be read: {turn.warnings.join("; ")}</p>}
     {turn.feedback_sent && <p className="cc-warnings">Instruction feedback sent to LLM Suite.</p>}

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowRight, Check, ChevronDown, ChevronUp, Circle, CircleAlert, Clock3, ExternalLink, LoaderCircle, Pause, Play, RotateCcw, Square, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, ChevronUp, Circle, CircleAlert, Clock3, ExternalLink, LoaderCircle, Pause, Play, RotateCcw, Square, Undo2, X } from "lucide-react";
 import { formatDateTime, formatTime, plural } from "../lib/format";
 import type { IndexBuild } from "../index/index-build-client";
 import { buildEtaText, isActiveBuild, overallPercent, stepPresentation, buildStatusText } from "../index/index-build-state";
@@ -7,8 +7,8 @@ import { IndexProgressBar } from "../index/BuildIndexDialog";
 import { exportActivity, exportJobsEvent, exportRunIds, listExports, type ExportJob } from "../lib/screening-client";
 import { listSetupBuilds, type SetupBuild } from "../lib/screening-client";
 import { startBackgroundScreening } from "../lib/background-client";
-import type { BingActivityJob, ActivityAction, ActivitySource, RunActivityRow, ScreeningActivityJob } from "../lib/run-activity";
-import { formatElapsed, mapBingJobToActivity, mapScreeningJobToActivity, processedUnit } from "../lib/run-activity";
+import type { BingActivityJob, ActivityAction, ActivitySource, LoopActivityJob, RunActivityRow, ScreeningActivityJob } from "../lib/run-activity";
+import { formatElapsed, mapBingJobToActivity, mapLoopJobToActivity, mapScreeningJobToActivity, processedUnit } from "../lib/run-activity";
 import CancelRunDialog from "./CancelRunDialog";
 import SetupController from "./SetupController";
 import "./background-runs.css";
@@ -33,6 +33,7 @@ type Props = {
   onDismissIndex?: (id: string) => void;
   jobs: BackgroundRunView[];
   researchJobs?: BingActivityJob[];
+  loopJobs?: LoopActivityJob[];
   searches?: SearchRunView[];
   /** Whether the dock shows its run list. The header Activity button drives this. */
   expanded: boolean;
@@ -41,6 +42,10 @@ type Props = {
   layoutKey?: string;
   onAction: (id: string, action: "pause" | "resume" | "retry" | "stage") => void | Promise<void>;
   onResearchAction?: (id: string, action: "pause" | "resume") => void | Promise<void>;
+  onLoopAction?: (id: string, action: "pause" | "resume") => void | Promise<void>;
+  onDismissLoop?: (id: string) => void;
+  onOpenLoopSummary?: (sessionId: string, id: string) => void;
+  onUndoLoop?: (id: string) => void;
   onCancelRun?: (source: ActivitySource, id: string, keep: boolean) => Promise<void>;
   onDismiss?: (id: string) => void;
   onDismissResearch?: (id: string) => void;
@@ -67,7 +72,7 @@ const searchStateNames = {
   error: "Failed",
 };
 
-export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismissIndex, jobs, researchJobs = [], searches = [], expanded, onExpandedChange, layoutKey, onAction, onResearchAction, onCancelRun, onDismiss, onDismissResearch, onOpenResearch, onOpenScreening, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
+export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismissIndex, jobs, researchJobs = [], loopJobs = [], searches = [], expanded, onExpandedChange, layoutKey, onAction, onResearchAction, onLoopAction, onCancelRun, onDismiss, onDismissResearch, onDismissLoop, onOpenResearch, onOpenLoopSummary, onUndoLoop, onOpenScreening, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => { if (expanded) setDismissed(false); }, [expanded]);
   // The cancel dialog keeps only the run's identity; the run is read fresh on every render.
@@ -125,6 +130,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
   const runRows = [
     ...jobs.map(job => mapScreeningJobToActivity(job, { now: clockNow })),
     ...researchJobs.map(job => mapBingJobToActivity(job, { now: clockNow })),
+    ...loopJobs.map(job => mapLoopJobToActivity(job, { now: clockNow })),
   ];
   const hasActiveRun = runRows.some(row => ["queued", "running", "cancelling"].includes(row.state));
   useEffect(() => {
@@ -146,7 +152,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
   const cancelRow = cancelTarget ? runRows.find(row => row.source === cancelTarget.source && row.id === cancelTarget.id) : undefined;
   const cancelRowGone = !!cancelTarget && !cancelRow;
   useEffect(() => { if (cancelRowGone) setCancelTarget(undefined); }, [cancelRowGone]);
-  const items = indexBuilds.length + searches.length + jobs.length + researchJobs.length + exports.length + builds.length;
+    const items = indexBuilds.length + searches.length + jobs.length + researchJobs.length + loopJobs.length + exports.length + builds.length;
   const visible = !dismissed && (items > 0 || expanded || !!exportError);
   useLayoutEffect(() => {
     const host = hostRef.current, main = host?.parentElement;
@@ -174,9 +180,9 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     const observer = new ResizeObserver(measure);
     [main, header, sideChatHeader, composer, toggle].forEach(element => { if (element) observer.observe(element); });
     return () => observer.disconnect();
-  }, [indexBuilds, jobs, researchJobs, searches, exports, builds, expanded, visible, layoutKey]);
+  }, [indexBuilds, jobs, researchJobs, loopJobs, searches, exports, builds, expanded, visible, layoutKey]);
   if (!visible) return null;
-  const activeCount = exports.filter(job => job.state === "running").length + builds.filter(build => build.status === "building").length + indexBuilds.filter(isActiveBuild).length + jobs.filter((job) => job.state === "running" || job.state === "queued" || String(job.state) === "cancelling").length + researchJobs.filter(job => job.state === "running" || job.state === "queued" || job.state === "cancelling").length + searches.filter((search) => search.state === "running").length;
+  const activeCount = exports.filter(job => job.state === "running").length + builds.filter(build => build.status === "building").length + indexBuilds.filter(isActiveBuild).length + jobs.filter((job) => job.state === "running" || job.state === "queued" || String(job.state) === "cancelling").length + researchJobs.filter(job => job.state === "running" || job.state === "queued" || job.state === "cancelling").length + loopJobs.filter(job => ["running", "queued", "consolidating", "cancelling"].includes(job.state)).length + searches.filter((search) => search.state === "running").length;
   const totalBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.total), 0);
   const completedBatches = jobs.reduce((sum, job) => sum + Math.max(0, job.completed), 0);
   const aggregatePercent = totalBatches > 0 ? Math.min(100, (completedBatches / totalBatches) * 100) : 0;
@@ -186,9 +192,13 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     const key = `${row.source}:${row.id}`;
     if (action === "cancel") { setCancelTarget({ source: row.source, id: row.id }); return; }
     if (action === "dismiss") {
-      if (row.source === "bing") onDismissResearch?.(row.id); else onDismiss?.(row.id);
+      if (row.source === "bing") onDismissResearch?.(row.id);
+      else if (row.source === "loop") onDismissLoop?.(row.id);
+      else onDismiss?.(row.id);
       return;
     }
+    if (action === "summary") { if (row.sessionId) onOpenLoopSummary?.(row.sessionId, row.id); return; }
+    if (action === "undo") { onUndoLoop?.(row.id); return; }
     if (action === "open") {
       if (row.source === "bing" && row.sessionId) onOpenResearch?.(row.sessionId, row.id);
       else if (row.sessionId) onOpenScreening?.(row.sessionId);
@@ -199,6 +209,8 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     try {
       if (row.source === "bing") {
         if (action === "pause" || action === "resume") await onResearchAction?.(row.id, action);
+      } else if (row.source === "loop") {
+        if (action === "pause" || action === "resume") await onLoopAction?.(row.id, action);
       } else if (action === "pause" || action === "resume" || action === "retry" || action === "stage" || action === "check") {
         await onAction(row.id, action === "check" ? "resume" : action);
       }
@@ -209,13 +221,13 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     }
   };
   const renderRunAction = (row: RunActivityRow, action: ActivityAction) => {
-    const label = action === "stage" ? `Stage ${plural(row.stageCount ?? 0, "batch", "batches")}` : action === "open" ? "Open results" : action === "retry" ? "Retry failed" : action === "check" ? "Check status" : action[0].toUpperCase() + action.slice(1);
-    const subject = row.source === "bing" ? "Bing research" : `${providerNames[row.provider ?? "llm_suite"]} screening`;
-    const ariaLabel = action === "dismiss" ? `Dismiss ${row.title}` : action === "check" ? `Check status for ${subject}` : `${label} ${subject}`;
+    const label = action === "stage" ? `Stage ${plural(row.stageCount ?? 0, "batch", "batches")}` : action === "open" ? "Open results" : action === "summary" ? "Open summary" : action === "undo" ? "Undo" : action === "retry" ? "Retry failed" : action === "check" ? "Check status" : action[0].toUpperCase() + action.slice(1);
+    const subject = row.source === "loop" ? "loop" : row.source === "bing" ? "Bing research" : `${providerNames[row.provider ?? "llm_suite"]} screening`;
+    const ariaLabel = row.source === "loop" && action === "pause" ? "Pause loop" : row.source === "loop" && action === "resume" ? "Resume loop" : row.source === "loop" && action === "cancel" ? "Cancel loop" : row.source === "loop" && action === "summary" ? "Open loop summary" : row.source === "loop" && action === "undo" ? "Undo loop" : action === "dismiss" ? `Dismiss ${row.title}` : action === "check" ? `Check status for ${subject}` : `${label} ${subject}`;
     const key = `${row.source}:${row.id}`;
     const screening = row.source === "screening" ? jobs.find(job => job.id === row.id) : undefined;
-    const disabled = pendingActions.has(key) || screening?.busy === true;
-    const icon = action === "pause" ? <Pause size={13} aria-hidden="true" /> : action === "resume" || action === "check" ? <Play size={13} aria-hidden="true" /> : action === "retry" ? <RotateCcw size={13} aria-hidden="true" /> : action === "stage" ? <Check size={13} aria-hidden="true" /> : action === "open" ? <ExternalLink size={13} aria-hidden="true" /> : action === "dismiss" ? <X size={13} aria-hidden="true" /> : <Square size={12} aria-hidden="true" />;
+    const disabled = pendingActions.has(key) || screening?.busy === true || (row.source === "loop" && action === "undo" && !row.canUndo);
+    const icon = action === "pause" ? <Pause size={13} aria-hidden="true" /> : action === "resume" || action === "check" ? <Play size={13} aria-hidden="true" /> : action === "retry" ? <RotateCcw size={13} aria-hidden="true" /> : action === "stage" ? <Check size={13} aria-hidden="true" /> : action === "open" || action === "summary" ? <ExternalLink size={13} aria-hidden="true" /> : action === "undo" ? <Undo2 size={13} aria-hidden="true" /> : action === "dismiss" ? <X size={13} aria-hidden="true" /> : <Square size={12} aria-hidden="true" />;
     return <button key={action} className={action === "stage" ? "br-stage" : undefined} type="button" aria-label={ariaLabel} onClick={() => void handleRunAction(row, action)} disabled={disabled}>{icon}{label}</button>;
   };
 
@@ -252,7 +264,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
               {build.sessionId && <div className="br-actions"><button type="button" onClick={() => setReviewBuild(build)}>{build.status === "ready" ? "Review & approve" : "Open setup"}<ArrowRight size={13} /></button></div>}
             </section>)}
           </section>}
-          {items === 0 && <p className="br-empty">Searches, research, and screening runs show up here while they work.</p>}
+          {items === 0 && <p className="br-empty">Searches, research, loops, and screening runs show up here while they work.</p>}
           {exportError && <p className="br-message br-search-error" role="alert">{exportError}</p>}
           {exports.length > 0 && <section className="br-group" aria-label="Exports">
             <h3 className="br-group-title">Exports<span>{exports.length}</span></h3>
@@ -307,8 +319,8 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
               ))}
             </section>
           )}
-          {runRows.length > 0 && <section className="br-group" aria-label="Provider runs">
-            <h3 className="br-group-title">Provider runs<span>{runRows.length}</span></h3>
+          {runRows.length > 0 && <section className="br-group" aria-label="Provider runs and loops">
+            <h3 className="br-group-title">Provider runs and loops<span>{runRows.length}</span></h3>
             {runRows.map(row => {
               const key = `${row.source}:${row.id}`;
               const screening = row.source === "screening" ? jobs.find(job => job.id === row.id) : undefined;
@@ -320,11 +332,12 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
                 <div className="br-run-heading">
                   <div className="br-run-copy">
                     <strong title={row.title}>{row.title}</strong>
-                    <span>{row.source === "bing" ? "Bing research" : `${providerNames[row.provider ?? "llm_suite"]} screening`} <i aria-hidden="true">·</i> <span className={`br-state-chip br-chip-${row.state === "failed" ? "error" : row.state}`}>{row.stateLabel}</span></span>
+                    <span>{row.source === "loop" ? "LLM Suite discovery loop" : row.source === "bing" ? "Bing research" : `${providerNames[row.provider ?? "llm_suite"]} screening`} <i aria-hidden="true">·</i> <span className={`br-state-chip br-chip-${row.state === "failed" ? "error" : row.state}`}>{row.stateLabel}</span></span>
                   </div>
                 </div>
-                <div className="br-progress-label"><span>{row.processed.toLocaleString()} of {processedUnit(row.source, row.total)} processed</span><span>{Math.round(row.percent)}%</span></div>
-                <div className="br-progress" role="progressbar" aria-label={`${row.title} progress`} aria-valuemin={0} aria-valuemax={valueMax} aria-valuenow={valueNow} aria-valuetext={`${row.processed} of ${row.total} processed`}><span style={{ width: `${row.percent}%` }} /></div>
+                {row.secondaryText && <div className="br-run-stats"><span>{row.secondaryText}</span></div>}
+                <div className="br-progress-label"><span>{row.source === "loop" ? `${row.processed.toLocaleString()} of ${row.total} turns` : `${row.processed.toLocaleString()} of ${processedUnit(row.source, row.total)} processed`}</span><span>{Math.round(row.percent)}%</span></div>
+                <div className="br-progress" role="progressbar" aria-label={`${row.title} progress`} aria-valuemin={0} aria-valuemax={valueMax} aria-valuenow={valueNow} aria-valuetext={row.source === "loop" ? `${row.processed} of ${row.total} turns` : `${row.processed} of ${row.total} processed`}><span style={{ width: `${row.percent}%` }} /></div>
                 <ol className="br-run-steps" aria-label={`${row.title} steps`}>
                   {row.steps.map(step => <li className={`br-run-step br-step-${step.state}`} key={step.id} aria-label={`${step.label}: ${step.state}`}>
                     {step.state === "done" ? <Check size={12} aria-hidden="true" /> : step.state === "running" ? <LoaderCircle size={12} aria-hidden="true" /> : step.state === "failed" ? <CircleAlert size={12} aria-hidden="true" /> : <Circle size={12} aria-hidden="true" />}
