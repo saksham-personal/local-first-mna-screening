@@ -45,6 +45,9 @@ impl Fixture {
             "MNA_LLMSUITE_ROTATE_TOKENS",
             "MNA_IMPORT_DIR",
             "MNA_EMBED_ENDPOINT",
+            "MNA_EMBED_MODEL",
+            "MNA_EMBED_VERSION",
+            "MNA_EMBED_DIMENSIONS",
             "MNA_MID_INDEX_CONFIG",
             "MNA_CONTROLLER_KEY",
         ] {
@@ -78,6 +81,9 @@ impl Fixture {
             let address = listener.local_addr().unwrap();
             let app = Router::new()
                 .route("/chat", post(send))
+                .route("/embed", post(|Json(body): Json<Value>| async move {
+                    Json(json!({"model":body["model"],"version":body["version"],"dimensions":2,"vectors":[[1.0,0.0]]}))
+                }))
                 .with_state(fake.clone());
             (
                 tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
@@ -116,6 +122,9 @@ impl Fixture {
     // Same small workbook/build fixture pattern as tests/mid_search.rs; those
     // private helpers cannot be imported from a separate integration-test crate.
     fn build(&self) {
+        self.build_fixture(false);
+    }
+    fn build_fixture(&self, semantic_candidate: bool) {
         let mut workbook = rust_xlsxwriter::Workbook::new();
         let sheet = workbook.add_worksheet();
         for (col, title) in [
@@ -131,22 +140,28 @@ impl Fixture {
         {
             sheet.write_string(0, col as u16, *title).unwrap();
         }
-        for (i, desc) in [
+        let mut descriptions = vec![
             "insurance claims software",
             "claim management",
             "claims consulting",
             "policy administration",
-        ]
-        .iter()
-        .enumerate()
-        {
+        ];
+        if semantic_candidate {
+            descriptions.push("Owned workflow application for underwriters");
+        }
+        for (i, desc) in descriptions.iter().enumerate() {
             for (col, value) in [
                 format!("C{}", i + 1),
                 format!("E{}", i + 1),
                 format!("Company {}", i + 1),
                 desc.to_string(),
-                "insurance software".into(),
-                "software".into(),
+                if i == 4 {
+                    "workflow"
+                } else {
+                    "insurance software"
+                }
+                .into(),
+                if i == 4 { "workflow" } else { "software" }.into(),
             ]
             .iter()
             .enumerate()
@@ -603,7 +618,31 @@ fn discovery_loop_stub_completes_applies_and_is_reversible() {
         }
     }
     let _guard = ENV.lock().unwrap_or_else(|error| error.into_inner());
-    let f = Fixture::new(true);
+    let f = Fixture::new(false);
+    f.build_fixture(true);
+    let endpoint = std::env::var("MNA_LLMSUITE_ENDPOINT")
+        .unwrap()
+        .replace("/chat", "/embed");
+    std::env::set_var("MNA_EMBED_ENDPOINT", endpoint);
+    std::env::set_var("MNA_EMBED_MODEL", "fixture");
+    std::env::set_var("MNA_EMBED_VERSION", "1");
+    std::env::set_var("MNA_EMBED_DIMENSIONS", "2");
+    f.store.with_connection(|c| {
+        c.execute("UPDATE mid_bundles SET semantic_status='ready'",[])?;
+        for (id,vector) in [("E1-C1",[1.0f32,0.0]),("E2-C2",[0.8,0.6]),("E3-C3",[0.0,1.0]),("E4-C4",[-1.0,0.0]),("E5-C5",[1.0,0.0])] {
+            let hash:String=c.query_row("SELECT desc_hash FROM mid_rows WHERE company_id=?",[id],|r|r.get(0))?;
+            let blob=vector.iter().flat_map(|v|v.to_le_bytes()).collect::<Vec<_>>();
+            c.execute("INSERT INTO embedding_vectors(company_id,model,model_version,dimensions,text_hash,vector_blob,created_at) VALUES(?,'fixture','1',2,?,?,datetime('now'))",rusqlite::params![id,hash,blob])?;
+        }
+        Ok(())
+    }).unwrap();
+    f.store.execute("ingest_companies",&json!({"companies":[{"company_id":"OUT","name":"Unrelated bakery","description":"Bread and pastries"}]})).unwrap();
+    f.store
+        .execute(
+            "add_candidates",
+            &json!({"run_id":"R","companies":["OUT"],"discovery_source":"MID"}),
+        )
+        .unwrap();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -654,17 +693,28 @@ fn discovery_loop_stub_completes_applies_and_is_reversible() {
     }
     assert_eq!(result["status"], "completed");
     assert_eq!(result["turns_used"], 4);
-    assert_eq!(result["queries"].as_array().unwrap().len(), 2);
+    assert_eq!(result["queries"].as_array().unwrap().len(), 3);
+    assert!(result["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|q| q["source"] == "MID_SEMANTIC"));
     assert_eq!(result["simulated"], true);
     assert!(!result["applied_review_id"].is_null());
     let count = f.count("SELECT COUNT(*) FROM candidates WHERE run_id='R' AND considered=1");
     assert!(count > 0);
+    assert!(f.count("SELECT COUNT(*) FROM candidates WHERE run_id='R' AND considered=0") > 0);
     println!("Real Rust + Node stub loop final considered count: {count}");
-    assert!(result["turns"][0]["instructions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["result_summary"]["status"] == "skipped"));
+    assert!(
+        result["turns"][0]["instructions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["action"] == "search_mid_semantic"
+                && r["status"] == "executed"
+                && r["result_summary"]["returned"].as_i64().unwrap_or(0) > 0),
+        "{result}"
+    );
     f.rt.block_on(mna_tools::controller_loop::admin(
         &f.runtime,
         &f.store,
@@ -674,9 +724,9 @@ fn discovery_loop_stub_completes_applies_and_is_reversible() {
     .unwrap();
     assert_eq!(
         f.count("SELECT COUNT(*) FROM candidates WHERE considered=1"),
-        0
+        1
     );
-    assert_eq!(f.count("SELECT COUNT(*) FROM candidates"), 4);
+    assert_eq!(f.count("SELECT COUNT(*) FROM candidates"), 6);
 }
 
 #[test]
@@ -836,4 +886,181 @@ fn discovery_loop_admin_boundaries_require_controller_key_and_actions_are_privat
             .as_str()
             .is_some_and(|s| s.contains("controller_loop")))
         .all(|v| v["controller_only"] == true));
+}
+
+#[test]
+fn loop_provider_failures_pause_and_resume_including_saved_feedback() {
+    let _guard = ENV.lock().unwrap_or_else(|error| error.into_inner());
+    let f = Fixture::new(true);
+    let initial = mna_tools::controller_loop::start(
+        &f.store,
+        &json!({"run_id":"R","analyst_message":"Find claims"}),
+    )
+    .unwrap();
+    let id = initial["loop_id"].as_str().unwrap();
+    let model = std::env::var("MNA_LLMSUITE_DEPLOYMENT").unwrap();
+    std::env::remove_var("MNA_LLMSUITE_DEPLOYMENT");
+    assert!(matches!(
+        f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id)),
+        Err(mna_tools::error::Error::ProviderUnavailable(_))
+    ));
+    assert_eq!(
+        mna_tools::controller_loop::get(&f.store, &json!({"loop_id":id})).unwrap()["status"],
+        "paused"
+    );
+    std::env::set_var("MNA_LLMSUITE_DEPLOYMENT", model);
+    let token = std::env::var("MNA_LLMSUITE_TOKEN").unwrap();
+    std::env::remove_var("MNA_LLMSUITE_TOKEN");
+    assert!(f
+        .rt
+        .block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+        .is_err());
+    assert_eq!(
+        mna_tools::controller_loop::get(&f.store, &json!({"loop_id":id})).unwrap()["status"],
+        "paused"
+    );
+    std::env::set_var("MNA_LLMSUITE_TOKEN", token);
+    let endpoint = std::env::var("MNA_LLMSUITE_ENDPOINT").unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    std::env::set_var("MNA_LLMSUITE_ENDPOINT", format!("http://{address}/chat"));
+    assert!(f
+        .rt
+        .block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+        .is_err());
+    assert_eq!(
+        mna_tools::controller_loop::get(&f.store, &json!({"loop_id":id})).unwrap()["status"],
+        "paused"
+    );
+    std::env::set_var("MNA_LLMSUITE_ENDPOINT", endpoint);
+    f.reply(SEARCH);
+    assert_eq!(
+        f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+            .unwrap()["status"],
+        "running"
+    );
+    // Both saved-turn resume paths must return running, without repeating searches.
+    f.store
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE controller_loops SET turns_used=0,status='paused' WHERE loop_id=?",
+                [id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+            .unwrap()["status"],
+        "running"
+    );
+    assert_eq!(f.count("SELECT COUNT(*) FROM search_queries"), 1);
+    // Stop after a saved main turn, as if feedback hit a rate gate just before restart.
+    f.store
+        .with_connection(|c| {
+            let turn_id: String = c.query_row(
+                "SELECT ct.turn_id FROM controller_loop_turns lt JOIN controller_turns ct ON ct.turn_id=lt.turn_id WHERE lt.loop_id=? AND ct.status='executed' LIMIT 1",
+                [id],
+                |r| r.get(0),
+            )?;
+            c.execute(
+                "UPDATE controller_loops SET turns_used=0,status='paused' WHERE loop_id=?",
+                [id],
+            )?;
+            c.execute(
+                "UPDATE controller_turns SET parsed_json=? WHERE turn_id=?",
+                rusqlite::params![
+                    serde_json::to_string(&mna_tools::instruction_set::parse_reply(
+                        "## Instruction set\n1. **invented_action**"
+                    ))
+                    .unwrap(),
+                    turn_id
+                ],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    f.reply("## Instruction set\n1. **keep_query_results**\n - query_id: q1\n - min_score: 0.5\n - note: Fit");
+    let result =
+        f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+            .unwrap();
+    assert_eq!(result["status"], "running");
+    assert_eq!(result["keeps"].as_array().unwrap().len(), 1);
+    assert_eq!(f.count("SELECT COUNT(*) FROM search_queries"), 1);
+}
+
+#[test]
+fn stale_apply_pauses_real_node_runner_and_can_resume_or_cancel() {
+    let _guard = ENV.lock().unwrap_or_else(|error| error.into_inner());
+    for action in ["resume", "discard", "keep"] {
+        let f = Fixture::new(true);
+        let initial = mna_tools::controller_loop::start(
+            &f.store,
+            &json!({"run_id":"R","analyst_message":"Find claims"}),
+        )
+        .unwrap();
+        let id = initial["loop_id"].as_str().unwrap();
+        f.reply(SEARCH);
+        f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+            .unwrap();
+        f.reply("## Instruction set\n1. **keep_query_results**\n - query_id: Q1\n - min_score: 0.5\n - note: Keep fits");
+        f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+            .unwrap();
+        f.store.execute("review_shortlist",&json!({"run_id":"R","keep_company_ids":[],"reason":"Analyst changed shortlist during loop"})).unwrap();
+        f.store
+            .with_connection(|c| {
+                c.execute(
+                    "UPDATE controller_loops SET finish_requested=1 WHERE loop_id=?",
+                    [id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        std::env::set_var(
+            "MNA_CONTROLLER_KEY",
+            "loop-controller-key-with-24-characters",
+        );
+        let app = mna_tools::router(
+            f.runtime.clone(),
+            "loop-service-key-with-24-characters".into(),
+            Some("loop-analyst-key-with-24-characters".into()),
+        )
+        .unwrap();
+        let (server, address) = f.rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            (
+                tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
+                address,
+            )
+        });
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../mna-ui/tests/controller-loop-rust-e2e.mjs");
+        let output = std::process::Command::new("node")
+            .arg(script)
+            .arg(format!("http://{address}"))
+            .arg(id)
+            .arg(action)
+            .output()
+            .unwrap();
+        server.abort();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(f.count("SELECT COUNT(*) FROM candidates"), 4);
+        if action == "discard" {
+            assert_eq!(f.count("SELECT COUNT(*) FROM shortlist_reviews"), 1);
+            assert!(mna_tools::controller_loop::start(
+                &f.store,
+                &json!({"run_id":"R","analyst_message":"Start again"})
+            )
+            .is_ok());
+        } else {
+            assert_eq!(f.count("SELECT COUNT(*) FROM shortlist_reviews"), 2);
+        }
+    }
 }

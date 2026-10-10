@@ -29,6 +29,7 @@ pub const LOOP_ACTIONS: &[&str] = &[
 pub const OBSERVATION_BYTES: usize = 4_800;
 pub const TURN_OBSERVATION_BYTES: usize = 32_000;
 pub const LOOP_STATE_BYTES: usize = 6_000;
+const STALE_APPLY: &str = "The shortlist changed during the loop. Resume to re-apply, or cancel.";
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -175,6 +176,13 @@ fn clip(value: &str, bytes: usize) -> String {
     }
     value[..end].replace(['\n', '\r', '\t'], " ")
 }
+fn truncate(value: &mut String, bytes: usize) {
+    let mut end = value.len().min(bytes);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+}
 fn max_score(source: &str) -> f64 {
     if source == "MID_SEMANTIC" {
         10.0
@@ -283,8 +291,36 @@ fn queries(store: &Store, id: &str) -> Result<Vec<Value>> {
     store.with_connection(|c| {
         let mut stmt = c.prepare("SELECT q.query_id,q.short_id,q.source,q.label,q.turn,q.total,q.histogram_json,k.min_score,k.kept_count,k.note,k.turn FROM controller_loop_queries q LEFT JOIN controller_loop_keeps k ON k.loop_id=q.loop_id AND k.query_id=q.query_id WHERE q.loop_id=? ORDER BY q.rowid")?;
         let rows = stmt.query_map([id],|r| Ok(json!({"query_id":r.get::<_,String>(0)?,"id":r.get::<_,String>(1)?,"source":r.get::<_,String>(2)?,"label":r.get::<_,String>(3)?,"turn":r.get::<_,i64>(4)?,"total":r.get::<_,i64>(5)?,"histogram":serde_json::from_str::<Value>(&r.get::<_,String>(6)?).unwrap_or_default(),"min_score":r.get::<_,Option<f64>>(7)?,"kept_count":r.get::<_,Option<i64>>(8)?,"note":r.get::<_,Option<String>>(9)?,"keep_turn":r.get::<_,Option<i64>>(10)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        let mut rows = rows;
+        for q in &mut rows {
+            if let Some(score) = q["min_score"].as_f64() {
+                q["kept_count"] = json!(c.query_row("SELECT COUNT(*) FROM controller_loop_hits h JOIN controller_loops l ON l.loop_id=h.loop_id JOIN candidates c ON c.run_id=l.run_id AND c.company_id=h.company_id WHERE h.loop_id=? AND h.query_id=? AND h.score>=? AND NOT EXISTS(SELECT 1 FROM controller_loop_drops d WHERE d.loop_id=h.loop_id AND d.company_id=h.company_id)",params![id,string(q,"query_id"),score],|r|r.get::<_,i64>(0))?);
+            }
+        }
         Ok(rows)
     })
+}
+fn kept_count(store: &Store, id: &str, query_id: &str, score: f64) -> Result<i64> {
+    store.with_connection(|c| Ok(c.query_row("SELECT COUNT(*) FROM controller_loop_hits h JOIN controller_loops l ON l.loop_id=h.loop_id JOIN candidates c ON c.run_id=l.run_id AND c.company_id=h.company_id WHERE h.loop_id=? AND h.query_id=? AND h.score>=? AND NOT EXISTS(SELECT 1 FROM controller_loop_drops d WHERE d.loop_id=h.loop_id AND d.company_id=h.company_id)",params![id,query_id,score],|r|r.get(0))?))
+}
+fn bounded_exclusions(store: &Store, run_id: &str, fallback: &str) -> Result<String> {
+    let history = store.execute("get_criteria_history", &json!({"run_id":run_id}))?;
+    let Some(items) = history["last_criteria"]["core_business_exclusions"].as_array() else {
+        return Ok(clip(fallback, 550));
+    };
+    let mut selected = Vec::new();
+    for item in items {
+        selected.push(item);
+        if serde_json::to_string(&selected)?.len() > 550 {
+            selected.pop();
+            break;
+        }
+    }
+    let mut out = serde_json::to_string(&selected)?;
+    if selected.len() < items.len() {
+        out.push_str(" (additional exclusions omitted)");
+    }
+    Ok(out)
 }
 pub fn consolidated(store: &Store, id: &str) -> Result<Vec<String>> {
     store.with_connection(|c| {
@@ -353,7 +389,7 @@ pub(crate) fn recover_interrupted(store: &Store) -> Result<()> {
 fn query(store: &Store, id: &str, q: &str) -> Result<Value> {
     queries(store, id)?
         .into_iter()
-        .find(|v| v["id"] == q || v["query_id"] == q)
+        .find(|v| string(v, "id").eq_ignore_ascii_case(q) || v["query_id"] == q)
         .ok_or_else(|| Error::NotFound("Query does not belong to this loop".into()))
 }
 #[derive(Clone)]
@@ -372,10 +408,18 @@ fn hits(store: &Store, id: &str, q: &str) -> Result<Vec<Hit>> {
     })
 }
 fn row(h: &Hit, bytes: usize) -> String {
-    // Keep full identifiers so a sampled company can be dropped without guessing.
+    // Oversized identifiers are explicitly marked as clipped; never suggest a guessed id.
+    let cid = if h.id.len() > 80 {
+        format!(
+            "{}… [id clipped; inspect_band for full id]",
+            clip(&h.id, 40)
+        )
+    } else {
+        clip(&h.id, 80)
+    };
     let tail = format!(
         " · company_id: {}{}",
-        h.id,
+        cid,
         if h.simulated { " *" } else { "" }
     );
     let prefix = format!("- {:.2} · ", h.score);
@@ -396,7 +440,9 @@ fn row(h: &Hit, bytes: usize) -> String {
         &h.description.chars().take(160).collect::<String>(),
         room.saturating_sub(name.len() + matched.len()).min(160),
     );
-    format!("{prefix}{name} · {desc} · [{matched}]{tail}")
+    let mut out = format!("{prefix}{name} · {desc} · [{matched}]{tail}");
+    truncate(&mut out, bytes);
+    out
 }
 
 pub fn observation(store: &Store, id: &str, q: &str) -> Result<String> {
@@ -458,7 +504,7 @@ pub fn observation(store: &Store, id: &str, q: &str) -> Result<String> {
             out.push('\n');
         }
     }
-    debug_assert!(out.len() <= OBSERVATION_BYTES);
+    truncate(&mut out, OBSERVATION_BYTES);
     Ok(out)
 }
 
@@ -617,7 +663,7 @@ pub(crate) fn decision(store: &Store, action: &str, args: &Value) -> Result<Valu
             {
                 return Err(invalid("Threshold is outside this query's score scale"));
             }
-            let count=store.with_connection(|c|Ok(c.query_row("SELECT COUNT(*) FROM controller_loop_hits WHERE loop_id=? AND query_id=? AND score>=?",params![id,string(&q,"query_id"),a.min_score],|r|r.get::<_,i64>(0))?))?;
+            let count = kept_count(store, id, string(&q, "query_id"), a.min_score)?;
             store.with_connection(|c| {c.execute("INSERT INTO controller_loop_keeps(loop_id,query_id,min_score,kept_count,note,turn) VALUES(?,?,?,?,?,?) ON CONFLICT(loop_id,query_id) DO UPDATE SET min_score=excluded.min_score,kept_count=excluded.kept_count,note=excluded.note,turn=excluded.turn",params![id,q["query_id"].as_str(),a.min_score,count,a.note,turn])?;Ok(())})?;
             Ok(json!({"query_id":q["id"],"min_score":a.min_score,"kept_count":count}))
         }
@@ -693,7 +739,7 @@ pub fn loop_state(store: &Store, id: &str) -> Result<String> {
     let criteria = format!(
         "Approved core business: {}\nCore-business exclusions: {}",
         clip(business, 800),
-        clip(exclusions, 550)
+        bounded_exclusions(store, string(&v, "run_id"), exclusions)?
     );
     let qs = queries(store, id)?;
     let drops = store.with_connection(|c| {
@@ -710,7 +756,7 @@ pub fn loop_state(store: &Store, id: &str) -> Result<String> {
     let mut out = format!(
         "Turn {k} of {n} ({} remaining)\nCriteria:\n{}\nQueries:\n",
         (n - k + 1).max(0),
-        clip(&criteria, 1_400)
+        criteria
     );
     // There can be hundreds of queries. Every Q-id remains visible; compress labels first.
     let room = LOOP_STATE_BYTES.saturating_sub(out.len() + suffix.len() + 1);
@@ -786,7 +832,9 @@ async fn consolidate_inner(
     if v["status"] == "completed" {
         return get(store, &json!({"loop_id":id}));
     }
-    active(&v)?;
+    if v["status"] != "failed" {
+        active(&v)?;
+    }
     criteria_current(store, &v)?;
     let qs = queries(store, id)?;
     let has_keeps = qs.iter().any(|q| !q["min_score"].is_null());
@@ -798,19 +846,36 @@ async fn consolidate_inner(
         )?;
         Ok(())
     })?;
+    // An explicit resume/cancel-keep after a stale apply retries against the current
+    // revision. Preserve the original snapshot for undo and retain review's CAS check.
+    let revision = if v["status"] == "paused" && v["summary"] == STALE_APPLY {
+        store.execute(
+            "get_shortlist_context",
+            &json!({"run_id":v["run_id"],"limit":1}),
+        )?["selection_revision"]
+            .as_i64()
+            .unwrap_or(0)
+    } else {
+        v["selection_revision_before"].as_i64().unwrap_or(0)
+    };
     let reviewed = if apply && has_keeps {
         match apply_review(
             runtime,
             &v,
             ids.clone(),
-            v["selection_revision_before"].as_i64().unwrap_or(0),
+            revision,
             format!("LLM Suite loop {id} consolidation (analyst-enabled Loop)"),
         )
         .await
         {
             Ok(review) => Some(review),
             Err(error) => {
-                store.with_connection(|c| {c.execute("UPDATE controller_loops SET status='paused',summary=?,updated_at=? WHERE loop_id=?",params![error.to_string(),now(),id])?;Ok(())})?;
+                let summary = if matches!(error, Error::Conflict(_)) {
+                    STALE_APPLY.to_owned()
+                } else {
+                    error.to_string()
+                };
+                store.with_connection(|c| {c.execute("UPDATE controller_loops SET status='paused',summary=?,updated_at=? WHERE loop_id=?",params![summary,now(),id])?;Ok(())})?;
                 return Err(error);
             }
         }
@@ -819,7 +884,10 @@ async fn consolidate_inner(
     };
     let summary = if !has_keeps {
         "No keep decisions were made; the shortlist was not changed.".to_owned()
-    } else if v["summary"].as_str().is_some_and(|s| !s.is_empty()) {
+    } else if v["summary"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty() && s != STALE_APPLY)
+    {
         string(&v, "summary").to_owned()
     } else {
         format!(
@@ -854,7 +922,9 @@ pub async fn admin(runtime: &Runtime, store: &Store, name: &str, args: &Value) -
             if v["status"] == "cancelled" || v["status"] == "completed" {
                 return get(store, &json!({"loop_id":id}));
             }
-            active(&v)?;
+            if v["status"] != "failed" {
+                active(&v)?;
+            }
             if a.keep {
                 consolidate_inner(runtime, store, id, true).await?;
             }
@@ -971,10 +1041,22 @@ pub async fn turn(runtime: &Runtime, store: &Store, id: &str) -> Result<Value> {
     if let Err(error) = &outcome {
         // Rate gates preserve progress and can be retried without replaying accepted actions.
         if !matches!(error, Error::RateLimited(_)) {
-            store.with_connection(|c|{c.execute("UPDATE controller_loops SET status='failed',summary=?,updated_at=? WHERE loop_id=? AND status='running'",params![error.to_string(),now(),id])?;Ok(())})?;
+            let status = if recoverable_provider_error(error) {
+                "paused"
+            } else {
+                "failed"
+            };
+            store.with_connection(|c|{c.execute("UPDATE controller_loops SET status=?,summary=?,updated_at=? WHERE loop_id=? AND status='running'",params![status,error.to_string(),now(),id])?;Ok(())})?;
         }
     }
     outcome
+}
+fn recoverable_provider_error(error: &Error) -> bool {
+    matches!(error, Error::ProviderUnavailable(_) | Error::Http(_))
+        || matches!(error, Error::Conflict(message) if message.starts_with("Provider receipt is uncertain")
+            || message.starts_with("Provider reply was interrupted")
+            || message.starts_with("This provider request may already have been sent")
+            || message.starts_with("Provider returned HTTP "))
 }
 async fn turn_inner(runtime: &Runtime, store: &Store, id: &str) -> Result<Value> {
     let mut v = record(store, id)?;
@@ -985,6 +1067,13 @@ async fn turn_inner(runtime: &Runtime, store: &Store, id: &str) -> Result<Value>
     if k > n || v["finish_requested"] == true {
         return consolidate_inner(runtime, store, id, true).await;
     }
+    store.with_connection(|c| {
+        c.execute(
+            "UPDATE controller_loops SET status='running',updated_at=? WHERE loop_id=?",
+            params![now(), id],
+        )?;
+        Ok(())
+    })?;
     let model = std::env::var("MNA_LLMSUITE_DEPLOYMENT")
         .ok()
         .filter(|s| !s.trim().is_empty() && s.len() <= 160)
@@ -1172,6 +1261,83 @@ async fn turn_inner(runtime: &Runtime, store: &Store, id: &str) -> Result<Value>
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn timeout_and_network_errors_are_recoverable_but_fatal_errors_are_not() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let error = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(20))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/timeout"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.is_timeout());
+        assert!(recoverable_provider_error(&Error::Http(error)));
+        drop(listener);
+        let error = reqwest::get(format!("http://{address}/network"))
+            .await
+            .unwrap_err();
+        assert!(recoverable_provider_error(&Error::Http(error)));
+        assert!(recoverable_provider_error(&Error::Conflict(
+            "Provider returned HTTP 503; no answer was accepted".into()
+        )));
+        assert!(!recoverable_provider_error(&Error::Validation(
+            "Invalid query state".into()
+        )));
+        assert!(!recoverable_provider_error(&Error::Internal(
+            "Fatal loop storage failure".into()
+        )));
+    }
+
+    #[test]
+    fn oversized_ids_and_cjk_observations_are_hard_bounded() {
+        let (s, id) = fixture();
+        add_query(&s, &id, "search_mid", 0);
+        let q = query(&s, &id, "q1").unwrap();
+        s.with_connection(|c| {
+            c.execute("UPDATE controller_loop_queries SET label=? WHERE loop_id=?", params!["長".repeat(8000),id])?;
+            for n in 0..40 {
+                let cid = format!("{n}-{}", "長".repeat(4000));
+                c.execute("INSERT INTO companies(company_id,name,description,created_at,updated_at) VALUES(?,?,?,datetime('now'),datetime('now'))", params![cid,"長".repeat(200),"長".repeat(300)])?;
+                c.execute("INSERT INTO controller_loop_hits(loop_id,query_id,company_id,score) VALUES(?,?,?,?)", params![id,q["query_id"].as_str(),cid,n as f64/40.0])?;
+            }
+            Ok(())
+        }).unwrap();
+        let obs = observation(&s, &id, "q1").unwrap();
+        assert!(obs.len() <= OBSERVATION_BYTES);
+        assert!(obs.chars().count().div_ceil(4) <= 1200);
+        assert!(obs.contains("id clipped"));
+        for label in ["Histogram:", "Top:", "Borderline", "Bottom:"] {
+            assert!(obs.contains(label));
+        }
+        let band = decision(
+            &s,
+            "inspect_band",
+            &json!({"loop_id":id,"query_id":"q1","min_score":0.0,"max_score":1.0}),
+        )
+        .unwrap();
+        assert!(band["observation"].as_str().unwrap().len() <= 4000);
+    }
+
+    #[test]
+    fn exclusion_budget_preserves_whole_items_and_guide_hides_injected_fields() {
+        let (s, id) = fixture();
+        let revision = s.execute("save_criteria_revision", &json!({"run_id":"R","criteria_text":"Claims software","business_definition":"長".repeat(600),"core_business_exclusions":["consulting", "x".repeat(500), "y".repeat(30), "長".repeat(300), "outsourcing"]})).unwrap();
+        s.execute("approve_criteria_revision", &json!({"run_id":"R","revision":revision["revision"],"digest":revision["digest"],"approved_by":"Analyst"})).unwrap();
+        let state = loop_state(&s, &id).unwrap();
+        assert!(state.contains(&format!(
+            "{} (additional exclusions omitted)",
+            json!(["consulting", "x".repeat(500), "y".repeat(30)])
+        )));
+        assert!(state.len() <= LOOP_STATE_BYTES);
+        let guide = controller::action_guide(&action_catalog(), LOOP_ACTIONS);
+        assert!(!guide.contains("loop_id"));
+        assert!(!guide.contains("run_id"));
+        assert!(guide.contains("query_id"));
+    }
+
     fn fixture() -> (Store, String) {
         let s = Store::open(":memory:").unwrap();
         s.execute(
@@ -1285,6 +1451,9 @@ mod tests {
         let v = get(&s, &json!({"loop_id":id})).unwrap();
         assert_eq!(v["keeps"].as_array().unwrap().len(), 2);
         assert_eq!(v["queries"][0]["min_score"], 0.5);
+        assert_eq!(v["queries"][0]["kept_count"], 19);
+        assert_eq!(v["queries"][1]["kept_count"], 28);
+        assert!(loop_state(&s, &id).unwrap().contains("→ 19 kept"));
         assert!(decision(
             &s,
             "keep_query_results",
@@ -1438,6 +1607,38 @@ mod tests {
             40
         );
     }
+    #[tokio::test]
+    async fn failed_loops_can_cancel_with_or_without_saved_keeps() {
+        for keep_decisions in [false, true] {
+            let (s, id) = fixture();
+            add_query(&s, &id, "search_mid", 0);
+            keep(&s, &id, "q1", 0.5);
+            s.with_connection(|c| {
+                c.execute(
+                    "UPDATE controller_loops SET status='failed' WHERE loop_id=?",
+                    [&id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            let runtime = Runtime::new(s.clone()).unwrap();
+            let result = admin(
+                &runtime,
+                &s,
+                "cancel_controller_loop",
+                &json!({"loop_id":id,"keep":keep_decisions}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["status"], "cancelled");
+            assert_eq!(!result["applied_review_id"].is_null(), keep_decisions);
+            assert_eq!(
+                s.execute("get_shortlist_context", &json!({"run_id":"R"}))
+                    .unwrap()["considered_count"],
+                if keep_decisions { 20 } else { 40 }
+            );
+        }
+    }
     #[test]
     fn reserve_starts_at_five_remaining_and_actions_are_mode_scoped() {
         let (s, id) = fixture();
@@ -1514,6 +1715,10 @@ mod tests {
         // These ISCC hits are not run candidates, so they cannot enter consolidation.
         keep(&s, &id, "Q1", 0.5);
         assert!(consolidated(&s, &id).unwrap().is_empty());
+        assert_eq!(
+            get(&s, &json!({"loop_id":id})).unwrap()["queries"][0]["kept_count"],
+            0
+        );
         s.with_connection(|c|{c.execute("INSERT INTO mid_semantic_scores(run_id,company_id,criteria_revision,score,cosine,model,computed_at) VALUES('R','C00',1,8.5,0.85,'fixture','now')",[])?;Ok(())}).unwrap();
         register_search(
             &s,

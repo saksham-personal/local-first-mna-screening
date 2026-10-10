@@ -123,7 +123,7 @@ pub fn action_guide(catalog: &[ToolDefinition], allowed: &[&str]) -> String {
         let mut entry = format!("{}: {}\n", tool.name, tool.description);
         if let Some(fields) = tool.input_schema["properties"].as_object() {
             for (name, schema) in fields {
-                if name == "run_id" {
+                if name == "run_id" || name == "loop_id" {
                     continue;
                 }
                 let required = tool.input_schema["required"]
