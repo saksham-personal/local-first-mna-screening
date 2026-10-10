@@ -1,6 +1,7 @@
 pub mod agent_commands;
 pub mod context;
 pub mod controller;
+pub mod controller_loop;
 pub mod data;
 pub mod enrichment_report;
 pub mod error;

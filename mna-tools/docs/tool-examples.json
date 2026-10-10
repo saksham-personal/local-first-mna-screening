@@ -611,6 +611,12 @@
   "list_exports": {
     "run_id": "R42"
   },
+  "get_controller_loop": {
+    "loop_id": "loop-returned-id"
+  },
+  "list_controller_loops": {
+    "run_id": "R42"
+  },
   "get_controller_turns": {
     "run_id": "R42",
     "limit": 20

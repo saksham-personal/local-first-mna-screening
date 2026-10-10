@@ -59,6 +59,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ("space_search_semantic", "Search all compatible active MID vectors using free text", "search", true),
         ("space_search_iscc", "Search ISCC and hydrate companies without a run", "search", true),
         ("space_recent", "Read recent Search Space searches", "search", false),
+        ("get_controller_loop", "Read a discovery loop, query thresholds and saved turns", "workflow", false),
+        ("list_controller_loops", "Read recent discovery loops for a run", "workflow", false),
         ("get_controller_turns", "Read saved controller turns, Markdown replies, instructions and outcomes", "workflow", false),
         ("get_shortlist_context", "Read considered companies, hidden count, source coverage and chosen results for this screening run", "review", false),
         ("get_criteria_history", "Read every criteria revision with its Intake Form, exclusions, validity period (created_at to superseded_at) and analyst approval; last_criteria is the newest revision", "review", false),
@@ -465,6 +467,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     .or_else(|| crate::execution::input_schema(name))
                     .or_else(|| crate::review::input_schema(name))
                     .or_else(|| crate::controller::input_schema(name))
+                    .or_else(|| crate::controller_loop::input_schema(name))
                     .unwrap_or_else(|| json!({"type":"object","additionalProperties":false})),
             },
         )
@@ -492,6 +495,7 @@ fn canonical_tool(name: &str) -> Result<String> {
 impl Runtime {
     pub fn new(store: Store) -> Result<Self> {
         crate::index_build::recover_interrupted(&store)?;
+        crate::controller_loop::recover_interrupted(&store)?;
         Ok(Self {
             search: Arc::new(SearchEngine::new(store.clone())?),
             space: Arc::new(crate::search_space::SearchSpace::new(store.clone())?),
@@ -516,7 +520,12 @@ impl Runtime {
         self.dispatch(&tool, call.arguments, feedback).await
     }
 
-    async fn dispatch(&self, tool: &str, arguments: Value, admin: bool) -> Result<Value> {
+    pub(crate) async fn dispatch(
+        &self,
+        tool: &str,
+        arguments: Value,
+        admin: bool,
+    ) -> Result<Value> {
         if !arguments.is_object() {
             return Err(Error::Validation(
                 "Tool arguments must be a JSON object".into(),
@@ -589,6 +598,10 @@ impl Runtime {
                     crate::run_control::execute(&store, &owned_tool, &owned_arguments, admin)
                 } else if crate::export_jobs::input_schema(&owned_tool).is_some() {
                     exports.execute(&store, &owned_tool, &owned_arguments)
+                } else if owned_tool == "get_controller_loop" {
+                    crate::controller_loop::get(&store, &owned_arguments)
+                } else if owned_tool == "list_controller_loops" {
+                    crate::controller_loop::list(&store, &owned_arguments)
                 } else if owned_tool == "get_controller_turns" {
                     crate::controller::get_controller_turns(&store, &owned_arguments)
                 } else if crate::index_build::input_schema(&owned_tool).is_some() {
@@ -900,6 +913,11 @@ async fn admin(
             | "llmsuite-slot"
             | "llmsuite-consume"
             | "provider-text"
+            | "controller-loop-start"
+            | "controller-loop-turn"
+            | "controller-loop-consolidate"
+            | "controller-loop-cancel"
+            | "controller-loop-undo"
             | "controller-turn"
             | "shortlist-review"
             | "criteria-save"
@@ -923,6 +941,27 @@ async fn admin(
             Err(e) => return Error::Validation(e.to_string()).into_response(),
         };
         return match crate::gateway::dispatch(state.runtime.store.clone(), args).await {
+            Ok(result) => Json(result).into_response(),
+            Err(error) => error.into_response(),
+        };
+    }
+    let loop_tool = match operation.as_str() {
+        "controller-loop-start" => Some("start_controller_loop"),
+        "controller-loop-turn" => Some("run_controller_loop_turn"),
+        "controller-loop-consolidate" => Some("consolidate_controller_loop"),
+        "controller-loop-cancel" => Some("cancel_controller_loop"),
+        "controller-loop-undo" => Some("undo_controller_loop"),
+        _ => None,
+    };
+    if let Some(tool) = loop_tool {
+        return match crate::controller_loop::admin(
+            &state.runtime,
+            &state.runtime.store,
+            tool,
+            &arguments,
+        )
+        .await
+        {
             Ok(result) => Json(result).into_response(),
             Err(error) => error.into_response(),
         };
@@ -1064,11 +1103,16 @@ pub fn administrator_definitions() -> Vec<Value> {
         ("dispatch_provider_text", "/admin/provider-text"),
         ("start_export", "/admin/export-start"),
         ("run_controller_turn", "/admin/controller-turn"),
+        ("start_controller_loop", "/admin/controller-loop-start"),
+        ("run_controller_loop_turn", "/admin/controller-loop-turn"),
+        ("consolidate_controller_loop", "/admin/controller-loop-consolidate"),
+        ("cancel_controller_loop", "/admin/controller-loop-cancel"),
+        ("undo_controller_loop", "/admin/controller-loop-undo"),
         ("start_index_build", "/admin/index-build-start"),
         ("cancel_index_build", "/admin/index-build-cancel"),
         ("activate_mid_bundle", "/admin/mid-bundle-activate"),
         ("delete_mid_bundle", "/admin/mid-bundle-delete"),
-    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"run_controller_turn"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="run_controller_turn"{Some(crate::controller::turn_input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::run_control::input_schema(name).or_else(||crate::data::input_schema(name)).or_else(||crate::store::input_schema(name)).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::export_jobs::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
+    ].into_iter().map(|(name, endpoint)| json!({"name":name,"endpoint":endpoint,"controller_only":matches!(name,"lease_execution_job"|"mark_execution_dispatch"|"record_execution_response"|"reserve_llmsuite_slot"|"consume_llmsuite_slot"|"reconcile_execution_job"|"record_execution_failure"|"retry_execution_job"|"dispatch_execution_job"|"dispatch_provider_text"|"run_controller_turn"|"start_controller_loop"|"run_controller_loop_turn"|"consolidate_controller_loop"|"cancel_controller_loop"|"undo_controller_loop"|"review_shortlist"|"save_criteria_revision"|"approve_criteria_revision"|"apply_enrichment_review"),"input_schema":if name=="dispatch_execution_job"{Some(crate::gateway::input_schema())}else if name=="run_controller_turn"{Some(crate::controller::turn_input_schema())}else if name=="dispatch_provider_text"{Some(crate::gateway::text_input_schema())}else{crate::controller_loop::input_schema(name).or_else(||crate::run_control::input_schema(name)).or_else(||crate::data::input_schema(name)).or_else(||crate::store::input_schema(name)).or_else(||crate::search_space::input_schema(name)).or_else(||crate::search::input_schema(name)).or_else(||crate::export_jobs::input_schema(name)).or_else(||crate::index_build::input_schema(name)).or_else(||crate::workflow::input_schema(name)).or_else(||crate::execution::input_schema(name)).or_else(||crate::trust::input_schema(name)).or_else(||crate::review::input_schema(name))}})).collect();
     tools
 }
 

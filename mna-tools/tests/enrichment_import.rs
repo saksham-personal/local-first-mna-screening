@@ -924,7 +924,7 @@ async fn apply_enrichment_review_is_a_controller_operation() {
     );
     // The privileged catalog lists it, controller-only, with a real schema.
     let catalog = administrator_definitions();
-    assert_eq!(catalog.len(), 34);
+    assert_eq!(catalog.len(), 39);
     let entry = catalog
         .iter()
         .find(|tool| tool["name"] == "apply_enrichment_review")

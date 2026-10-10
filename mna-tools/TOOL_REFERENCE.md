@@ -48,7 +48,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 - [Candidate funnel](#candidate-funnel): `add_candidates`, `get_candidate_set`, `get_shortlist_context`, `get_screening_grid`, `get_grid_descriptions`, `get_company_detail`, `update_candidate_status`, `get_discovery_summary`
 - [Enrichment and exports](#enrichment-and-exports): `inspect_enrichment_files`, `import_enrichment_files`, `get_enrichment_report`, `export_candidate_set`, `get_export`, `list_exports`
 - [Search Space](#search-space): `space_sync_status`, `space_browse`, `space_search_lexical`, `space_search_semantic`, `space_search_iscc`, `space_recent`
-- [LLM Suite controller](#llm-suite-controller): `get_controller_turns`
+- [LLM Suite controller](#llm-suite-controller): `get_controller_turns`, `get_controller_loop`, `list_controller_loops`
 - [Approved action graphs and screening](#approved-action-graphs-and-screening): `propose_action_plan`, `get_action_plan`, `propose_prepared_plan`, `get_prepared_plan`, `get_execution_progress`, `get_execution_job`, `get_model_assessments`, `get_screening_rounds`, `prepare_screening_batch`, `prepare_bing_queries`, `save_screening_results`, `get_screening_results`, `complete_action_step`
 - [Recovery](#recovery): `save_checkpoint`, `get_checkpoint`
 
@@ -1980,9 +1980,49 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
+### 73. `get_controller_loop`
+
+**Purpose:** Read an analyst-enabled LLM Suite discovery loop.
+
+**How it works:** Reads durable state, query-specific score histograms, Q-ids, latest keep thresholds, drops, consolidated count and audited Markdown turns. Loop-only actions inspect_band, keep_query_results, drop_companies and finish_loop are never public tools. Each observation is capped at 4,800 UTF-8 bytes, a turn at 32,000 bytes and loop state at 6,000 bytes; searches are limited to four per turn and fifty per loop. Semantic work remains skipped without configured vectors. Simulated controller activity and source samples are labelled.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `loop_id` | Yes | string | — |
+
+**Returned data and effects:** Loop state, queries, keeps, drops, turns, observations, simulated, applied_review_id, final_count and undone_review_id. Reads do not approve or apply anything.
+
+**Example arguments:**
+
+```json
+{
+  "loop_id": "loop-returned-id"
+}
+```
+
+### 74. `list_controller_loops`
+
+**Purpose:** List discovery loops saved for a screening run.
+
+**How it works:** Reads at most 100 newest loops for the run. State is rebuilt from SQLite and survives conversation rotation; hidden companies remain in candidate history.
+
+| Argument | Required by schema | Type | Schema default |
+|---|---|---|---|
+| `run_id` | Yes | string | — |
+
+**Returned data and effects:** loops containing the same state shape as get_controller_loop. Read-only.
+
+**Example arguments:**
+
+```json
+{
+  "run_id": "R42"
+}
+```
+
 ## Approved action graphs and screening
 
-### 73. `propose_action_plan`
+### 75. `propose_action_plan`
 
 **Purpose:** Turn an interpreted analyst request into a durable dependency graph.
 
@@ -2029,7 +2069,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 74. `get_action_plan`
+### 76. `get_action_plan`
 
 **Purpose:** Read a plan, its approval metadata and completed dependencies.
 
@@ -2051,7 +2091,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 75. `propose_prepared_plan`
+### 77. `propose_prepared_plan`
 
 **Purpose:** Freeze an immutable version-2 screening or question handoff.
 
@@ -2133,7 +2173,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 76. `get_prepared_plan`
+### 78. `get_prepared_plan`
 
 **Purpose:** Read a frozen handoff, its approval state and durable batch jobs.
 
@@ -2153,7 +2193,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 77. `get_execution_progress`
+### 79. `get_execution_progress`
 
 **Purpose:** Poll approval freshness and durable batch progress without large frozen inputs.
 
@@ -2173,7 +2213,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 78. `get_execution_job`
+### 80. `get_execution_job`
 
 **Purpose:** Inspect a durable provider batch and its parser or dispatch state.
 
@@ -2193,7 +2233,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 79. `get_model_assessments`
+### 81. `get_model_assessments`
 
 **Purpose:** Read accepted provider assessments separately from retrieval and evidence.
 
@@ -2216,7 +2256,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 80. `get_screening_rounds`
+### 82. `get_screening_rounds`
 
 **Purpose:** Read approved scored-screening rounds for a run.
 
@@ -2236,7 +2276,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 81. `prepare_screening_batch`
+### 83. `prepare_screening_batch`
 
 **Purpose:** Legacy compatibility handoff for scored screening batches.
 
@@ -2275,7 +2315,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 82. `prepare_bing_queries`
+### 84. `prepare_bing_queries`
 
 **Purpose:** Expand approved fit questions using the best available company identity.
 
@@ -2304,7 +2344,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 83. `save_screening_results`
+### 85. `save_screening_results`
 
 **Purpose:** Legacy compatibility endpoint for batch scores.
 
@@ -2338,7 +2378,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 84. `get_screening_results`
+### 86. `get_screening_results`
 
 **Purpose:** Read a company's external screening history within the current run.
 
@@ -2362,7 +2402,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 85. `complete_action_step`
+### 87. `complete_action_step`
 
 **Purpose:** Release dependent graph work only after successful operations are proven.
 
@@ -2392,7 +2432,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 
 ## Recovery
 
-### 86. `save_checkpoint`
+### 88. `save_checkpoint`
 
 **Purpose:** Persist the orchestrator's restart state with optimistic concurrency.
 
@@ -2425,7 +2465,7 @@ Companies, exact identifiers, source rows and compact PB/ROGO enrichment are glo
 }
 ```
 
-### 87. `get_checkpoint`
+### 89. `get_checkpoint`
 
 **Purpose:** Resume from the latest or a named historical checkpoint.
 
@@ -2565,6 +2605,24 @@ For a direct chat question, the controller can call `/admin/provider-text` witho
 Omit `deployment` to use the configured provider deployment. A request with no configured connection or deployment returns `executed:false`. For generated Bing query chips, use `expected_format:"query_templates"`; Rust requires one to five distinct `QUERY:` lines inside the exact `BEGIN_QUERIES`/`END_QUERIES` block. Criteria and screening-prompt drafts have their own exact blocks. Each malformed response has at most two repairs under the same LLM Suite send gate. These examples describe input shapes and do not assert that a live provider ran.
 
 The free-text `approved_by` is audit metadata; production user authentication belongs to the controller. Do not expose the analyst key to the LLM. On migration, legacy profiles auto-approved as `system_initialization` are returned to PROPOSED, requiring actual approval; existing human approvals are retained.
+
+## Analyst-enabled discovery loop API
+
+Turning Loop on and sending a request authorizes searches and deterministic final shortlist review only. Loop output cannot approve criteria, approve or start screening, export or label companies. All five operations below require the controller key.
+
+| Operation | Endpoint | Arguments |
+|---|---|---|
+| start_controller_loop | /admin/controller-loop-start | run_id, analyst_message, max_turns (1-50, default 50) |
+| run_controller_loop_turn | /admin/controller-loop-turn | loop_id |
+| consolidate_controller_loop | /admin/controller-loop-consolidate | loop_id, apply:boolean |
+| cancel_controller_loop | /admin/controller-loop-cancel | loop_id, keep:boolean |
+| undo_controller_loop | /admin/controller-loop-undo | loop_id, force:boolean (default false) |
+
+The final set is the union of query results meeting each latest threshold, minus explicit drops, restricted to run candidates. Apply uses the unchanged audited review_shortlist path and its expected selection revision with reason `LLM Suite loop <loop_id> consolidation (analyst-enabled Loop)`. A changed shortlist or criteria blocks apply. No keep decisions completes without an apply. Undo restores the exact considered IDs saved before discovery, including when there was no prior review; it refuses subsequent shortlist changes unless force:true is explicit. Searches remain in history when cancelled without keeping.
+
+The Node runner provides POST `/api/loop/start` with `{runId,message,maxTurns?,sessionId?,title?}`, POST `/api/loop/pause|resume` with `{id}`, POST `/api/loop/cancel` with `{id,keep}`, POST `/api/loop/undo` with `{id,force?}`, and GET `/api/loop/runs` returning `{jobs:[snapshot]}`. `loopId` is accepted as an alias for id. Pause and cancel wait for the current Rust turn boundary; an already completed final turn stays completed. A bridge restart pauses unfinished runners until explicit resume. A rate-gate error retries without replaying completed decisions.
+
+A snapshot contains `{id,kind:'loop',runId,sessionId,title,state,turn,maxTurns,queries,consolidatedCount,steps,message,startedAt,updatedAt,simulated,appliedReviewId,finalCount,undoneReviewId}`. Each step has id, label and state; labels are Plan queries, Refine · turn k of N, Consolidate, Apply shortlist. Node pause state is persisted by the runner; Rust holds the durable decisions. Terminal Rust state is reconciled before the next send.
 
 ## Worked orchestration example
 

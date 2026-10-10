@@ -24,7 +24,34 @@ function markdown(instruction, { variant = false, typo = false, feedback = false
   return `${heading('Context')}\n${feedback ? 'Correcting the rejected instruction only.' : 'Local deterministic stub responding to the analyst request.'}\n${heading('Reasoning')}\nRead or propose through the allowed actions; analyst approval remains required.\n${heading('Instruction set')}\n1. **${typo ? 'unavailable_stub_action' : instruction.action}** — ${instruction.title}\n${Object.entries(instruction.fields).map(([key, value]) => `   - ${key}${variant ? ' = ' : ': '}${value}`).join('\n')}\n${heading('Notes for the analyst')}\nSIMULATED: local LLM Suite stub. ${instruction.notes || 'No model results or approvals are fabricated.'}`;
 }
 
-export function createStub({ deviations = process.env.STUB_DEVIATIONS === '1' } = {}) {
+// Read only the structured loop state/observation lines, never company prose.
+function loopReply(prompt, turn, loopTurns) {
+  const reserve = prompt.includes('TURN BUDGET:');
+  const queryLines = [...prompt.matchAll(/^(Q\d+) · (MID_KEYWORD|MID_SEMANTIC|ISCC) ·.*$/gm)];
+  const queries = [...new Map(queryLines.map(m => [m[1], { id: m[1], source: m[2] }])).values()];
+  const keep = queries.slice(0, 49).map(q => {
+    const header = prompt.indexOf(`${q.id} · ${q.source}`, prompt.indexOf('Observations from'));
+    const histogram = header >= 0 ? prompt.slice(header).match(/^Histogram: (.+)$/m)?.[1] : undefined;
+    const bins = histogram ? [...histogram.matchAll(/([\d.]+)–([\d.]+):(\d+)/g)] : [];
+    const total = bins.reduce((n, b) => n + Number(b[3]), 0);
+    let threshold = q.source === 'MID_SEMANTIC' ? 5 : 0.5, count = 0;
+    for (const bin of bins) { count += Number(bin[3]); if (count >= total / 2 && total) { threshold = Number(bin[1]); break; } }
+    return { action: 'keep_query_results', title: `Keep the upper score band of ${q.id}`, fields: { query_id: q.id, min_score: threshold, note: 'SIMULATED: choose the upper half of the observed distribution.' } };
+  });
+  let actions;
+  if (reserve) actions = [...keep, { action: 'finish_loop', title: 'Consolidate within the turn reserve', fields: { summary: 'SIMULATED: consolidate the observed upper score bands before the cap.' } }];
+  else if (turn === 1 || (loopTurns > 0 && turn < loopTurns)) actions = [
+    { action: 'search_mid', title: 'Find claims software', fields: { rationale: 'Broad core-business product vocabulary', keywords: 'claims; software' } },
+    { action: 'search_mid', title: 'Find policy software', fields: { rationale: 'Alternate insurance workflow vocabulary', keywords: 'policy administration; insurance' } },
+    { action: 'search_mid_semantic', title: 'Find semantic neighbors', fields: { rationale: 'Owned software for insurance claims and policy workflows', min_score: 0 } },
+  ];
+  else if (turn === 2) actions = keep;
+  else if (turn === 3 && queries.length) actions = [{ action: 'inspect_band', title: 'Inspect the threshold boundary', fields: { query_id: queries[0].id, min_score: 0.4, max_score: 0.7, limit: 15 } }];
+  else actions = [{ action: 'finish_loop', title: 'Consolidate the stable shortlist', fields: { summary: 'SIMULATED: stable shortlist from query-specific thresholds.' } }];
+  return `## Context\nSIMULATED: local deterministic discovery loop.\n## Reasoning\nUse the observed query distributions and preserve separate score scales.\n## Instruction set\n${actions.length ? actions.map((a, i) => `${i + 1}. **${a.action}** — ${a.title}\n${Object.entries(a.fields).map(([k, v]) => `   - ${k}: ${v}`).join('\n')}`).join('\n') : 'None.'}\n## Notes for the analyst\nSIMULATED: no corporate provider was called.`;
+}
+
+export function createStub({ deviations = process.env.STUB_DEVIATIONS === '1', loopTurns = Number(process.env.STUB_LOOP_TURNS || 0) } = {}) {
   const transcripts = new Map();
   const instructions = new Map();
   const reply = ({ conversation_id: id, prompt, model }) => {
@@ -36,6 +63,11 @@ export function createStub({ deviations = process.env.STUB_DEVIATIONS === '1' } 
     if (handoff) {
       const state = prompt.split('Run state:\n')[1]?.split('\n\nRecent decisions:')[0] ?? 'No state supplied.';
       text = `## Approved state\n${state.slice(0, 1200)}\n## Results and open work\nContinue from the saved run; no new results generated.\n## Recent decisions\nUse the persisted analyst decisions.\nSIMULATED: local stub handoff.`;
+    } else if (prompt.startsWith('You are running a discovery loop') || /^Turn \d+ of \d+/.test(prompt)) {
+      const turn = Number(prompt.match(/Turn (\d+) of/)?.[1] || 1);
+      text = loopReply(prompt, turn, loopTurns);
+    } else if (feedback && transcript.some(item => item.prompt.startsWith('You are running a discovery loop'))) {
+      text = '## Context\nSIMULATED: loop repair.\n## Reasoning\nLeave rejected actions out.\n## Instruction set\nNone.';
     } else {
       const message = prompt.split('Analyst message:\n').at(-1).trim();
       let instruction = feedback ? instructions.get(id) : chooseInstruction(message, model);
