@@ -318,9 +318,10 @@ export async function startBridge() {
     const configured = prefix ? (env[`MNA_${prefix}_DEPLOYMENT`] || '').trim() : '';
     return configured || (simulatedProviders && prefix ? 'simulated' : '');
   };
-  const controllerCall = async (tool, args) => {
+  // The screening runner passes analystApproved only for analyst-initiated actions (cancel, discard).
+  const controllerCall = async (tool, args, analystApproved) => {
     const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry', dispatch_provider_text: '/admin/provider-text', run_controller_turn: '/admin/controller-turn' }[tool];
-    if (!path) return call(tool, args);
+    if (!path) return call(tool, args, analystApproved);
     const response = await fetch(`${rustAddress}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'X-MNA-Controller-Key': controllerKey }, body: JSON.stringify(args) });
     const result = await response.json();
     if (!response.ok) throw new Error(result?.error?.message ?? result?.message ?? result?.error ?? `Provider controller failed (${response.status})`);
