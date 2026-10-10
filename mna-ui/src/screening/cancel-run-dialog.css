@@ -1,0 +1,42 @@
+.crd-overlay {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  background: var(--overlay);
+}
+.crd-dialog {
+  position: fixed;
+  z-index: 121;
+  top: 50%;
+  left: 50%;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 20px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: 0 12px 36px var(--shadow-color);
+  font: 13px/1.5 var(--font-body);
+}
+.crd-header { display: grid; gap: 4px; }
+.crd-title { margin: 0; font: 700 17px/1.3 var(--font-heading); }
+.crd-progress { margin: 0; color: var(--text-muted); font-size: 12px; }
+.crd-options { display: grid; gap: 11px; min-width: 0; margin: 18px 0 0; padding: 0; border: 0; }
+.crd-options legend { margin-bottom: 8px; color: var(--text-muted); font-size: 11px; font-weight: 650; }
+.crd-options label { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 9px; cursor: pointer; }
+.crd-options input { width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+.crd-options span { overflow-wrap: anywhere; }
+.crd-options label:last-child span { color: var(--text-muted); }
+.crd-error { margin: 12px 0 0; color: var(--danger); font-size: 12px; }
+.crd-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 21px; }
+.crd-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface); font: 600 12px var(--font-body); cursor: pointer; }
+.crd-actions button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.crd-actions button.crd-confirm { border-color: var(--danger); color: var(--danger); }
+.crd-actions button:disabled { opacity: .55; cursor: default; }
+.crd-spinner { animation: crd-spin 1s linear infinite; }
+.crd-dialog button:focus-visible, .crd-dialog input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes crd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .crd-spinner { animation: none; } }

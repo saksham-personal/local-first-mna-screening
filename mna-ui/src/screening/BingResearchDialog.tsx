@@ -1,11 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { ClipboardEvent } from "react";
 import { Dialog } from "radix-ui";
 import { Check, LoaderCircle, Plus, Sparkles, X } from "lucide-react";
 import type { Company } from "../lib/contracts";
 import HelpTip from "../ui/HelpTip";
 import { plural } from "../lib/format";
-import { cancelBingResearch, getResearchProgress, subscribeResearch } from "../lib/research-client";
 import "./bing-research.css";
 
 type PreviewResult = {
@@ -21,7 +20,7 @@ type Props = {
   initialQueries: string[];
   onClose: () => void;
   onPreview: (input: { mode: Mode; queries: string[]; companyIds: string[] }) => Promise<PreviewResult>;
-  onRun: (token: string, options?: { includeInCriteria: boolean }) => Promise<{ executed: boolean; message: string }>;
+  onRun: (token: string, options?: { includeInCriteria: boolean }) => Promise<unknown>;
   onGenerateTemplates?: () => Promise<{ executed: boolean; templates?: string[]; message?: string }>;
   connected?: boolean;
 };
@@ -51,18 +50,14 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [includeInCriteria, setIncludeInCriteria] = useState(false);
-  const [runNotice, setRunNotice] = useState<{ executed: boolean; message: string } | null>(null);
   const requestVersion = useRef(0);
-  const [progress, setProgress] = useState<{ processed: number; total: number }>();
-  const [stopping, setStopping] = useState(false);
-  useEffect(() => subscribeResearch(() => { if (preview) setProgress(getResearchProgress(preview.token)); }), [preview]);
   const validQueryCount = queries.length >= 1 && queries.length <= 5 && queries.every((query) => query.trim());
   const validTemplates = mode !== "company" || queries.every((query) => /(\{company\}|\{website\}|<company>)/i.test(query));
   const previewCount = preview?.queryCount ?? preview?.queries.length ?? 0;
   const validPreview = Boolean(preview && preview.executed === false && previewCount > 0 && preview.queries.length === queries.length);
   const canPreview = !busy && validQueryCount && validTemplates && (mode === "general" || companies.length > 0);
 
-  const invalidate = () => { requestVersion.current += 1; setPreview(null); setRunNotice(null); setError(""); setNotice(""); };
+  const invalidate = () => { requestVersion.current += 1; setPreview(null); setError(""); setNotice(""); };
   const updateQueries = (next: string[]) => { invalidate(); const normalized = next.map((query) => query.trim()); drafts.current[mode] = normalized; setQueries(normalized); };
   const updateMode = (next: Mode) => {
     if (next === mode || (next === "company" && !companyModeAvailable)) return;
@@ -72,7 +67,7 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
   const runPreview = async () => {
     if (!canPreview) return;
     const current = ++requestVersion.current;
-    setBusy(true); setError(""); setPreview(null); setRunNotice(null);
+    setBusy(true); setError(""); setPreview(null);
     try {
       const result = await onPreview({ mode, queries: [...queries], companyIds: [] });
       if (current !== requestVersion.current) return;
@@ -96,9 +91,12 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
   };
   const approve = async () => {
     if (!validPreview || busy || !preview) return;
-    setBusy(true); setError(""); setRunNotice(null);
-    setStopping(false);
-    try { setRunNotice(await onRun(preview.token, { includeInCriteria: mode === "general" && includeInCriteria })); }
+    setBusy(true); setError("");
+    try {
+      await onRun(preview.token, { includeInCriteria: mode === "general" && includeInCriteria });
+      setBusy(false);
+      onClose();
+    }
     catch (caught) { setError(messageFor(caught)); }
     finally { setBusy(false); }
   };
@@ -134,11 +132,10 @@ export default function BingResearchDialog({ companies, initialQueries, onClose,
           {mode === "general" && <label className="brd-criteria-toggle"><input type="checkbox" checked={includeInCriteria} onChange={(event) => { invalidate(); setIncludeInCriteria(event.target.checked); }} disabled={busy} /><span><strong>Include findings in screening criteria</strong><small>Adds approved research findings to this screening's criteria.</small></span></label>}
           <aside className="brd-source-note"><strong>Source coverage</strong><span>Search results are external leads; coverage is unknown until they are reviewed and matched.</span> <HelpTip label="About source coverage">Research leads need analyst review before they are treated as evidence.</HelpTip></aside>
           {validPreview && preview && <section className="brd-preview" aria-label="Research preview"><div><Check size={15} aria-hidden="true" /><strong>Templates ready</strong><span>{mode === "company" ? `${plural(preview.companyCount ?? companies.length, "company", "companies")} · ` : ""}{plural(queries.length, "query template")} · No queries sent</span></div><small>Approval includes the considered companies at that moment. Queries are built when each batch is sent.</small></section>}
-          {busy && preview && <p role="status">{progress ? `${progress.processed.toLocaleString()} of ${progress.total.toLocaleString()} queries processed` : "Approved · sending the first batch…"}{stopping ? " · Stopping after this batch" : connected && <button type="button" className="brd-secondary" onClick={() => { setStopping(true); void cancelBingResearch(preview.token).catch(error => { setStopping(false); setError(messageFor(error)); }); }}>Stop research</button>}</p>}
-          {runNotice && <p className={`brd-result${runNotice.executed ? " is-executed" : ""}`} role="status"><strong>{runNotice.executed ? "Research started" : "Research saved"}</strong><span>{runNotice.message}</span></p>}
+          {busy && preview && <p role="status">Starting Bing research in Activity…</p>}
           {error && <p className="brd-error" role="alert">{error}</p>}
         </div>
-        <footer className="brd-footer"><p>{connected ? "Search starts after approval." : "Disconnected; approval saves this research for later."}</p><div><button className="brd-secondary" type="button" onClick={onClose} disabled={busy || generating}>Close</button>{!validPreview ? <button className="brd-primary" type="button" onClick={() => void runPreview()} disabled={!canPreview}>{busy ? "Preparing…" : "Preview queries"}</button> : <button className="brd-primary" type="button" onClick={() => void approve()} disabled={busy}>{busy ? "Saving…" : connected ? "Approve and search" : "Save approved research"}</button>}</div></footer>
+        <footer className="brd-footer"><p>{connected ? "Search starts after approval." : "Bing is disconnected; approval creates a paused run you can resume later."}</p><div><button className="brd-secondary" type="button" onClick={onClose} disabled={busy || generating}>Close</button>{!validPreview ? <button className="brd-primary" type="button" onClick={() => void runPreview()} disabled={!canPreview}>{busy ? "Preparing…" : "Preview queries"}</button> : <button className="brd-primary" type="button" onClick={() => void approve()} disabled={busy}>{busy ? "Starting…" : "Approve and search"}</button>}</div></footer>
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>;

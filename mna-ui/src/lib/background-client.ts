@@ -4,6 +4,7 @@ import { artifactBase, getChatState, mirrorWorkspace, patchArtifact, saveArtifac
 import { sessionStore } from "./session-store";
 import { refreshCompanyContext } from "./company-data-client";
 import { refreshShortlist } from "./review-client";
+import { buildRunCancelRequest } from "./run-activity";
 
 type Trace = { id: string; tool: string; args: Record<string, unknown>; status: "running" | "success" | "error"; startedAt: string; finishedAt?: string; result?: unknown; error?: string };
 export type BackgroundJob = BackgroundRunView & { planId: string; runId: string; sessionId?: string; digest: string; executed: boolean; events?: Trace[] };
@@ -16,7 +17,7 @@ const reschedulers = new Set<() => void>();
 export const ACTIVE_POLL_MS = 2000;
 export const IDLE_POLL_MS = 15000;
 /** Runs that are still moving; everything else is waiting on the analyst or finished. */
-export const isBackgroundActive = (jobs: readonly Pick<BackgroundJob, "state">[]) => jobs.some(job => job.state === "running" || job.state === "queued");
+export const isBackgroundActive = (jobs: readonly Pick<BackgroundJob, "state">[]) => jobs.some(job => job.state === "running" || job.state === "queued" || String(job.state) === "cancelling");
 /** Delay before the next poll, or undefined to pause (tab hidden). */
 export const backgroundPollDelay = (jobs: readonly Pick<BackgroundJob, "state">[], hidden: boolean) => hidden ? undefined : isBackgroundActive(jobs) ? ACTIVE_POLL_MS : IDLE_POLL_MS;
 export const subscribeBackground = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
@@ -35,6 +36,9 @@ function record(job: BackgroundJob) {
   }
 }
 function merge(job: BackgroundJob) {
+  const prior = snapshot.find(item => item.id === job.id);
+  const firstEvent = job.events?.map(event => event.startedAt).filter((value): value is string => Boolean(value)).sort()[0];
+  job = { ...job, observedAt: job.observedAt ?? prior?.observedAt ?? job.startedAt ?? firstEvent ?? new Date().toISOString() };
   record(job);
   snapshot = [...snapshot.filter(item => item.id !== job.id), job].filter(item => !dismissed.has(item.id));
   emit();
@@ -53,12 +57,12 @@ export async function startBackgroundScreening(sessionId: string, prepared: Prep
   sessionStore.addEvent({ sessionId, kind: "approval", origin: "workspace", status: job.state === "blocked" ? "error" : "success", title: job.state === "blocked" ? "Screening saved; provider unavailable" : "Background screening started", result: { planId: job.planId, digest: job.digest, executed: job.executed }, text: job.message });
   return job as BackgroundJob;
 }
-export async function backgroundAction(id: string, action: "pause" | "resume" | "retry" | "stage") {
+export async function backgroundAction(id: string, action: "pause" | "resume" | "retry" | "stage" | "cancel", keep = true) {
   const previous = snapshot.find(job => job.id === id);
   if (!previous) throw new Error("Background run is unavailable. Refresh and try again.");
   merge({ ...previous, busy: true });
   try {
-    const result = await request(action, { planId: previous.planId });
+    const result = await request(action, action === "cancel" ? buildRunCancelRequest(previous.planId, keep) : { planId: previous.planId });
     if (action === "stage" && previous.sessionId) {
       const sessionId = previous.sessionId, state = getChatState(sessionId);
       const assessments = result.rows as { company_id: string; index: number; result: Record<string, unknown>; provider: string; job_id: string }[];
@@ -79,7 +83,7 @@ export async function backgroundAction(id: string, action: "pause" | "resume" | 
         sessionStore.addEvent({ sessionId, messageId, kind: "message", role: "assistant", origin: "workspace", status: "success", title: "Screening results staged", text: `${rows.length} accepted results are ready for review.`, content: [{ type: "text", text: `${rows.length} accepted results are ready for review.` }, { type: "data", name: "screening-artifact", data: { artifactId: artifact.id } }] });
       }
     }
-    sessionStore.addEvent({ sessionId: previous.sessionId, kind: "system", origin: "workspace", status: "success", title: action === "stage" ? "Completed results staged" : action === "pause" ? "Screening paused" : action === "retry" ? "Failed batches queued for retry" : "Screening resumed", result: { planId: previous.planId, executed: result.job?.executed } });
+    sessionStore.addEvent({ sessionId: previous.sessionId, kind: "system", origin: "workspace", status: "success", title: action === "stage" ? "Completed results staged" : action === "pause" ? "Screening paused" : action === "retry" ? "Failed batches queued for retry" : action === "cancel" ? "Screening cancelled" : "Screening resumed", text: action === "cancel" ? result.job?.message : undefined, result: { planId: previous.planId, executed: result.job?.executed } });
     return result;
   } finally {
     const latest = snapshot.find(job => job.id === id);
@@ -104,8 +108,13 @@ export function startBackgroundPolling() {
       if (response.ok) {
         const data = await response.json();
         if (active && Array.isArray(data.jobs)) {
-          data.jobs.forEach(record);
-          snapshot = data.jobs.filter((job: BackgroundJob) => !dismissed.has(job.id)).map((job: BackgroundJob) => ({ ...job, busy: snapshot.find(item => item.id === job.id)?.busy }));
+          snapshot = data.jobs.filter((job: BackgroundJob) => !dismissed.has(job.id)).map((job: BackgroundJob) => {
+            const prior = snapshot.find(item => item.id === job.id);
+            const firstEvent = job.events?.map(event => event.startedAt).filter((value): value is string => Boolean(value)).sort()[0];
+            const next = { ...job, busy: prior?.busy, observedAt: job.observedAt ?? prior?.observedAt ?? job.startedAt ?? firstEvent ?? new Date().toISOString() };
+            record(next);
+            return next;
+          });
           emit();
         }
       }
