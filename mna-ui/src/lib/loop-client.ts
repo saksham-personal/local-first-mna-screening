@@ -1,5 +1,5 @@
-import { getChatState, updateChatState } from "./chat-store";
-import { refreshCompanyContext } from "./company-data-client";
+import { getChatState, mirrorWorkspace, updateChatState } from "./chat-store";
+import { readRunCompanies } from "./company-mapper";
 import { refreshShortlist } from "./review-client";
 import { sessionStore } from "./session-store";
 import { callTool } from "./tool-client";
@@ -40,6 +40,8 @@ export type LoopSummaryQuery = {
   label: string;
   labelTitle: string;
   hits: number;
+  hitsLabel: string;
+  hitsCapped: boolean;
   threshold: number | null;
   thresholdBinIndex: number | null;
   kept: number;
@@ -57,6 +59,7 @@ export type LoopSummaryViewModel = {
 };
 
 export const LOOP_OUTCOMES_KEY = "screening-loop-outcomes-v1";
+const LOOP_REFRESHES_KEY = "screening-loop-refreshes-v1";
 export const LOOP_STARTED_EVENT = "screening-loop-started";
 export const LOOP_UNDO_EVENT = "screening-loop-undo-requested";
 const LOOP_TOGGLE_KEY = "screening-loop-toggle-v1";
@@ -66,12 +69,16 @@ const listeners = new Set<() => void>();
 const reschedulers = new Set<() => void>();
 const dismissed = new Set<string>();
 const toggles = new Map<string, boolean>();
+const locallyStarted = new Map<string, LoopActivityJob>();
+const locallyStartedGeneration = new Map<string, number>();
 const details = new Map<string, ControllerLoopDetail>();
 const detailRequests = new Map<string, Promise<ControllerLoopDetail>>();
+const detailRequestVersions = new Map<string, number>();
 const outcomeGuard = createOutcomeOnceGuard(undefined, LOOP_OUTCOMES_KEY);
+const refreshGuard = createOutcomeOnceGuard(undefined, LOOP_REFRESHES_KEY);
 let snapshot: LoopActivityJob[] = [];
 let visibleSnapshot: LoopActivityJob[] = [];
-let outcomeQueue = Promise.resolve();
+let localMutationGeneration = 0;
 
 export const ACTIVE_LOOP_POLL_MS = 2000;
 export const IDLE_LOOP_POLL_MS = 15000;
@@ -115,11 +122,16 @@ export function buildLoopStartRequest(runId: string, message: string, sessionId:
   return { runId, message, sessionId, title: `Loop · ${sessionTitle}`, ...(maxTurns === undefined ? {} : { maxTurns }) };
 }
 export function buildLoopCancelRequest(id: string, keep: boolean) { return { id, keep }; }
-export function buildCollapsedTurnLine(turn: Pick<ControllerLoopTurn, "turn" | "instructions">, queries: readonly LoopQuery[]): string {
+export function shouldBlockLoopSubmission(loopBlocked: boolean, key: string, shiftKey: boolean, isComposing: boolean): boolean {
+  return loopBlocked && key === "Enter" && !shiftKey && !isComposing;
+}
+export function buildCollapsedTurnLine(turn: Pick<ControllerLoopTurn, "turn" | "instructions"> & { kind?: string }, queries: readonly LoopQuery[]): string | null {
+  if (turn.kind === "handoff") return null;
   const actions = turn.instructions.length;
-  const kept = queries.find(query => query.keep_turn === turn.turn && query.min_score !== null);
+  const kept = queries.filter(query => query.keep_turn === turn.turn && query.min_score !== null && Number.isFinite(query.min_score));
   const actionText = `${actions} ${actions === 1 ? "action" : "actions"}`;
-  return `Turn ${turn.turn} · ${actionText}${kept ? ` · kept ${kept.id} ≥ ${Number(kept.min_score).toFixed(2)}` : ""}`;
+  const keptText = kept.map(query => `${query.id} ≥ ${Number(query.min_score).toFixed(2)}`).join(", ");
+  return `Turn ${turn.turn} · ${actionText}${keptText ? ` · kept ${keptText}` : ""}`;
 }
 export function thresholdBinIndex(score: number | null | undefined): number | null {
   if (score == null || !Number.isFinite(score)) return null;
@@ -133,10 +145,9 @@ export function buildLoopSummaryViewModel(
   const noKeeps = !queries.some(query => query.min_score !== null && Number.isFinite(query.min_score));
   const considered = Math.max(0, counts.considered);
   const hidden = Math.max(0, counts.total - considered);
-  const summaryCount = loop.finalCount ?? considered;
   const heading = noKeeps ? "No keep decisions — shortlist unchanged"
-    : loop.state === "cancelled" ? `Loop cancelled · ${summaryCount.toLocaleString()} companies considered`
-      : `Loop finished · ${summaryCount.toLocaleString()} companies considered`;
+    : loop.state === "cancelled" ? `Loop cancelled · ${considered.toLocaleString()} companies considered`
+      : `Loop finished · ${considered.toLocaleString()} companies considered`;
   return {
     heading,
     noKeeps,
@@ -148,12 +159,16 @@ export function buildLoopSummaryViewModel(
     queries: queries.map(query => {
       const label = query.label ?? "";
       const trimmed = label.length > 64 ? `${label.slice(0, 61)}…` : label;
+      const hits = Math.max(0, query.total);
+      const hitsCapped = query.source === "MID_KEYWORD" && hits === 5000;
       return {
         id: query.id,
         source: query.source,
         label: trimmed,
         labelTitle: label,
-        hits: Math.max(0, query.total),
+        hits,
+        hitsLabel: `${hits.toLocaleString()}${hitsCapped ? "+" : ""}`,
+        hitsCapped,
         threshold: query.min_score,
         thresholdBinIndex: thresholdBinIndex(query.min_score),
         kept: Math.max(0, query.kept_count ?? 0),
@@ -171,12 +186,20 @@ function setSnapshot(next: LoopActivityJob[]) {
   visibleSnapshot = next.filter(job => !dismissed.has(job.id));
   emit();
 }
-function mergeLoop(job: LoopActivityJob) {
+function invalidateLoopDetail(id: string) {
+  details.delete(id);
+  detailRequestVersions.set(id, (detailRequestVersions.get(id) ?? 0) + 1);
+}
+function mergeLoop(job: LoopActivityJob, syncOutcome = true) {
   const previous = snapshot.find(item => item.id === job.id);
-  if (previous && previous.turn !== job.turn) details.delete(job.id);
+  if (previous && previous.turn !== job.turn) invalidateLoopDetail(job.id);
+  if (locallyStarted.has(job.id)) {
+    locallyStarted.set(job.id, job);
+    locallyStartedGeneration.set(job.id, ++localMutationGeneration);
+  }
   setSnapshot([...snapshot.filter(item => item.id !== job.id), job]);
   if (isLoopActive(job)) reschedulers.forEach(schedule => schedule());
-  if (isSummaryEligible(job)) enqueueOutcome(job);
+  if (syncOutcome && isSummaryEligible(job)) syncLoopOutcome(job);
 }
 function isSummaryEligible(job: LoopActivityJob) {
   if (job.state === "completed") return true;
@@ -201,9 +224,64 @@ export function canForceLoopUndo(error: unknown): boolean {
   const status = (error as { status?: number } | null)?.status;
   return status === 409 || /shortlist (?:has )?changed|selection revision|changed since/i.test(message);
 }
+export function mergeLoopPollSnapshot(
+  incoming: readonly LoopActivityJob[],
+  localJobs: Map<string, LoopActivityJob>,
+  localGenerations: Map<string, number>,
+  pollStartGeneration: number,
+): LoopActivityJob[] {
+  const merged = new Map(incoming.map(job => [job.id, job]));
+  for (const [id, local] of localJobs) {
+    const remote = merged.get(id);
+    if (!remote) { merged.set(id, local); continue; }
+    if ((localGenerations.get(id) ?? 0) <= pollStartGeneration) {
+      localJobs.delete(id);
+      localGenerations.delete(id);
+    } else merged.set(id, local);
+  }
+  return [...merged.values()];
+}
+
+async function refreshLoopCompanies(sessionId: string, runId: string) {
+  const companies = await readRunCompanies(runId);
+  const latest = getChatState(sessionId);
+  if (latest.backendRunId !== runId) return;
+  const considered = companies.filter(company => company.considered !== false);
+  const next = updateChatState(sessionId, {
+    companies,
+    companiesTrimmed: false,
+    companiesLoading: false,
+    companiesLoadError: undefined,
+    counts: {
+      midOnly: considered.filter(company => company.source === "MID").length,
+      isccOnly: considered.filter(company => company.source === "ISCC").length,
+      both: considered.filter(company => company.source === "both").length,
+    },
+  });
+  mirrorWorkspace(next);
+  await refreshShortlist(sessionId, runId);
+}
+function loopRefreshKey(job: LoopActivityJob) {
+  return `${job.id}:${job.appliedReviewId ?? "no-review"}:${job.undoneReviewId ?? "not-undone"}`;
+}
+async function refreshLoopState(job: LoopActivityJob) {
+  if (!job.sessionId || !job.runId) return;
+  const key = loopRefreshKey(job);
+  if (refreshGuard.has(key) || !refreshGuard.claim(key)) return;
+  try {
+    await refreshLoopCompanies(job.sessionId, job.runId);
+    refreshGuard.complete(key);
+  } catch (error) {
+    refreshGuard.release(key);
+    throw error;
+  }
+}
+
 export async function startLoop(input: LoopStartRequest): Promise<LoopActivityJob> {
   const job = await request<LoopActivityJob>("start", input);
   if (!job || job.kind !== "loop") throw new Error("The bridge did not return a discovery loop.");
+  locallyStarted.set(job.id, job);
+  locallyStartedGeneration.set(job.id, ++localMutationGeneration);
   mergeLoop(job);
   emitStarted();
   return job;
@@ -216,11 +294,8 @@ export async function controlLoop(id: string, action: "pause" | "resume" | "canc
 }
 export async function undoLoop(id: string, force = false): Promise<LoopActivityJob> {
   const job = await request<LoopActivityJob>("undo", { id, ...(force ? { force: true } : {}) });
-  mergeLoop(job);
-  if (job.sessionId && job.runId) {
-    await refreshCompanyContext(job.sessionId, job.runId);
-    await refreshShortlist(job.sessionId, job.runId);
-  }
+  mergeLoop(job, false);
+  await refreshLoopState(job);
   return job;
 }
 export function dismissLoop(id: string) {
@@ -228,18 +303,19 @@ export function dismissLoop(id: string) {
   visibleSnapshot = snapshot.filter(job => !dismissed.has(job.id));
   emit();
 }
-export function loadControllerLoopDetail(id: string): Promise<ControllerLoopDetail> {
-  const cached = details.get(id);
+export function loadControllerLoopDetail(id: string, refresh = false): Promise<ControllerLoopDetail> {
+  const cached = refresh ? undefined : details.get(id);
   if (cached) return Promise.resolve(cached);
-  const pending = detailRequests.get(id);
+  const pending = refresh ? undefined : detailRequests.get(id);
   if (pending) return pending;
+  const version = (detailRequestVersions.get(id) ?? 0) + 1;
+  detailRequestVersions.set(id, version);
   const request = callTool("get_controller_loop", { loop_id: id }).then(value => {
     const detail = value as unknown as ControllerLoopDetail;
     if (detail.loop_id !== id || !Array.isArray(detail.turns)) throw new Error("Loop turn history could not be read.");
-    details.set(id, detail);
-    emit();
+    if (detailRequestVersions.get(id) === version) { details.set(id, detail); emit(); }
     return detail;
-  }).finally(() => detailRequests.delete(id));
+  }).finally(() => { if (detailRequests.get(id) === request) detailRequests.delete(id); });
   detailRequests.set(id, request);
   return request;
 }
@@ -269,22 +345,28 @@ export async function recordLoopOutcome(job: LoopActivityJob): Promise<void> {
   try {
     let counts = { considered: Math.max(0, job.finalCount ?? getChatState(job.sessionId).counts.midOnly + getChatState(job.sessionId).counts.isccOnly + getChatState(job.sessionId).counts.both), total: getChatState(job.sessionId).companies.length };
     if (job.runId) {
-      await refreshCompanyContext(job.sessionId, job.runId);
-      const shortlist = await refreshShortlist(job.sessionId, job.runId);
-      counts = { considered: Number(shortlist.considered_count) || 0, total: Number(shortlist.total) || 0 };
+      const shortlist = await callTool("get_shortlist_context", { run_id: job.runId, include_hidden: true, limit: 1 });
+      if (!Number.isSafeInteger(shortlist.considered_count) || !Number.isSafeInteger(shortlist.total)) throw new Error("The applied shortlist counts could not be read.");
+      counts = { considered: Number(shortlist.considered_count), total: Number(shortlist.total) };
     }
     const view = buildLoopSummaryViewModel(job, counts);
     postLoopSummary(job, view);
     outcomeGuard.complete(job.id);
+    void refreshLoopState(job).catch(() => {});
   } catch (error) {
     outcomeGuard.release(job.id);
     throw error;
   }
 }
 function enqueueOutcome(job: LoopActivityJob) {
-  outcomeQueue = outcomeQueue.then(() => recordLoopOutcome(job)).catch(() => {
-    // A later poll retries a failed refresh while the persisted guard prevents duplicate cards.
+  void recordLoopOutcome(job).catch(() => {
+    // A later poll retries a failed outcome read while the persisted guard prevents duplicate cards.
   });
+}
+function syncLoopOutcome(job: LoopActivityJob) {
+  if (!isSummaryEligible(job)) return;
+  if (outcomeGuard.has(job.id)) void refreshLoopState(job).catch(() => {});
+  else enqueueOutcome(job);
 }
 
 export function startLoopPolling() {
@@ -299,16 +381,17 @@ export function startLoopPolling() {
   const poll = async () => {
     if (inFlight || !active) return;
     inFlight = true;
+    const pollStartGeneration = localMutationGeneration;
     try {
       const data = await request<{ jobs: LoopActivityJob[] }>("runs", undefined, "GET");
       if (active && Array.isArray(data.jobs)) {
-        const next = data.jobs;
+        const next = mergeLoopPollSnapshot(data.jobs, locallyStarted, locallyStartedGeneration, pollStartGeneration);
         for (const job of next) {
           const previous = snapshot.find(item => item.id === job.id);
-          if (previous && previous.turn !== job.turn) details.delete(job.id);
+          if (previous && previous.turn !== job.turn) invalidateLoopDetail(job.id);
         }
         setSnapshot(next);
-        for (const job of next) if (isSummaryEligible(job)) enqueueOutcome(job);
+        for (const job of next) syncLoopOutcome(job);
       }
     } catch { /* The persisted bridge state is restored on the next activity poll. */ }
     inFlight = false;

@@ -136,7 +136,7 @@ function runElapsed(state: string, startedAt: string | undefined, updatedAt: str
 function displayState(state: RunActivityRow["state"]) {
   return ({
     queued: "Queued", running: "Running", paused: "Paused", cancelling: "Cancelling",
-    completed: "Completed", cancelled: "Cancelled", failed: "Failed", error: "Failed", blocked: "Blocked",
+    consolidating: "Consolidating", completed: "Completed", cancelled: "Cancelled", failed: "Failed", error: "Failed", blocked: "Blocked",
   } as Record<string, string>)[state] ?? state;
 }
 
@@ -144,7 +144,9 @@ export function mapScreeningJobToActivity(
   job: ScreeningActivityJob,
   options: { title?: string; now?: number } = {},
 ): RunActivityRow {
-  const processed = Math.max(0, job.completed) + Math.max(0, job.failed);
+  // A cancelled run's failed count includes work that never completed after
+  // cancellation. Report only batches that actually finished.
+  const processed = Math.max(0, job.completed) + (job.state === "cancelled" ? 0 : Math.max(0, job.failed));
   const discarded = job.state === "cancelled" && /discarded/i.test(job.message ?? "");
   const stageCount = job.current && !discarded ? Math.max(0, job.completed - job.staged) : 0;
   const retryable = job.errors?.some(error => error.retryable) ?? false;
@@ -222,7 +224,8 @@ export function mapLoopJobToActivity(
   options: { title?: string; now?: number } = {},
 ): RunActivityRow {
   const actions: ActivityAction[] = [];
-  if (["running", "queued", "consolidating"].includes(job.state)) actions.push("pause", "cancel");
+  if (["running", "queued"].includes(job.state)) actions.push("pause", "cancel");
+  else if (job.state === "consolidating") actions.push("cancel");
   else if (job.state === "paused") actions.push("resume", "cancel");
   else if (job.state === "completed") actions.push("summary", "undo");
   else if (job.state === "cancelled" || job.state === "failed") actions.push("dismiss");

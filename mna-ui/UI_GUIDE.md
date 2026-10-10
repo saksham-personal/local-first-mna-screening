@@ -32,7 +32,7 @@ Message actions include copy, edit and resubmit for user messages, and copy, ret
 
 ## LLM Suite discovery loop
 
-Choose **Send to LLM Suite**, then turn on **Loop** beside the send-mode buttons. The preference is saved per screening. Describe the companies to find and send once; Activity shows the turn progress and offers Pause, Resume, and Cancel. Cancel defaults to applying the companies kept so far, or you can discard the shortlist change while preserving search history. The chat keeps one live turn card; **Show all turns** loads the saved turn details when opened.
+Choose **Send to LLM Suite**, then turn on **Loop** beside the send-mode buttons. The preference is saved per screening. Describe the companies to find and send once; Activity shows the turn progress and offers Pause, Resume, and Cancel. Cancel defaults to applying the companies kept so far, or you can discard the shortlist change while preserving search history. The chat keeps one live turn card with the latest Context and instruction checklist; **Show all turns** expands the saved turn history.
 
 When a loop completes or is cancelled with Keep, its chat summary shows the finish note, query sources and thresholds, score histograms, and the considered/hidden counts. **Open in Workspace** opens Companies. **Undo** asks before restoring the shortlist from before the loop; if the shortlist has changed, review the backend message and choose **Undo anyway** only if you still want to restore it. Simulated runs carry a Simulated badge. With Loop off, direct LLM Suite chat continues to send one message as before.
 

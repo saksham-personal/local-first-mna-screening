@@ -94,7 +94,7 @@
 .br-state-error .br-progress > span { background: var(--danger); }
 .br-state-failed .br-progress > span { background: var(--danger); }
 .br-state-chip { display: inline-block; padding: 1px 6px; border-radius: 9px; color: var(--text-muted); background: var(--surface-muted); font-size: 10px; font-style: normal; font-weight: 650; line-height: 1.45; vertical-align: 1px; }
-.br-chip-running { color: var(--info); background: var(--info-soft); }
+.br-chip-running, .br-chip-consolidating { color: var(--info); background: var(--info-soft); }
 .br-chip-queued, .br-chip-paused, .br-chip-cancelling, .br-chip-blocked { color: var(--warning); background: var(--warning-soft); }
 .br-chip-completed { color: var(--success); background: var(--success-soft); }
 .br-chip-error, .br-chip-failed { color: var(--danger); background: var(--danger-soft); }
