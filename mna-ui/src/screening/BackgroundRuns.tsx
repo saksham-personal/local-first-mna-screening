@@ -8,7 +8,7 @@ import { exportActivity, exportJobsEvent, exportRunIds, listExports, type Export
 import { listSetupBuilds, type SetupBuild } from "../lib/screening-client";
 import { startBackgroundScreening } from "../lib/background-client";
 import type { BingActivityJob, ActivityAction, ActivitySource, RunActivityRow, ScreeningActivityJob } from "../lib/run-activity";
-import { formatElapsed, mapBingJobToActivity, mapScreeningJobToActivity } from "../lib/run-activity";
+import { formatElapsed, mapBingJobToActivity, mapScreeningJobToActivity, processedUnit } from "../lib/run-activity";
 import CancelRunDialog from "./CancelRunDialog";
 import SetupController from "./SetupController";
 import "./background-runs.css";
@@ -70,7 +70,8 @@ const searchStateNames = {
 export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismissIndex, jobs, researchJobs = [], searches = [], expanded, onExpandedChange, layoutKey, onAction, onResearchAction, onCancelRun, onDismiss, onDismissResearch, onOpenResearch, onOpenScreening, onOpenSearch, onStopSearch, onDismissSearch }: Props) {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => { if (expanded) setDismissed(false); }, [expanded]);
-  const [cancelTarget, setCancelTarget] = useState<RunActivityRow>();
+  // The cancel dialog keeps only the run's identity; the run is read fresh on every render.
+  const [cancelTarget, setCancelTarget] = useState<{ source: ActivitySource; id: string }>();
   const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
   const [runActionErrors, setRunActionErrors] = useState<Record<string, string>>({});
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -131,6 +132,20 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
     const timer = setInterval(() => setClockNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [hasActiveRun]);
+  // Announce only runs whose state changed since the previous render. The first render just records them.
+  const seenRunStates = useRef<Map<string, string> | undefined>(undefined);
+  const [runAnnouncement, setRunAnnouncement] = useState("");
+  useEffect(() => {
+    const previous = seenRunStates.current;
+    seenRunStates.current = new Map<string, string>(runRows.map(row => [`${row.source}:${row.id}`, row.state] as const));
+    if (!previous) return;
+    const changed = runRows.filter(row => previous.get(`${row.source}:${row.id}`) !== row.state);
+    if (changed.length) setRunAnnouncement(changed.map(row => `${row.title}: ${row.stateLabel}`).join(". "));
+  }, [runRows]);
+  // The cancel dialog reads its run on every render, so its counts stay current. It closes if the run goes away.
+  const cancelRow = cancelTarget ? runRows.find(row => row.source === cancelTarget.source && row.id === cancelTarget.id) : undefined;
+  const cancelRowGone = !!cancelTarget && !cancelRow;
+  useEffect(() => { if (cancelRowGone) setCancelTarget(undefined); }, [cancelRowGone]);
   const items = indexBuilds.length + searches.length + jobs.length + researchJobs.length + exports.length + builds.length;
   const visible = !dismissed && (items > 0 || expanded || !!exportError);
   useLayoutEffect(() => {
@@ -169,7 +184,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
 
   const handleRunAction = async (row: RunActivityRow, action: ActivityAction) => {
     const key = `${row.source}:${row.id}`;
-    if (action === "cancel") { setCancelTarget(row); return; }
+    if (action === "cancel") { setCancelTarget({ source: row.source, id: row.id }); return; }
     if (action === "dismiss") {
       if (row.source === "bing") onDismissResearch?.(row.id); else onDismiss?.(row.id);
       return;
@@ -224,7 +239,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
         {items > 0 && <span className="br-dock-badge" aria-hidden="true">{items}</span>}
         {expanded ? <ChevronDown size={17} aria-hidden="true" /> : <ChevronUp size={17} aria-hidden="true" />}
       </button><button className="br-icon-button br-dismiss" type="button" aria-label="Dismiss Activity panel" onClick={() => { setDismissed(true); onExpandedChange(false); }}><X size={16} /></button></div>
-      <div className="br-live-region" aria-live="polite" aria-atomic="true">{runRows.map(row => `${row.title}: ${row.stateLabel}`).join(". ")}</div>
+      <div className="br-live-region" aria-live="polite" aria-atomic="true">{runAnnouncement}</div>
       {expanded && (
         <div className="br-dock-details" id="activity-details">
           {builds.length > 0 && <section className="br-group" aria-label="Input table preparation">
@@ -308,7 +323,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
                     <span>{row.source === "bing" ? "Bing research" : `${providerNames[row.provider ?? "llm_suite"]} screening`} <i aria-hidden="true">·</i> <span className={`br-state-chip br-chip-${row.state === "failed" ? "error" : row.state}`}>{row.stateLabel}</span></span>
                   </div>
                 </div>
-                <div className="br-progress-label"><span>{row.processed.toLocaleString()} of {plural(row.total, row.source === "bing" ? "query" : "batch")} processed</span><span>{Math.round(row.percent)}%</span></div>
+                <div className="br-progress-label"><span>{row.processed.toLocaleString()} of {processedUnit(row.source, row.total)} processed</span><span>{Math.round(row.percent)}%</span></div>
                 <div className="br-progress" role="progressbar" aria-label={`${row.title} progress`} aria-valuemin={0} aria-valuemax={valueMax} aria-valuenow={valueNow} aria-valuetext={`${row.processed} of ${row.total} processed`}><span style={{ width: `${row.percent}%` }} /></div>
                 <ol className="br-run-steps" aria-label={`${row.title} steps`}>
                   {row.steps.map(step => <li className={`br-run-step br-step-${step.state}`} key={step.id} aria-label={`${step.label}: ${step.state}`}>
@@ -331,7 +346,7 @@ export default function BackgroundRuns({ indexBuilds = [], onOpenIndex, onDismis
         </div>
       )}
     </aside>
-    {cancelTarget && <CancelRunDialog run={cancelTarget} onBack={() => setCancelTarget(undefined)} onCancel={async keep => { if (!onCancelRun) throw new Error("Run cancellation is unavailable."); await onCancelRun(cancelTarget.source, cancelTarget.id, keep); setCancelTarget(undefined); }} />}
+    {cancelTarget && cancelRow && <CancelRunDialog run={cancelRow} onBack={() => setCancelTarget(undefined)} onCancel={async keep => { if (!onCancelRun) throw new Error("Run cancellation is unavailable."); await onCancelRun(cancelTarget.source, cancelTarget.id, keep); setCancelTarget(undefined); }} />}
     {reviewBuild?.sessionId && <SetupController buildId={reviewBuild.id} sessionId={reviewBuild.sessionId} provider={reviewBuild.provider} mode={reviewBuild.config.mode} onClose={() => setReviewBuild(undefined)} onSaved={prepared => { setBuildError(""); const sessionId = reviewBuild.sessionId!; setReviewBuild(undefined); void startBackgroundScreening(sessionId, prepared).then(() => onExpandedChange(true)).catch(error => setBuildError(String(error.message ?? error))); }} />}
     </div>
   );

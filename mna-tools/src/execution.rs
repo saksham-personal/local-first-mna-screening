@@ -768,7 +768,58 @@ fn load_plan(conn: &Connection, id: &str) -> Result<Plan> {
         snapshot: decoded(snapshot)?,
     })
 }
+/// Freshness rebuilds the plan's whole input snapshot (seconds for thousands of companies),
+/// and background progress is polled every few hundred milliseconds. The verdict is cached
+/// per database and plan under a fingerprint of every input the snapshot reads; any change
+/// to those inputs recomputes it. In-memory databases are never cached.
 fn require_fresh(conn: &Connection, p: &Plan) -> Result<()> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Verdicts = Mutex<HashMap<String, (String, Option<String>)>>;
+    static CACHE: OnceLock<Verdicts> = OnceLock::new();
+    let path = conn.path().unwrap_or_default().to_owned();
+    if path.is_empty() {
+        return require_fresh_uncached(conn, p);
+    }
+    let fingerprint: String = conn.query_row(
+        "SELECT json_array(
+            (SELECT version FROM source_change_counter WHERE singleton=1),
+            (SELECT COUNT(*) FROM evidence WHERE run_id=?1),
+            (SELECT COALESCE(MAX(rowid),0) FROM evidence WHERE run_id=?1),
+            (SELECT COUNT(discarded_plan_id) FROM evidence WHERE run_id=?1),
+            (SELECT COUNT(*) FROM discarded_plans WHERE run_id=?1),
+            (SELECT group_concat(version) FROM screening_profiles WHERE run_id=?1 AND status='APPROVED'),
+            (SELECT COALESCE(MAX(rowid),0) FROM shortlist_reviews WHERE run_id=?1),
+            (SELECT group_concat(plan_id||columns_json) FROM shortlist_review_columns WHERE run_id=?1),
+            (SELECT bundle_id FROM mid_bundles WHERE status='active'))",
+        [&p.run_id],
+        |r| r.get(0),
+    )?;
+    let key = format!("{path}\n{}", p.plan_id);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let poisoned = || Error::Internal("freshness cache poisoned".into());
+    if let Some((cached, verdict)) = cache.lock().map_err(|_| poisoned())?.get(&key) {
+        if *cached == fingerprint {
+            return verdict
+                .clone()
+                .map_or(Ok(()), |message| Err(Error::Conflict(message)));
+        }
+    }
+    let result = require_fresh_uncached(conn, p);
+    let verdict = match &result {
+        Ok(()) => None,
+        Err(Error::Conflict(message)) => Some(message.clone()),
+        // Other errors are not cached.
+        Err(_) => return result,
+    };
+    cache
+        .lock()
+        .map_err(|_| poisoned())?
+        .insert(key, (fingerprint, verdict));
+    result
+}
+
+fn require_fresh_uncached(conn: &Connection, p: &Plan) -> Result<()> {
     let spec: ProposeArgs = serde_json::from_value(p.spec.clone())?;
     let compiled_prompt =
         crate::gateway::compiled_prompt(&spec.prompt, &spec.output_columns, &spec.score_columns);

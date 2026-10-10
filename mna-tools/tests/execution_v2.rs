@@ -255,3 +255,63 @@ fn all_2001_candidates_get_global_indices_without_a_top_50_cutoff() {
     assert_eq!(last["payload"]["indices"], json!([2001]));
     assert_eq!(last["payload"]["rows"][0]["pk"], "C2000");
 }
+
+#[test]
+fn cached_freshness_recomputes_when_sources_or_research_change_on_a_file_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("fresh.db")).unwrap();
+    store.execute("ingest_companies", &json!({"companies":[
+        {"company_id":"C1","name":"Alpha","website":"alpha.example","description":"Insurance services"},
+        {"company_id":"C2","name":"Beta","website":"beta.example","description":"Claims software"}
+    ]})).unwrap();
+    store.execute("create_run",&json!({"run_id":"R1","objective":"Find fit","original_criteria":{"business":"insurance"},"initial_profile":{"core_business_query":"insurance","core_business_criteria":["insurance"],"unused_criteria":[]}})).unwrap();
+    store
+        .execute(
+            "approve_screening_profile",
+            &json!({"run_id":"R1","version":1,"approved_by":"analyst"}),
+        )
+        .unwrap();
+    store
+        .execute(
+            "add_candidates",
+            &json!({"run_id":"R1","companies":["C1","C2"],"discovery_source":"MID"}),
+        )
+        .unwrap();
+    let service = ExecutionService::new(store.clone());
+    let plan = propose(&service);
+    approve(&service, &plan);
+    let progress = || {
+        service
+            .execute(
+                "get_execution_progress",
+                &json!({"plan_id":plan["plan_id"]}),
+            )
+            .unwrap()
+    };
+    // Repeated reads reuse the cached verdict.
+    assert_eq!(progress()["fresh"], true);
+    assert_eq!(progress()["fresh"], true);
+    // A changed company input invalidates the cache.
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "UPDATE companies SET description='Changed' WHERE company_id='C1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(progress()["fresh"], false);
+    assert_eq!(progress()["source_fresh"], false);
+    // Restoring the input makes the plan fresh again: the verdict is recomputed, not stuck.
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "UPDATE companies SET description='Insurance services' WHERE company_id='C1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(progress()["fresh"], true);
+}

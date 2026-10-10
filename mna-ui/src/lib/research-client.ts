@@ -65,13 +65,10 @@ function writeCriteriaPreference(jobId: string, value: boolean) {
     try { localStorage.setItem(PREFERENCE_KEY, JSON.stringify(preferences)); } catch { /* Keep the choice for this page session. */ }
   }
 }
-function takeCriteriaPreference(jobId: string) {
+/** Reads the include-in-criteria choice without clearing it. It is cleared only after the criteria step succeeds, so a retry keeps it. */
+function readCriteriaPreference(jobId: string) {
   if (criteriaPreferences.has(jobId)) return criteriaPreferences.get(jobId) === true;
-  const preferences = readCriteriaPreferences();
-  const value = preferences[jobId] === true;
-  delete preferences[jobId];
-  try { localStorage.setItem(PREFERENCE_KEY, JSON.stringify(preferences)); } catch { /* Preference cleanup is best effort. */ }
-  return value;
+  return readCriteriaPreferences()[jobId] === true;
 }
 function clearCriteriaPreference(jobId: string) {
   criteriaPreferences.delete(jobId);
@@ -103,65 +100,73 @@ export function dismissResearch(id: string) {
   emit();
 }
 
-function recordedSystemNote(job: BingActivityJob, text: string) {
-  const session = sessionStore.getSnapshot().sessions.find(item => item.id === job.sessionId);
-  if (session?.events.some(event => event.jobId === job.id && event.kind === "system")) return;
-  sessionStore.addEvent({ sessionId: job.sessionId, jobId: job.id, kind: "system", origin: "workspace", status: "success", title: text, text });
+const discardedText = "Bing research cancelled · results discarded. Nothing from this run appears in companies, context, or exports.";
+const noResultsText = "Bing research cancelled · no results were collected";
+
+/** Posts the run's assistant message into the chat. The same message id is only ever posted once. */
+function postResearchMessage(sessionId: string, job: BingActivityJob, text: string, artifactId?: string) {
+  const messageId = `bing-research-${job.id}`;
+  if (!getChatState(sessionId).branchMessageIds.includes(messageId)) updateChatState(sessionId, state => ({ ...state, branchMessageIds: [...state.branchMessageIds, messageId] }));
+  const session = sessionStore.getSnapshot().sessions.find(item => item.id === sessionId);
+  if (session?.events.some(event => event.messageId === messageId)) return;
+  sessionStore.addEvent({
+    sessionId,
+    jobId: job.id,
+    messageId,
+    kind: "message",
+    role: "assistant",
+    origin: "workspace",
+    status: "success",
+    title: "Bing research",
+    text,
+    content: artifactId
+      ? [{ type: "text", text }, { type: "data", name: "screening-artifact", data: { artifactId } }]
+      : [{ type: "text", text }],
+  });
 }
 
-async function recordBingOutcome(job: BingActivityJob) {
+export async function recordBingOutcome(job: BingActivityJob) {
   if (!job.sessionId || outcomeGuard.has(job.id) || !outcomeGuard.claim(job.id)) return;
+  const sessionId = job.sessionId;
   try {
     const response = await fetch(`/api/research/runs/rows?id=${encodeURIComponent(job.id)}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? "Bing research results could not be loaded.");
     const result = data as ResearchRows;
     if (result.discarded) {
-      recordedSystemNote(job, "Bing research cancelled · results discarded");
+      postResearchMessage(sessionId, job, discardedText);
       outcomeGuard.complete(job.id);
       clearCriteriaPreference(job.id);
       return;
     }
 
     const rows = Array.isArray(result.rows) ? result.rows.slice(0, 500) : [];
-    const total = Math.max(0, Number(result.total) || rows.length);
-    const capped = result.capped === true || total > rows.length;
-    const capNote = capped ? " showing first 500; all observations are saved." : "";
-    const note = `${job.processedQueries.toLocaleString()} of ${job.queryCount.toLocaleString()} queries processed. Research observations remain unverified leads.${capNote}`;
-    const columns = [...new Set(rows.flatMap(row => Object.keys(row)))];
-    const existing = getChatState(job.sessionId).artifacts.find(item => item.type === "data-table" && item.planId === job.planId && item.title === "Bing research sources");
-    let artifactId: string;
-    if (existing?.type === "data-table") {
-      artifactId = existing.id;
-      patchArtifact(job.sessionId, artifactId, { rows, columns, note, planId: job.planId });
-    } else {
-      const artifact = saveArtifact(job.sessionId, { ...artifactBase("Bing research sources"), type: "data-table", planId: job.planId, rows, columns, note });
-      artifactId = artifact.id;
+    // A cancelled run that kept no rows gets a plain message, never an empty sources table.
+    const empty = job.state === "cancelled" && rows.length === 0;
+    let artifactId: string | undefined;
+    if (!empty) {
+      const total = Math.max(0, Number(result.total) || rows.length);
+      const capped = result.capped === true || total > rows.length;
+      const capNote = capped ? " showing first 500; all observations are saved." : "";
+      const note = `${job.processedQueries.toLocaleString()} of ${job.queryCount.toLocaleString()} queries processed. Research observations remain unverified leads.${capNote}`;
+      const columns = [...new Set(rows.flatMap(row => Object.keys(row)))];
+      const existing = getChatState(sessionId).artifacts.find(item => item.type === "data-table" && item.planId === job.planId && item.title === "Bing research sources");
+      if (existing?.type === "data-table") {
+        artifactId = existing.id;
+        patchArtifact(sessionId, artifactId, { rows, columns, note, planId: job.planId });
+      } else {
+        artifactId = saveArtifact(sessionId, { ...artifactBase("Bing research sources"), type: "data-table", planId: job.planId, rows, columns, note }).id;
+      }
     }
 
-    const messageId = `bing-research-${job.id}`;
-    const chat = getChatState(job.sessionId);
-    if (!chat.branchMessageIds.includes(messageId)) updateChatState(job.sessionId, state => ({ ...state, branchMessageIds: [...state.branchMessageIds, messageId] }));
-    const session = sessionStore.getSnapshot().sessions.find(item => item.id === job.sessionId);
-    const message = job.message ?? (job.state === "cancelled" ? "Research cancelled. Completed observations were kept." : "Bing research completed.");
-    if (!session?.events.some(event => event.messageId === messageId)) sessionStore.addEvent({
-      sessionId: job.sessionId,
-      jobId: job.id,
-      messageId,
-      kind: "message",
-      role: "assistant",
-      origin: "workspace",
-      status: "success",
-      title: "Bing research",
-      text: message,
-      content: [{ type: "text", text: message }, { type: "data", name: "screening-artifact", data: { artifactId } }],
-    });
+    const message = empty ? noResultsText : (job.message ?? (job.state === "cancelled" ? "Research cancelled. Completed observations were kept." : "Bing research completed."));
+    postResearchMessage(sessionId, job, message, artifactId);
 
     if (job.runId) {
-      await refreshCompanyContext(job.sessionId, job.runId);
-      await refreshShortlist(job.sessionId, job.runId);
+      await refreshCompanyContext(sessionId, job.runId);
+      await refreshShortlist(sessionId, job.runId);
     }
-    if (takeCriteriaPreference(job.id) && rows.length) await addResearchToCriteria(job.sessionId, rows.slice(0, 30).map(row => `${row.Query}: ${row.Answer ?? row.Excerpt ?? ""}${row.URL ? ` [${row.URL}]` : ""}`).join("\n"), "Analyst-selected general Bing research");
+    if (readCriteriaPreference(job.id) && rows.length) await addResearchToCriteria(sessionId, rows.slice(0, 30).map(row => `${row.Query}: ${row.Answer ?? row.Excerpt ?? ""}${row.URL ? ` [${row.URL}]` : ""}`).join("\n"), "Analyst-selected general Bing research");
     outcomeGuard.complete(job.id);
     clearCriteriaPreference(job.id);
   } catch (error) {

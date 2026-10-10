@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildRunCancelRequest, createOutcomeOnceGuard, mapBingJobToActivity, mapScreeningJobToActivity } from "../src/lib/run-activity";
+import { buildRunCancelRequest, createOutcomeOnceGuard, mapBingJobToActivity, mapScreeningJobToActivity, processedUnit } from "../src/lib/run-activity";
 
 const screening = {
   id: "plan-1", planId: "plan-1", runId: "run-1", sessionId: "session-1", digest: "digest",
@@ -69,4 +69,34 @@ test("outcome guard claims once and persists completed job IDs", () => {
   const reloaded = createOutcomeOnceGuard(storage);
   assert.equal(reloaded.has("job-1"), true);
   assert.equal(reloaded.claim("job-1"), false);
+});
+
+test("finished, paused, blocked, and stopped screening runs freeze elapsed time at their last update", () => {
+  const later = Date.parse("2026-01-01T01:00:00.000Z");
+  const settled = { ...screening, startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:02:30.000Z" };
+  for (const state of ["completed", "error", "cancelled", "paused", "blocked"] as const) {
+    assert.equal(mapScreeningJobToActivity({ ...settled, state }, { now: later }).elapsedMs, 150_000, state);
+  }
+  // Without an update time, the current clock is the only reading available.
+  assert.equal(mapScreeningJobToActivity({ ...settled, state: "completed", updatedAt: undefined }, { now: later }).elapsedMs, 3_600_000);
+});
+
+test("finished, paused, and stopped Bing runs freeze elapsed time at their last update", () => {
+  const later = Date.parse("2026-01-01T01:00:00.000Z");
+  for (const state of ["completed", "failed", "cancelled", "paused"] as const) {
+    assert.equal(mapBingJobToActivity({ ...bing, state, updatedAt: "2026-01-01T00:00:45.000Z" }, { now: later }).elapsedMs, 45_000, state);
+  }
+});
+
+test("queued and cancelling runs keep ticking against the clock", () => {
+  const later = Date.parse("2026-01-01T00:00:09.000Z");
+  assert.equal(mapScreeningJobToActivity({ ...screening, state: "cancelling", startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:01.000Z" }, { now: later }).elapsedMs, 9_000);
+  assert.equal(mapBingJobToActivity({ ...bing, state: "queued", updatedAt: "2026-01-01T00:00:01.000Z" }, { now: later }).elapsedMs, 9_000);
+});
+
+test("progress labels name each source's unit with the right plural", () => {
+  assert.equal(processedUnit("bing", 1), "1 query");
+  assert.equal(processedUnit("bing", 28712), `${(28712).toLocaleString()} queries`);
+  assert.equal(processedUnit("screening", 1), "1 batch");
+  assert.equal(processedUnit("screening", 4), "4 batches");
 });

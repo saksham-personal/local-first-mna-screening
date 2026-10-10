@@ -1,3 +1,5 @@
+import { plural } from "./format";
+
 export type ActivityStepState = "done" | "running" | "pending" | "failed" | "cancelled";
 export type ActivityAction = "pause" | "resume" | "cancel" | "retry" | "stage" | "open" | "dismiss" | "check";
 export type ActivitySource = "screening" | "bing";
@@ -86,6 +88,13 @@ function elapsed(startedAt: string | undefined, now: number) {
   return Number.isFinite(start) ? Math.max(0, now - start) : undefined;
 }
 
+const activeRunStates = new Set<string>(["queued", "running", "cancelling"]);
+/** Active runs tick against the clock. Paused, blocked, finished, and stopped runs stop at their last update. */
+function runElapsed(state: string, startedAt: string | undefined, updatedAt: string | undefined, now: number) {
+  const end = activeRunStates.has(state) ? now : Date.parse(updatedAt ?? "");
+  return elapsed(startedAt, Number.isFinite(end) ? end : now);
+}
+
 function displayState(state: RunActivityRow["state"]) {
   return ({
     queued: "Queued", running: "Running", paused: "Paused", cancelling: "Cancelling",
@@ -127,7 +136,7 @@ export function mapScreeningJobToActivity(
     total: Math.max(0, job.total),
     percent: percent(processed, job.total, job.state === "completed"),
     steps,
-    elapsedMs: elapsed(startedAt, options.now ?? Date.now()),
+    elapsedMs: runElapsed(job.state, startedAt, job.updatedAt, options.now ?? Date.now()),
     startedAt,
     updatedAt: job.updatedAt,
     message: job.message,
@@ -160,7 +169,7 @@ export function mapBingJobToActivity(
     total: Math.max(0, job.queryCount),
     percent: percent(processed, job.queryCount, job.state === "completed"),
     steps: job.steps.map(step => ({ id: step.id, label: step.label, state: stepState(step.state) })),
-    elapsedMs: elapsed(job.startedAt, options.now ?? Date.now()),
+    elapsedMs: runElapsed(job.state, job.startedAt, job.updatedAt, options.now ?? Date.now()),
     startedAt: job.startedAt,
     updatedAt: job.updatedAt,
     message: job.message,
@@ -176,6 +185,11 @@ export function formatElapsed(ms: number | undefined) {
   if (seconds < 60) return `Elapsed ${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   return `Elapsed ${minutes}m ${seconds % 60}s`;
+}
+
+/** The unit a run's progress counts in, with its plural, e.g. "28,712 queries" or "1 batch". */
+export function processedUnit(source: ActivitySource, total: number) {
+  return source === "bing" ? plural(total, "query", "queries") : plural(total, "batch", "batches");
 }
 
 export function buildRunCancelRequest(planId: string, keep: boolean) {
