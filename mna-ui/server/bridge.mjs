@@ -452,7 +452,7 @@ export async function startBridge() {
         return respond(res, 200, backgroundMatch[1] === 'stage' ? result : { job: result });
       }
       const loopMatch = url.pathname.match(/^\/api\/loop\/(start|pause|resume|cancel|undo)$/);
-      if (loopMatch) return respond(res, 200, await loops[loopMatch[1]](await body(req)));
+      if (loopMatch) return respond(res, 200, await loops[loopMatch[1]](input));
       const researchMatch = url.pathname.match(/^\/api\/research\/(preview|start|run|pause|resume|cancel)$/);
       if (researchMatch) {
         const action = researchMatch[1];
