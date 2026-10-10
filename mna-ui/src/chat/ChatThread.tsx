@@ -1,6 +1,5 @@
 import {
   Children,
-  createContext,
   useContext,
   useEffect,
   useMemo,
@@ -50,6 +49,7 @@ import type {
   ChatArtifact,
   ChatState,
 } from "../lib/chat-contract";
+import { ChatScope, type Scope } from "./chat-scope";
 import {
   approved,
   getChatState,
@@ -60,7 +60,9 @@ import {
   controllerPart,
 } from "../lib/chat-store";
 import { controllerAvailable, controllerHealth, getControllerPreferences, readControllerTurns, setControllerPreferences, subscribeControllerPreferences, type ControllerView } from "../lib/controller-client";
+import { getLoopJobs, getLoopToggle, isLoopActiveForRun, setLoopToggle, subscribeLoopPreferences, subscribeLoops } from "../lib/loop-client";
 import ControllerMessage, { type ControllerData } from "./ControllerMessage";
+import { LoopSummaryCard, LoopTurnMessage } from "./LoopMessage";
 import { appendWorkspaceMessages } from "../lib/workspace-message-sync";
 import {
   createChatAdapter,
@@ -83,6 +85,7 @@ import { formatDateTime, formatTime } from "../lib/format";
 import ArtifactCard from "./ArtifactCard";
 import MarkdownMessage from "./MarkdownMessage";
 import Tooltip from "../Tooltip";
+import HelpTip from "../ui/HelpTip";
 import SelectField from "../ui/SelectField";
 import { attachmentError } from "../lib/attachment-policy";
 import "../chat-thread.css";
@@ -91,22 +94,6 @@ export type ComposerControls = {
   setText: (text: string) => void;
   addFiles: (files: File[]) => Promise<number>;
 };
-type Scope = {
-  sessionId: string;
-  onAction: (action: ArtifactAction) => void | Promise<void>;
-  openLog: (eventId?: string) => void;
-  openContext: () => void;
-  openPrompts: () => void;
-  previewFile: (file: File) => void;
-};
-const ChatScope = createContext<Scope>({
-  sessionId: "",
-  onAction: () => {},
-  openLog: () => {},
-  openContext: () => {},
-  openPrompts: () => {},
-  previewFile: () => {},
-});
 type ToolPart = Extract<ThreadAssistantMessagePart, { type: "tool-call" }>;
 function ArtifactPart({ data }: { data: unknown }) {
   const scope = useContext(ChatScope);
@@ -254,12 +241,20 @@ function ControllerPart({ data }: { data: unknown }) {
   if (!data || typeof data !== "object" || (!("pending" in data) && !("turn" in data) && !("error" in data))) return <p className="cc-warnings">Restoring LLM Suite reply from saved screening history…</p>;
   return <ControllerMessage data={data as ControllerData} openSetup={() => scope.onAction({ type: "configure-screening", artifactId: "", provider: "llm_suite", mode: "screening" })} />;
 }
+function LoopTurnPart({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return <p className="cc-warnings">Restoring discovery loop…</p>;
+  return <LoopTurnMessage data={data as { loopId?: string; error?: string }} />;
+}
+function LoopSummaryPart({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object" || !("view" in data)) return <p className="cc-warnings">Restoring loop summary…</p>;
+  return <LoopSummaryCard data={data as import("../lib/loop-client").LoopSummaryEventData} />;
+}
 const parts = {
   Text: MarkdownMessage,
   Empty: LoadingPart,
   tools: { Fallback: ToolCall },
   ToolGroup: ToolTimeline,
-  data: { by_name: { "screening-artifact": ArtifactPart, "controller-turn": ControllerPart } },
+  data: { by_name: { "screening-artifact": ArtifactPart, "controller-turn": ControllerPart, "loop-turn": LoopTurnPart, "loop-summary": LoopSummaryPart } },
 };
 function MessageActions({ user = false }: { user?: boolean }) {
   const copied = useAuiState((s) => s.message.isCopied);
@@ -585,6 +580,8 @@ function ModelMenu({ state }: { state: ChatState }) {
 }
 function ControllerMode({ state }: { state: ChatState }) {
   const preferences = useSyncExternalStore(subscribeControllerPreferences, () => getControllerPreferences(state.sessionId));
+  const loopEnabled = useSyncExternalStore(subscribeLoopPreferences, () => getLoopToggle(state.sessionId));
+  const loopJobs = useSyncExternalStore(subscribeLoops, getLoopJobs, getLoopJobs);
   const [health, setHealth] = useState<Awaited<ReturnType<typeof controllerHealth>>>();
   const [error, setError] = useState("");
   useEffect(() => {
@@ -595,15 +592,18 @@ function ControllerMode({ state }: { state: ChatState }) {
     return () => { active = false; window.clearInterval(timer); };
   }, [state.backendRunId]);
   const available = controllerAvailable(state.backendRunId, health);
+  const loopActive = loopJobs.some(job => job.runId === state.backendRunId && ["queued", "running", "paused", "consolidating", "cancelling"].includes(job.state));
   if (!available && !preferences.mode) return null;
   return <div className="cc-mode" aria-label="Chat send mode">
     <button type="button" aria-pressed={!preferences.mode} onClick={() => setControllerPreferences(state.sessionId, { mode: false })}>Current assistant</button>
     <button type="button" aria-pressed={preferences.mode} disabled={!available} onClick={() => setControllerPreferences(state.sessionId, { mode: true })}>Send to LLM Suite</button>
+    {preferences.mode && available && <><button className="cc-loop-switch" type="button" role="switch" aria-label="Loop" aria-checked={loopEnabled} onClick={() => setLoopToggle(state.sessionId, !loopEnabled)}><span className="cc-loop-track" aria-hidden="true"><i /></span><span>Loop</span></button><HelpTip label="About Loop" size="sm">LLM Suite runs up to 50 turns of searches, sets a keep threshold per query and applies the final list as your considered companies. You can pause, cancel, or undo.</HelpTip></>}
     {preferences.mode && <details className="cc-mode-menu"><summary>Conversation menu</summary><div><button type="button" onClick={event => {
       setControllerPreferences(state.sessionId, { newConversation: true });
       event.currentTarget.closest("details")?.removeAttribute("open");
     }}>New conversation</button></div></details>}
     {preferences.mode && preferences.newConversation && <span>Next message starts a new conversation</span>}
+    {preferences.mode && loopEnabled && loopActive && <span className="cc-loop-note" role="status">A loop is already running for this screening</span>}
     {!available && <span role="status">{error || "LLM Suite controller is unavailable."}</span>}
   </div>;
 }
@@ -623,6 +623,11 @@ function Conversation({
   const empty = useAuiState((s) => s.thread.isEmpty);
   const running = useAuiState((s) => s.thread.isRunning);
   const draftText = useAuiState((s) => s.composer.text);
+  const controllerPreferences = useSyncExternalStore(subscribeControllerPreferences, () => getControllerPreferences(state.sessionId));
+  const loopEnabled = useSyncExternalStore(subscribeLoopPreferences, () => getLoopToggle(state.sessionId));
+  const loopJobs = useSyncExternalStore(subscribeLoops, getLoopJobs, getLoopJobs);
+  const loopOn = controllerPreferences.mode && loopEnabled;
+  const loopBlocked = loopOn && loopJobs.some(job => job.runId === state.backendRunId && ["queued", "running", "paused", "consolidating", "cancelling"].includes(job.state));
   const [attachmentFailure, setAttachmentFailure] = useState("");
   useAuiEvent("composer.attachmentAddError", (event) => {
     setAttachmentFailure(event.message);
@@ -808,7 +813,7 @@ function Conversation({
             />
           </div>
           <ComposerPrimitive.Input
-            placeholder="Describe a business, ask for a next step, or type /…"
+            placeholder={loopOn ? "Describe what the loop should find…" : "Describe a business, ask for a next step, or type /…"}
             aria-label="Message the screening assistant"
           />
           <div className="ct-composer-footer">
@@ -847,6 +852,7 @@ function Conversation({
                 className="ct-send"
                 aria-label={running ? "Queue message" : "Send message"}
                 title={running ? "Queue for after this step" : "Send message"}
+                disabled={loopBlocked}
               >
                 <ArrowUp size={17} />
               </ComposerPrimitive.Send>

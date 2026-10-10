@@ -87,6 +87,7 @@ import PrepareMenu from "./screening/PrepareMenu";
 const SetupController = lazy(() => import("./screening/SetupController"));
 const BingResearchDialog = lazy(() => import("./screening/BingResearchDialog"));
 import BackgroundRuns, { readActivityOpen, writeActivityOpen, type SearchRunView } from "./screening/BackgroundRuns";
+import LoopUndoDialog from "./screening/LoopUndoDialog";
 import ScreeningInspector from "./chat/ScreeningInspector";
 import { ASK_ASSISTANT_EVENT, OPEN_WORKSPACE_EVENT } from "./lib/grid-client";
 import IntakeFormDialog from "./intake/IntakeForm";
@@ -99,6 +100,7 @@ import { reviewShortlist, flushCriteriaDraft } from "./lib/review-client";
 import { generateDraft } from "./lib/conversation-client";
 import { backgroundAction, dismissBackground, getBackgroundJobs, isBackgroundActive, startBackgroundPolling, startBackgroundScreening, subscribeBackground } from "./lib/background-client";
 import { dismissResearch, getResearchJobs, isResearchActive, previewBingResearch, researchAction, startBingResearch, startResearchPolling, subscribeResearch } from "./lib/research-client";
+import { controlLoop, dismissLoop, getLoopById, getLoopJobs, LOOP_STARTED_EVENT, LOOP_UNDO_EVENT, startLoopPolling, subscribeLoops, undoLoop } from "./lib/loop-client";
 import { processStagedUploads } from "./lib/import-pipeline";
 import { researchQuestions } from "./lib/chat-driver";
 import { updateChatState } from "./lib/chat-store";
@@ -520,6 +522,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   };
   const [activityOpen, setActivityOpen] = useState(() => readActivityOpen());
   useEffect(() => { writeActivityOpen(activityOpen); }, [activityOpen]);
+  const [loopUndoTarget, setLoopUndoTarget] = useState<string>();
   const [dismissedSearches, setDismissedSearches] = useState<ReadonlySet<string>>(new Set());
   const dock = useDock(sidebar && window.innerWidth > 760 ? navigationWidth : 0);
   const dockRail = mode === "workspace" && !compact && dock.state.mode === "rail";
@@ -593,9 +596,21 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   const [bingConnected, setBingConnected] = useState(false);
   const backgroundJobs = useSyncExternalStore(subscribeBackground, getBackgroundJobs, getBackgroundJobs);
   const researchJobs = useSyncExternalStore(subscribeResearch, getResearchJobs, getResearchJobs);
+  const loopJobs = useSyncExternalStore(subscribeLoops, getLoopJobs, getLoopJobs);
   const allJobs = useSyncExternalStore(subscribeJobs, getJobsSnapshot, getJobsSnapshot);
   useEffect(startBackgroundPolling, []);
   useEffect(startResearchPolling, []);
+  useEffect(startLoopPolling, []);
+  useEffect(() => {
+    const started = () => { setActivityOpen(true); setToast("Loop started · see Activity"); };
+    const undoRequested = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (id) setLoopUndoTarget(id);
+    };
+    window.addEventListener(LOOP_STARTED_EVENT, started);
+    window.addEventListener(LOOP_UNDO_EVENT, undoRequested);
+    return () => { window.removeEventListener(LOOP_STARTED_EVENT, started); window.removeEventListener(LOOP_UNDO_EVENT, undoRequested); };
+  }, []);
   useEffect(() => { void fetch("/api/health").then(r => r.json()).then(data => setBingConnected(data.providers?.bing === true)).catch(() => {}); }, []);
   // Anything that needs the composer calls this first: the full chat opens when
   // the Workspace chat is hidden (narrow window) and the dock leaves its rail.
@@ -924,6 +939,17 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
     setScreeningSetup(undefined);
     setBingSetup(undefined);
   };
+  const openLoopSummary = (sessionId: string, loopId: string) => {
+    if (mode !== "chat") changeMode("chat");
+    selectSession(sessionId);
+    let attempts = 0;
+    const scroll = () => {
+      const card = document.getElementById(`loop-summary-${loopId}`);
+      if (card) { card.scrollIntoView({ block: "center" }); return; }
+      if (++attempts < 8) window.setTimeout(scroll, 100);
+    };
+    window.setTimeout(scroll, 100);
+  };
   const newSession = (title: string) => {
     if (mode === "space") changeMode("chat");
     sessionStore.createSession(title);
@@ -1057,7 +1083,8 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
   );
   const activityRunning =
     searches.some((search) => search.state === "running") ||
-    isBackgroundActive(backgroundJobs) || isResearchActive(researchJobs) || !!runningIndexBuildId;
+    isBackgroundActive(backgroundJobs) || isResearchActive(researchJobs) || loopJobs.some(job => ["running", "queued", "consolidating", "cancelling"].includes(job.state)) || !!runningIndexBuildId;
+  const loopUndoJob = loopUndoTarget ? getLoopById(loopUndoTarget) : undefined;
   const chatBusy = busy || job?.state === "running";
   const appRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1430,6 +1457,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
           onDismissIndex={id => setIndexBuilds(previous => previous.filter(build => build.build_id !== id))}
           jobs={backgroundJobs.map(job => ({ ...job, title: `${job.provider === "llm_suite" ? "LLM Suite" : "M365 Copilot"} screening · ${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? "Screening"}` }))}
           researchJobs={researchJobs.map(job => ({ ...job, title: `Bing research · ${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? "Research"}` }))}
+          loopJobs={loopJobs.map(job => ({ ...job, title: job.title || `Loop · ${snapshot.sessions.find(s => s.id === job.sessionId)?.title ?? "Screening"}` }))}
           searches={searches}
           expanded={activityOpen}
           onExpandedChange={setActivityOpen}
@@ -1437,7 +1465,14 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
           onDismiss={dismissBackground}
           onAction={async (id, action) => { await backgroundAction(id, action); setToast(action === "stage" ? "Accepted results staged in chat." : "Background screening updated."); }}
           onResearchAction={async (id, action) => { await researchAction(id, action); setToast(action === "pause" ? "Bing research paused." : "Bing research resumed."); }}
-          onCancelRun={async (source, id, keep) => { if (source === "bing") await researchAction(id, "cancel", keep); else await backgroundAction(id, "cancel", keep); setToast(keep ? "Run cancelled. Processed results were kept." : "Run cancelled. Processed results were discarded."); }}
+          onLoopAction={async (id, action) => { await controlLoop(id, action); setToast(action === "pause" ? "Loop paused." : "Loop resumed."); }}
+          onCancelRun={async (source, id, keep) => {
+            if (source === "loop") { await controlLoop(id, "cancel", keep); setToast(keep ? "Loop cancelled. Kept companies were applied." : "Loop cancelled. Searches remain in history."); }
+            else { if (source === "bing") await researchAction(id, "cancel", keep); else await backgroundAction(id, "cancel", keep); setToast(keep ? "Run cancelled. Processed results were kept." : "Run cancelled. Processed results were discarded."); }
+          }}
+          onDismissLoop={dismissLoop}
+          onOpenLoopSummary={openLoopSummary}
+          onUndoLoop={id => setLoopUndoTarget(id)}
           onOpenSearch={selectSession}
           onOpenScreening={selectSession}
           onOpenResearch={(sessionId, jobId) => { const messageId = `bing-research-${jobId}`; if (mode !== "chat") changeMode("chat"); selectSession(sessionId); window.setTimeout(() => { const messages = document.querySelector<HTMLElement>(".ct-messages"); const message = messages ? Array.from(messages.querySelectorAll<HTMLElement>(".ct-message")).find(item => item.id === messageId || item.dataset.messageId === messageId) : undefined; if (message) message.scrollIntoView({ block: "center" }); else if (messages) messages.scrollTop = messages.scrollHeight; }, 100); }}
@@ -1445,6 +1480,7 @@ export default function App({ onIntakeFiles }: { onIntakeFiles?: (files: File[])
           onStopSearch={id => { void stopJob(id).catch(error => setToast(String(error))); }}
           onDismissSearch={id => setDismissedSearches(previous => new Set(previous).add(id))}
         />
+        {loopUndoJob && <LoopUndoDialog loop={loopUndoJob} onClose={() => setLoopUndoTarget(undefined)} onUndo={async force => { await undoLoop(loopUndoJob.id, force); setToast("Loop shortlist undone."); setLoopUndoTarget(undefined); }} />}
       </main>
       <SessionLog
         open={log}

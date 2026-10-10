@@ -34,17 +34,17 @@ export default function CancelRunDialog({ run, busy = false, onBack, onCancel }:
       <Dialog.Content className="crd-dialog" aria-labelledby={headingId} onEscapeKeyDown={event => { if (locked) event.preventDefault(); }}>
         <header className="crd-header">
           <Dialog.Title className="crd-title" id={headingId}>Cancel {run.title}?</Dialog.Title>
-          <Dialog.Description className="crd-progress">{run.processed} of {run.total} processed.</Dialog.Description>
+          <Dialog.Description className="crd-progress">{run.source === "loop" ? run.secondaryText : `${run.processed} of ${run.total} processed.`}</Dialog.Description>
         </header>
         <fieldset className="crd-options" disabled={locked}>
           <legend>What should happen to processed results?</legend>
           <label htmlFor={keepId}>
             <input id={keepId} type="radio" name="run-cancel-choice" checked={keep} onChange={() => setKeep(true)} />
-            <span>Keep the {run.processed} results processed so far</span>
+            <span>{run.source === "loop" ? `Keep — apply the companies kept so far (${run.keptCount ?? 0})` : `Keep the ${run.processed} results processed so far`}</span>
           </label>
           <label htmlFor={discardId}>
             <input id={discardId} type="radio" name="run-cancel-choice" checked={!keep} onChange={() => setKeep(false)} />
-            <span>Discard all results from this run (they stay in the audit history but won’t appear in companies, context, or exports)</span>
+            <span>{run.source === "loop" ? "Discard — change nothing; searches stay in history" : "Discard all results from this run (they stay in the audit history but won’t appear in companies, context, or exports)"}</span>
           </label>
         </fieldset>
         {error && <p className="crd-error" role="alert">{error}</p>}
@@ -52,7 +52,7 @@ export default function CancelRunDialog({ run, busy = false, onBack, onCancel }:
           <button type="button" onClick={onBack} disabled={locked}>Back</button>
           <button className="crd-confirm" type="button" onClick={() => void cancel()} disabled={locked}>
             {locked && <LoaderCircle size={14} aria-hidden="true" className="crd-spinner" />}
-            Cancel run
+            {run.source === "loop" ? "Cancel loop" : "Cancel run"}
           </button>
         </footer>
       </Dialog.Content>

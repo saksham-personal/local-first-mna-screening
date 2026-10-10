@@ -1,0 +1,13 @@
+.lud-overlay { position: fixed; inset: 0; z-index: 120; background: var(--overlay); }
+.lud-dialog { position: fixed; z-index: 121; top: 50%; left: 50%; width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; transform: translate(-50%, -50%); padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); color: var(--text); box-shadow: 0 12px 36px var(--shadow-color); font: 13px/1.5 var(--font-body); }
+.lud-title { margin: 0; font: 700 17px/1.3 var(--font-heading); }
+.lud-description { display: block; margin-top: 10px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.lud-error { margin: 14px 0 0; padding: 9px; border-radius: 6px; background: var(--danger-soft); color: var(--danger); font-size: 12px; }
+.lud-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.lud-actions button { min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; font: inherit; font-size: 12px; }
+.lud-actions .lud-confirm { display: inline-flex; align-items: center; gap: 7px; border-color: var(--accent); background: var(--accent); color: var(--surface); }
+.lud-actions button:disabled { opacity: .65; cursor: wait; }
+.lud-spinner { animation: lud-spin 900ms linear infinite; }
+.lud-dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes lud-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .lud-spinner { animation: none; } }
