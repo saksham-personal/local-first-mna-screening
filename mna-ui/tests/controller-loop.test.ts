@@ -53,7 +53,8 @@ test('start, pause and resume at a boundary with no overlapping turns', async ()
     f.setConnected(false); assert.equal((await f.service.resume({ id: started.id })).state, 'paused');
     f.setConnected(true); await f.service.resume({ id: started.id });
     await until(() => f.loop.turns_used >= 2); await f.service.pause({ id: started.id });
-    assert.equal(f.maxActive(), 1); assert.ok(f.calls.filter(c => c.tool.endsWith('_turn')).every(c => c.approved));
+    assert.equal(f.maxActive(), 1); assert.ok(f.calls.filter(c => c.tool.endsWith('_turn')).every(c => !c.approved));
+    assert.equal(f.calls.find(c => c.tool === 'start_controller_loop')?.approved, true);
   } finally { f.service.close(); }
 });
 
@@ -153,4 +154,65 @@ test('STUB_LOOP_TURNS searches until the reserve notice, then keeps and finishes
   assert.match(reply(20), /\*\*search_mid\*\*/);
   const reserved = reply(46, 'TURN BUDGET: 5 turns left. Reserve them to consolidate;');
   assert.match(reserved, /\*\*keep_query_results\*\*/); assert.match(reserved, /\*\*finish_loop\*\*/); assert.doesNotMatch(reserved, /\*\*search_mid\*\*/);
+});
+
+test('Rust paused status is preserved after a successful turn response', async () => {
+  const f = fixture({ hold: async () => { f.loop.status = 'paused'; } });
+  try {
+    await f.service.start({ runId: 'R', message: 'Find claims' });
+    await until(async () => (await f.service.list())[0].state === 'paused');
+    assert.equal(f.calls.filter(c => c.tool.endsWith('_turn')).length, 1);
+    assert.equal((await f.service.cancel({ id: 'loop-1', keep: false })).state, 'cancelled');
+  } finally { f.service.close(); }
+});
+
+for (const failure of [
+  { code: 'PROVIDER_UNAVAILABLE', status: 503 },
+  { code: 'PROVIDER_ERROR', status: 502 },
+  { name: 'TimeoutError' },
+  { code: 'ECONNRESET' },
+]) test(`recoverable ${JSON.stringify(failure)} pauses and resumes`, async () => {
+  let remaining = 1;
+  const f = fixture({ maxTurns: 1, error: () => remaining-- > 0 ? Object.assign(new Error('provider unavailable'), failure) : undefined });
+  try {
+    await f.service.start({ runId: 'R', message: 'Find claims' });
+    await until(async () => (await f.service.list())[0].state === 'paused');
+    await f.service.resume({ id: 'loop-1' });
+    await until(async () => (await f.service.list())[0].state === 'completed');
+    assert.equal(f.calls.filter(c => c.tool.endsWith('_turn')).length, 2);
+  } finally { f.service.close(); }
+});
+
+for (const keep of [false, true]) test(`failed loops remain cancellable with keep=${keep}`, async () => {
+  const f = fixture({ error: () => { f.loop.status = 'failed'; return Object.assign(new Error('Fatal'), { code: 'INTERNAL_ERROR' }); } });
+  try {
+    await f.service.start({ runId: 'R', message: 'Find claims' });
+    await until(async () => (await f.service.list())[0].state === 'failed');
+    const result = await f.service.cancel({ id: 'loop-1', keep });
+    assert.equal(result.state, 'cancelled'); assert.equal(Boolean(result.appliedReviewId), keep);
+  } finally { f.service.close(); }
+});
+
+for (const keep of [false, true]) test(`409 final apply pauses and permits cancel keep=${keep}`, async () => {
+  const stale = 'The shortlist changed during the loop. Resume to re-apply, or cancel.';
+  const f = fixture({ error: () => { f.loop.status = 'paused'; f.loop.summary = stale; return Object.assign(new Error('Conflict'), { status: 409 }); } });
+  try {
+    await f.service.start({ runId: 'R', message: 'Find claims' });
+    await until(async () => (await f.service.list())[0].state === 'paused');
+    assert.equal((await f.service.list())[0].message, stale);
+    const result = await f.service.cancel({ id: 'loop-1', keep });
+    assert.equal(result.state, 'cancelled'); assert.equal(Boolean(result.appliedReviewId), keep);
+  } finally { f.service.close(); }
+});
+
+test('resuming paused Rust work still retries a rate gate', async () => {
+  let failures = 1;
+  const f = fixture({ maxTurns: 1, error: () => failures-- > 0 ? Object.assign(new Error('Rate limit'), { code: 'RATE_LIMITED' }) : undefined });
+  f.loop.status = 'paused';
+  try {
+    assert.equal((await f.service.start({ runId: 'R', message: 'Find claims' })).state, 'paused');
+    await f.service.resume({ id: 'loop-1' });
+    await until(async () => (await f.service.list())[0].state === 'completed');
+    assert.equal(f.calls.filter(c => c.tool.endsWith('_turn')).length, 2);
+  } finally { f.service.close(); }
 });

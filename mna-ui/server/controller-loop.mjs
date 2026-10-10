@@ -5,6 +5,9 @@ import { randomUUID } from 'node:crypto';
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const terminal = state => ['completed', 'cancelled', 'failed'].includes(state);
 const message = error => error instanceof Error ? error.message : String(error);
+const staleApply = 'The shortlist changed during the loop. Resume to re-apply, or cancel.';
+const recoverable = error => ['PROVIDER_UNAVAILABLE', 'PROVIDER_ERROR', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT'].includes(error.code)
+  || ['AbortError', 'TimeoutError'].includes(error.name) || [502, 503, 504].includes(error.status) || /fetch failed|network error|timed? ?out/i.test(message(error));
 
 /** Turn boundaries belong to Rust; this runner schedules one boundary at a time.
  * POST start is the analyst's Loop-on/send action, not a model instruction.
@@ -34,7 +37,7 @@ export function createControllerLoop({ call, connected = () => false, storeFile,
     saved.turn = loop.turns_used; saved.maxTurns = loop.max_turns; saved.queries = loop.queries ?? [];
     saved.consolidatedCount = loop.consolidated_count ?? 0; saved.appliedReviewId = loop.applied_review_id;
     saved.finalCount = loop.final_count; saved.simulated = Boolean(loop.simulated); saved.undoneReviewId = loop.undone_review_id;
-    if (terminal(loop.status)) saved.state = loop.status;
+    if (terminal(loop.status) || loop.status === 'paused') saved.state = loop.status;
     saved.message = loop.summary || `Discovery loop · turn ${saved.turn} of ${saved.maxTurns}.`;
     saved.updatedAt = timestamp();
   }
@@ -84,8 +87,10 @@ export function createControllerLoop({ call, connected = () => false, storeFile,
       const current = await call('get_controller_loop', { loop_id: id }); merge(saved, current);
       if (terminal(saved.state)) { await persist(); return; }
       if (saved.pauseRequested || saved.cancelRequested) return;
-      const result = await call('run_controller_loop_turn', { loop_id: id }, true); merge(saved, result);
-      if (!terminal(saved.state)) saved.state = saved.pauseRequested ? 'paused' : saved.cancelRequested ? 'cancelling' : 'running';
+      // A scheduled pump on paused Rust state is an explicit Node resume.
+      saved.state = 'running';
+      const result = await call('run_controller_loop_turn', { loop_id: id }); merge(saved, result);
+      if (!terminal(saved.state)) saved.state = saved.pauseRequested || result.status === 'paused' ? 'paused' : saved.cancelRequested ? 'cancelling' : 'running';
       await persist();
     } catch (error) {
       if (error.code === 'RATE_LIMITED' || error.status === 429 || /rate.limit|seven.*(?:send|minute)|rolling minute/i.test(message(error))) {
@@ -93,8 +98,11 @@ export function createControllerLoop({ call, connected = () => false, storeFile,
         if (!saved.pauseRequested && !saved.cancelRequested) schedule(id, retryMs);
         return;
       }
-      saved.state = !connected() || error.code === 'PROVIDER_UNAVAILABLE' ? 'paused' : 'failed';
-      saved.message = message(error); saved.updatedAt = timestamp(); await persist();
+      saved.state = !connected() || recoverable(error) || error.status === 409 ? 'paused' : 'failed';
+      // Rust owns the durable status, including a paused final apply.
+      let current;
+      try { current = await call('get_controller_loop', { loop_id: id }); merge(saved, current); } catch { /* transport may still be unavailable */ }
+      saved.message = error.status === 409 && (!current || current.summary === staleApply) ? staleApply : message(error); saved.updatedAt = timestamp(); await persist();
     }
     if (saved.state === 'running' && !saved.pauseRequested && !saved.cancelRequested) schedule(id);
   }
@@ -138,15 +146,22 @@ export function createControllerLoop({ call, connected = () => false, storeFile,
   async function cancel(input) {
     await init(); const saved = find(input);
     if (typeof input.keep !== 'boolean') throw new Error('Choose keep:true or keep:false.');
-    if (terminal(saved.state)) return snapshot(saved);
+    if (['completed', 'cancelled'].includes(saved.state)) return snapshot(saved);
     saved.cancelRequested = true; saved.pauseRequested = false; saved.state = 'cancelling'; unschedule(saved.id); await persist();
     await pumps.get(saved.id);
     // A finishing turn can have completed before cancellation reached its boundary.
-    if (!terminal(saved.state)) {
-      const result = await call('cancel_controller_loop', { loop_id: saved.id, keep: input.keep }, true);
-      merge(saved, result); saved.state = 'cancelled';
+    try {
+      if (!['completed', 'cancelled'].includes(saved.state)) {
+        const result = await call('cancel_controller_loop', { loop_id: saved.id, keep: input.keep }, true);
+        merge(saved, result);
+      }
+    } catch (error) {
+      saved.state = 'paused'; saved.message = error.status === 409 ? staleApply : message(error);
+      throw error;
+    } finally {
+      saved.cancelRequested = false; saved.updatedAt = timestamp(); await persist();
     }
-    saved.cancelRequested = false; saved.updatedAt = timestamp(); await persist(); return snapshot(saved);
+    return snapshot(saved);
   }
   async function undo(input) {
     await init(); const saved = find(input); await pumps.get(saved.id);
