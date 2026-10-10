@@ -324,6 +324,14 @@ tool("list_exports", "List the background export jobs of a run.",
      "Lists export jobs for run_id, newest first, from the in-memory registry and the status files in the export folder.",
      "exports: the same records as get_export. Read-only.",
      {"run_id":R})
+tool("get_controller_loop", "Read an analyst-enabled LLM Suite discovery loop.",
+     "Reads durable state, query-specific score histograms, Q-ids, latest keep thresholds, drops, consolidated count and audited Markdown turns. Loop-only actions inspect_band, keep_query_results, drop_companies and finish_loop are never public tools. Each observation is capped at 4,800 UTF-8 bytes, a turn at 32,000 bytes and loop state at 6,000 bytes; searches are limited to four per turn and fifty per loop. Semantic work remains skipped without configured vectors. Simulated controller activity and source samples are labelled.",
+     "Loop state, queries, keeps, drops, turns, observations, simulated, applied_review_id, final_count and undone_review_id. Reads do not approve or apply anything.",
+     {"loop_id":"loop-returned-id"})
+tool("list_controller_loops", "List discovery loops saved for a screening run.",
+     "Reads at most 100 newest loops for the run. State is rebuilt from SQLite and survives conversation rotation; hidden companies remain in candidate history.",
+     "loops containing the same state shape as get_controller_loop. Read-only.",
+     {"run_id":R})
 tool("get_controller_turns", "Read the stored LLM Suite controller turns of a run.",
      "Returns the controller turns saved for run_id in the shape the chat renders: each turn's kind (analyst, feedback, handoff), parsed context, reasoning, notes, instruction rows with status (executed, rejected, failed), bounded result summaries and parser warnings, plus the active conversation id, rotated_from and rotation reason.",
      "conversation_id, rotated, rotated_from, rotation, estimated_tokens and turns. Read-only.",
@@ -377,7 +385,7 @@ GROUPS = [
     ("Candidate funnel",["add_candidates","get_candidate_set","get_shortlist_context","get_screening_grid","get_grid_descriptions","get_company_detail","update_candidate_status","get_discovery_summary"]),
     ("Enrichment and exports",["inspect_enrichment_files","import_enrichment_files","get_enrichment_report","export_candidate_set","get_export","list_exports"]),
     ("Search Space",["space_sync_status","space_browse","space_search_lexical","space_search_semantic","space_search_iscc","space_recent"]),
-    ("LLM Suite controller",["get_controller_turns"]),
+    ("LLM Suite controller",["get_controller_turns","get_controller_loop","list_controller_loops"]),
     ("Approved action graphs and screening",["propose_action_plan","get_action_plan","propose_prepared_plan","get_prepared_plan","get_execution_progress","get_execution_job","get_model_assessments","get_screening_rounds","prepare_screening_batch","prepare_bing_queries","save_screening_results","get_screening_results","complete_action_step"]),
     ("Recovery",["save_checkpoint","get_checkpoint"]),
 ]
@@ -591,6 +599,24 @@ Omit `deployment` to use the configured provider deployment. A request with no c
 
 The free-text `approved_by` is audit metadata; production user authentication belongs to the controller. Do not expose the analyst key to the LLM. On migration, legacy profiles auto-approved as `system_initialization` are returned to PROPOSED, requiring actual approval; existing human approvals are retained.
 
+## Analyst-enabled discovery loop API
+
+Turning Loop on and sending a request authorizes searches and deterministic final shortlist review only. Loop output cannot approve criteria, approve or start screening, export or label companies. All five operations below require the controller key.
+
+| Operation | Endpoint | Arguments |
+|---|---|---|
+| start_controller_loop | /admin/controller-loop-start | run_id, analyst_message, max_turns (1-50, default 50) |
+| run_controller_loop_turn | /admin/controller-loop-turn | loop_id |
+| consolidate_controller_loop | /admin/controller-loop-consolidate | loop_id, apply:boolean |
+| cancel_controller_loop | /admin/controller-loop-cancel | loop_id, keep:boolean |
+| undo_controller_loop | /admin/controller-loop-undo | loop_id, force:boolean (default false) |
+
+The final set is the union of query results meeting each latest threshold, minus explicit drops, restricted to run candidates. Apply uses the unchanged audited review_shortlist path and its expected selection revision with reason `LLM Suite loop <loop_id> consolidation (analyst-enabled Loop)`. A changed shortlist or criteria blocks apply. No keep decisions completes without an apply. Undo restores the exact considered IDs saved before discovery, including when there was no prior review; it refuses subsequent shortlist changes unless force:true is explicit. Searches remain in history when cancelled without keeping.
+
+The Node runner provides POST `/api/loop/start` with `{runId,message,maxTurns?,sessionId?,title?}`, POST `/api/loop/pause|resume` with `{id}`, POST `/api/loop/cancel` with `{id,keep}`, POST `/api/loop/undo` with `{id,force?}`, and GET `/api/loop/runs` returning `{jobs:[snapshot]}`. `loopId` is accepted as an alias for id. Pause and cancel wait for the current Rust turn boundary; an already completed final turn stays completed. A bridge restart pauses unfinished runners until explicit resume. A rate-gate error retries without replaying completed decisions.
+
+A snapshot contains `{id,kind:'loop',runId,sessionId,title,state,turn,maxTurns,queries,consolidatedCount,steps,message,startedAt,updatedAt,simulated,appliedReviewId,finalCount,undoneReviewId}`. Each step has id, label and state; labels are Plan queries, Refine · turn k of N, Consolidate, Apply shortlist. Node pause state is persisted by the runner; Rust holds the durable decisions. Terminal Rust state is reconciled before the next send.
+
 ## Worked orchestration example
 
 1. Create a run from Intake Form fields or plain text. Review the core business, then optional good-fit and bad-fit boxes. Save each criteria revision with `save_criteria_revision`; approve the final digest with `approve_criteria_revision`. Keep unclear terms as open questions. The Intake Form opens PDFs and pre-fills fields by label; check each field. Full parsing is deferred.
@@ -629,7 +655,7 @@ The tables below cover typed nested objects and enums referenced by the agent ar
 
 """
 
-assert len(TOOLS)==87 and set(META)==set(TOOLS)
+assert len(TOOLS)==89 and set(META)==set(TOOLS)
 grouped=[name for _,names in GROUPS for name in names]
 assert len(grouped)==len(TOOLS) and len(set(grouped))==len(TOOLS) and set(grouped)==set(TOOLS)
 parts=[INTRO]

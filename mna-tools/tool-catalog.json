@@ -229,6 +229,46 @@
     }
   },
   {
+    "name": "get_controller_loop",
+    "description": "Read a discovery loop, query thresholds and saved turns",
+    "category": "workflow",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "loop_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop_id"
+      ],
+      "title": "LoopId",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_controller_loops",
+    "description": "Read recent discovery loops for a run",
+    "category": "workflow",
+    "mutates_state": false,
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunId",
+      "type": "object"
+    }
+  },
+  {
     "name": "get_controller_turns",
     "description": "Read saved controller turns, Markdown replies, instructions and outcomes",
     "category": "workflow",

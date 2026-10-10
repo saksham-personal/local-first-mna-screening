@@ -10,6 +10,7 @@ import { createJobRegistry } from './jobs.mjs';
 import { createDurableScreeningPreparation } from './durable-screening.mjs';
 import { createBackgroundScreening } from './background-screening.mjs';
 import { createBingResearch } from './bing-research.mjs';
+import { createControllerLoop } from './controller-loop.mjs';
 import { createProviderConversation } from './provider-conversation.mjs';
 import { handlePromptRoute } from './prompt-routes.mjs';
 import { handleIntakeRoute } from './intake-routes.mjs';
@@ -21,7 +22,7 @@ const data = resolve(root, '.screening-data');
 const importRoot = resolve(data, 'import');
 const rustAddress = `http://127.0.0.1:${ports.rust}`;
 const admin = { start_export: '/admin/export-start', start_index_build: '/admin/index-build-start', cancel_index_build: '/admin/index-build-cancel', activate_mid_bundle: '/admin/mid-bundle-activate', delete_mid_bundle: '/admin/mid-bundle-delete', import_company_files: '/admin/company-files', create_run: '/admin/runs', approve_screening_profile: '/admin/profiles/approve', approve_prepared_plan: '/admin/prepared-plan-approve', cancel_prepared_plan: '/admin/prepared-plan-cancel', discard_plan_results: '/admin/plan-discard', approve_action_plan: '/admin/actions/approve', review_shortlist: '/admin/shortlist-review', apply_enrichment_review: '/admin/enrichment-review', save_criteria_revision: '/admin/criteria-save', approve_criteria_revision: '/admin/criteria-approve' };
-const allowed = new Set(['get_controller_turns', 'get_export', 'list_exports', 'get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
+const allowed = new Set(['get_controller_loop', 'list_controller_loops', 'get_controller_turns', 'get_export', 'list_exports', 'get_mid_index_status', 'get_index_build', 'list_index_builds', 'get_active_screening_profile', 'get_run_context', 'search_mid', 'add_candidates', 'get_candidate_set', 'get_company', 'get_company_context', 'get_candidate_context', 'get_discovery_summary', 'get_source_rows', 'get_candidate_source_data', 'save_checkpoint', 'get_checkpoint', 'import_enrichment_files', 'propose_prepared_plan', 'get_prepared_plan']);
 for (const tool of ['inspect_enrichment_files', 'get_execution_job', 'get_execution_progress', 'get_model_assessments', 'get_screening_rounds', 'propose_action_plan', 'get_action_plan', 'prepare_bing_queries', 'bing_search', 'get_evidence', 'get_discarded_plans', 'get_previous_research', 'get_shortlist_context', 'get_criteria_history', 'get_run_source_projection', 'get_screening_grid', 'get_grid_descriptions', 'get_company_detail', 'get_enrichment_report', 'score_mid_semantic', 'search_mid_semantic']) allowed.add(tool);
 Object.assign(admin, { space_sync: '/admin/space-sync', space_add_to_run: '/admin/space-add-to-run', space_export: '/admin/space-export' });
 for (const tool of ['space_sync_status', 'space_browse', 'space_search_lexical', 'space_search_semantic', 'space_search_iscc', 'space_recent']) allowed.add(tool);
@@ -320,17 +321,19 @@ export async function startBridge() {
   };
   // The screening runner passes analystApproved only for analyst-initiated actions (cancel, discard).
   const controllerCall = async (tool, args, analystApproved) => {
-    const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry', dispatch_provider_text: '/admin/provider-text', run_controller_turn: '/admin/controller-turn' }[tool];
+    const path = { lease_execution_job: '/admin/execution-lease', dispatch_execution_job: '/admin/execution-dispatch', retry_execution_job: '/admin/execution-retry', dispatch_provider_text: '/admin/provider-text', run_controller_turn: '/admin/controller-turn', start_controller_loop: '/admin/controller-loop-start', run_controller_loop_turn: '/admin/controller-loop-turn', consolidate_controller_loop: '/admin/controller-loop-consolidate', cancel_controller_loop: '/admin/controller-loop-cancel', undo_controller_loop: '/admin/controller-loop-undo' }[tool];
     if (!path) return call(tool, args, analystApproved);
     const response = await fetch(`${rustAddress}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'X-MNA-Controller-Key': controllerKey }, body: JSON.stringify(args) });
     const result = await response.json();
-    if (!response.ok) throw new Error(result?.error?.message ?? result?.message ?? result?.error ?? `Provider controller failed (${response.status})`);
+    if (!response.ok) { const error = new Error(result?.error?.message ?? result?.message ?? result?.error ?? `Provider controller failed (${response.status})`); error.code = result?.error?.code; error.status = response.status; throw error; }
     return result;
   };
   const background = createBackgroundScreening({ call: controllerCall, dispatch: args => controllerCall('dispatch_execution_job', args), connected: providerReady, storeFile: resolve(data, 'background-runs.json') });
   await background.init().catch(error => { rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); throw error; });
   const research = createBingResearch({ call, connected: () => providerReady('bing'), storeFile: resolve(data, 'research-runs.json') });
   await research.init().catch(error => { background.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); throw error; });
+  const loops = createControllerLoop({ call: controllerCall, connected: () => externalReady('llm_suite') && Boolean(providerDeployment('llm_suite')), storeFile: resolve(data, 'controller-loops.json') });
+  await loops.init().catch(error => { background.close(); research.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); throw error; });
   const conversation = createProviderConversation({ dispatch: args => controllerCall('dispatch_provider_text', args), connected: externalReady,
     deployment: providerDeployment, stagedFiles, call });
   const server = createServer(async (req, res) => {
@@ -354,6 +357,7 @@ export async function startBridge() {
         return sendStagedFile(res, { path, name: exportMatch[1], bytes: info.size, ...fileKinds.get('.xlsx') });
       }
       if (req.method === 'GET' && url.pathname === '/api/background-runs') return respond(res, 200, { jobs: await background.list() });
+      if (req.method === 'GET' && url.pathname === '/api/loop/runs') return respond(res, 200, { jobs: await loops.list() });
       if (req.method === 'GET' && url.pathname === '/api/research/runs') return respond(res, 200, { jobs: await research.list() });
       if (req.method === 'GET' && url.pathname === '/api/research/runs/rows') {
         const runId = url.searchParams.get('id');
@@ -447,6 +451,8 @@ export async function startBridge() {
         const result = await background[backgroundMatch[1]](input);
         return respond(res, 200, backgroundMatch[1] === 'stage' ? result : { job: result });
       }
+      const loopMatch = url.pathname.match(/^\/api\/loop\/(start|pause|resume|cancel|undo)$/);
+      if (loopMatch) return respond(res, 200, await loops[loopMatch[1]](await body(req)));
       const researchMatch = url.pathname.match(/^\/api\/research\/(preview|start|run|pause|resume|cancel)$/);
       if (researchMatch) {
         const action = researchMatch[1];
@@ -515,5 +521,5 @@ export async function startBridge() {
     rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill();
     throw error;
   }
-  return { close: () => { background.close(); research.close(); server.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); }, rust, jobs };
+  return { close: () => { background.close(); research.close(); loops.close(); server.close(); rust.kill(); embedWorker?.kill(); meili?.kill(); llmsuiteStub?.kill(); }, rust, jobs };
 }

@@ -1411,6 +1411,12 @@ fn convert(
         }
         fields.insert("run_id".into(), Value::String(ctx.run_id.clone()));
     }
+    // Loop identity is trusted controller context, never supplied by model text.
+    if let Some(loop_id) = ctx.extra.get("loop_id") {
+        if properties.contains_key("loop_id") {
+            fields.insert("loop_id".into(), loop_id.clone());
+        }
+    }
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
         for key in required.iter().filter_map(Value::as_str) {
             if !fields.contains_key(key) {

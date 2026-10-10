@@ -592,3 +592,248 @@ fn admin_turn_requires_controller_credentials_and_read_tool_is_public_catalogued
         .unwrap();
     assert_eq!(admin["controller_only"], true);
 }
+
+#[test]
+fn discovery_loop_stub_completes_applies_and_is_reversible() {
+    struct Stub(std::process::Child);
+    impl Drop for Stub {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _guard = ENV.lock().unwrap_or_else(|error| error.into_inner());
+    let f = Fixture::new(true);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let script =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../mna-ui/server/llmsuite-stub.mjs");
+    let _stub = Stub(
+        std::process::Command::new("node")
+            .arg(script)
+            .env("SCREENING_LLMSUITE_STUB_PORT", port.to_string())
+            .env("STUB_DEVIATIONS", "0")
+            .env("STUB_LOOP_TURNS", "0")
+            .spawn()
+            .unwrap(),
+    );
+    f.rt.block_on(async {
+        let start = Instant::now();
+        loop {
+            if reqwest::get(format!("http://127.0.0.1:{port}/health"))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(5));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    std::env::set_var(
+        "MNA_LLMSUITE_ENDPOINT",
+        format!("http://127.0.0.1:{port}/v1/chat"),
+    );
+    std::env::set_var("MNA_LLMSUITE_TOKEN", "stub");
+    let v = mna_tools::controller_loop::start(
+        &f.store,
+        &json!({"run_id":"R","analyst_message":"Find claims software","max_turns":50}),
+    )
+    .unwrap();
+    let loop_id = v["loop_id"].as_str().unwrap().to_owned();
+    let id = loop_id.as_str();
+    let mut result = v;
+    for _ in 0..6 {
+        result =
+            f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+                .unwrap();
+        if result["status"] == "completed" {
+            break;
+        }
+    }
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["turns_used"], 4);
+    assert_eq!(result["queries"].as_array().unwrap().len(), 2);
+    assert_eq!(result["simulated"], true);
+    assert!(!result["applied_review_id"].is_null());
+    let count = f.count("SELECT COUNT(*) FROM candidates WHERE run_id='R' AND considered=1");
+    assert!(count > 0);
+    println!("Real Rust + Node stub loop final considered count: {count}");
+    assert!(result["turns"][0]["instructions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["result_summary"]["status"] == "skipped"));
+    f.rt.block_on(mna_tools::controller_loop::admin(
+        &f.runtime,
+        &f.store,
+        "undo_controller_loop",
+        &json!({"loop_id":id}),
+    ))
+    .unwrap();
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM candidates WHERE considered=1"),
+        0
+    );
+    assert_eq!(f.count("SELECT COUNT(*) FROM candidates"), 4);
+}
+
+#[test]
+fn discovery_loop_cap_without_keeps_and_two_none_replies_do_not_apply() {
+    let _guard = ENV.lock().unwrap_or_else(|error| error.into_inner());
+    let f = Fixture::new(false);
+    for max in [1, 50] {
+        let v = mna_tools::controller_loop::start(
+            &f.store,
+            &json!({"run_id":"R","analyst_message":"Find claims software","max_turns":max}),
+        )
+        .unwrap();
+        let id = v["loop_id"].as_str().unwrap();
+        f.reply("## Instruction set\nNone.");
+        let mut result =
+            f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+                .unwrap();
+        if max == 50 {
+            assert_eq!(result["status"], "running");
+            f.reply("## Instruction set\nNone.");
+            result =
+                f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+                    .unwrap();
+        }
+        assert_eq!(result["status"], "completed");
+        assert!(result["applied_review_id"].is_null());
+        assert_eq!(
+            result["summary"],
+            "No keep decisions were made; the shortlist was not changed."
+        );
+    }
+    assert_eq!(f.count("SELECT COUNT(*) FROM shortlist_reviews"), 0);
+    assert!(f.fake.requests.lock().unwrap()[0]["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("TURN BUDGET: 1 turns left"));
+}
+
+#[test]
+fn discovery_loop_rotation_resends_state_and_rejects_forbidden_actions() {
+    let _guard = ENV.lock().unwrap_or_else(|error| error.into_inner());
+    let f = Fixture::new(true);
+    let v = mna_tools::controller_loop::start(
+        &f.store,
+        &json!({"run_id":"R","analyst_message":"Find claims software"}),
+    )
+    .unwrap();
+    let id = v["loop_id"].as_str().unwrap();
+    f.reply(SEARCH);
+    f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+        .unwrap();
+    std::env::set_var("MNA_LLMSUITE_ROTATE_TOKENS", "1");
+    f.reply("## Approved state\nNo actions.\n## Instruction set\n1. **finish_loop**\n - summary: This handoff must not execute");
+    f.reply("## Instruction set\n1. **approve_criteria_revision**\n2. **export_shortlist**");
+    f.reply("## Instruction set\n1. **keep_query_results**\n - query_id: Q1\n - min_score: 0.5\n - note: Keep software fits");
+    let result =
+        f.rt.block_on(mna_tools::controller_loop::turn(&f.runtime, &f.store, id))
+            .unwrap();
+    assert_ne!(result["conversation_id"], v["conversation_id"]);
+    assert_eq!(result["status"], "running");
+    assert_eq!(result["keeps"].as_array().unwrap().len(), 1);
+    let requests = f.fake.requests.lock().unwrap();
+    let handoff = requests[1]["prompt"].as_str().unwrap();
+    assert!(handoff.contains("Loop state:"));
+    assert!(handoff.contains("Q1 · MID_KEYWORD"));
+    assert_eq!(requests[1]["conversation_id"], v["conversation_id"]);
+    let restarted = requests[2]["prompt"].as_str().unwrap();
+    assert!(restarted.starts_with("You are running a discovery loop"));
+    assert!(restarted.contains("Analyst request:"));
+    assert!(restarted.contains("Histogram:"));
+    assert_eq!(f.count("SELECT COUNT(*) FROM shortlist_reviews"), 0);
+    assert_eq!(f.count("SELECT COUNT(*) FROM company_labels"), 0);
+}
+
+#[test]
+fn discovery_loop_admin_boundaries_require_controller_key_and_actions_are_private() {
+    use axum::{body::Body, http::Request};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let _guard = ENV.lock().unwrap_or_else(|error| error.into_inner());
+    let f = Fixture::new(false);
+    const KEY: &str = "loop-controller-key-with-24-characters";
+    const API: &str = "loop-service-key-with-24-characters";
+    const ANALYST: &str = "loop-analyst-key-with-24-characters";
+    std::env::set_var("MNA_CONTROLLER_KEY", KEY);
+    let app = mna_tools::router(f.runtime.clone(), API.into(), Some(ANALYST.into())).unwrap();
+    for route in ["start", "turn", "consolidate", "cancel", "undo"] {
+        let response =
+            f.rt.block_on(
+                app.clone().oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/admin/controller-loop-{route}"))
+                        .header("content-type", "application/json")
+                        .header("authorization", format!("Bearer {API}"))
+                        .header("x-mna-analyst-key", ANALYST)
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 403);
+    }
+    let response =
+        f.rt.block_on(
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/controller-loop-start")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {API}"))
+                    .header("x-mna-controller-key", KEY)
+                    .body(Body::from(
+                        json!({"run_id":"R","analyst_message":"Find claims"}).to_string(),
+                    ))
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let bytes =
+        f.rt.block_on(response.into_body().collect())
+            .unwrap()
+            .to_bytes();
+    let result: Value = serde_json::from_slice(&bytes).unwrap();
+    let read =
+        f.rt.block_on(f.runtime.execute(mna_tools::runtime::ToolCall {
+            tool: "get_controller_loop".into(),
+            arguments: json!({"loop_id":result["loop_id"]}),
+        }))
+        .unwrap();
+    assert_eq!(read["status"], "running");
+    let list =
+        f.rt.block_on(f.runtime.execute(mna_tools::runtime::ToolCall {
+            tool: "list_controller_loops".into(),
+            arguments: json!({"run_id":"R"}),
+        }))
+        .unwrap();
+    assert_eq!(list["loops"].as_array().unwrap().len(), 1);
+    for action in [
+        "keep_query_results",
+        "drop_companies",
+        "finish_loop",
+        "inspect_band",
+    ] {
+        assert!(f
+            .rt
+            .block_on(f.runtime.execute(mna_tools::runtime::ToolCall {
+                tool: action.into(),
+                arguments: json!({"loop_id":result["loop_id"]})
+            }))
+            .is_err());
+    }
+    assert!(mna_tools::runtime::administrator_definitions()
+        .iter()
+        .filter(|v| v["name"]
+            .as_str()
+            .is_some_and(|s| s.contains("controller_loop")))
+        .all(|v| v["controller_only"] == true));
+}

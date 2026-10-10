@@ -142,7 +142,7 @@ pub fn action_guide(catalog: &[ToolDefinition], allowed: &[&str]) -> String {
     guide.join("\n")
 }
 
-fn recent_decisions(store: &Store, run_id: &str, limit: usize) -> Result<Vec<String>> {
+pub(crate) fn recent_decisions(store: &Store, run_id: &str, limit: usize) -> Result<Vec<String>> {
     store.with_connection(|c| {
         let mut stmt = c.prepare("SELECT kind,analyst_message,parsed_json,results_json,status,error FROM controller_turns WHERE run_id=? ORDER BY created_at DESC,rowid DESC LIMIT ?")?;
         let mut rows = Vec::new();
@@ -169,7 +169,7 @@ fn recent_decisions(store: &Store, run_id: &str, limit: usize) -> Result<Vec<Str
     })
 }
 
-fn run_summary(store: &Store, run_id: &str) -> Result<String> {
+pub(crate) fn run_summary(store: &Store, run_id: &str) -> Result<String> {
     // These are the same authoritative revision and count readers used by tools.
     let criteria = store.execute("get_criteria_history", &json!({"run_id":run_id}))?;
     let current = &criteria["last_criteria"];
@@ -193,12 +193,16 @@ fn run_summary(store: &Store, run_id: &str) -> Result<String> {
     ))
 }
 
-struct Conversation {
-    id: String,
-    estimated_tokens: i64,
+pub(crate) struct Conversation {
+    pub(crate) id: String,
+    pub(crate) estimated_tokens: i64,
 }
 
-fn conversation(store: &Store, run_id: &str, replace: Option<&str>) -> Result<Conversation> {
+pub(crate) fn conversation(
+    store: &Store,
+    run_id: &str,
+    replace: Option<&str>,
+) -> Result<Conversation> {
     store.with_connection(|c| {
         let tx = c.transaction()?;
         let active: Option<Conversation> = tx.query_row("SELECT conversation_id,estimated_tokens FROM llm_conversations WHERE run_id=? AND provider='llm_suite' AND status='active'", [run_id], |r|
@@ -254,20 +258,21 @@ fn summarize_at(value: &Value, depth: usize) -> Value {
     }
 }
 
-struct PendingTurn<'a> {
-    run_id: &'a str,
-    conversation_id: &'a str,
-    parent: Option<&'a str>,
-    kind: &'a str,
-    message: Option<&'a str>,
-    prompt_id: &'a str,
-    prompt: &'a str,
-    model: &'a str,
-    allowed: &'a [&'a str],
-    catalog: &'a [ToolDefinition],
+pub(crate) struct PendingTurn<'a> {
+    pub(crate) loop_id: Option<&'a str>,
+    pub(crate) run_id: &'a str,
+    pub(crate) conversation_id: &'a str,
+    pub(crate) parent: Option<&'a str>,
+    pub(crate) kind: &'a str,
+    pub(crate) message: Option<&'a str>,
+    pub(crate) prompt_id: &'a str,
+    pub(crate) prompt: &'a str,
+    pub(crate) model: &'a str,
+    pub(crate) allowed: &'a [&'a str],
+    pub(crate) catalog: &'a [ToolDefinition],
 }
 
-async fn execute_turn(
+pub(crate) async fn execute_turn(
     runtime: &Runtime,
     store: &Store,
     turn: PendingTurn<'_>,
@@ -278,6 +283,9 @@ async fn execute_turn(
     store.with_connection(|c| {
         let tx = c.transaction()?;
         tx.execute("INSERT INTO controller_turns(turn_id,conversation_id,run_id,parent_turn_id,kind,analyst_message,prompt_id,prompt_hash,status,estimated_tokens,simulated,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?)",params![id,turn.conversation_id,turn.run_id,turn.parent,turn.kind,turn.message,turn.prompt_id,hash,estimate,crate::llmsuite::simulated(),now(),now()])?;
+        if let Some(loop_id) = turn.loop_id {
+            tx.execute("INSERT INTO controller_loop_turns(loop_id,turn,turn_id) SELECT loop_id,turns_used+1,? FROM controller_loops WHERE loop_id=?", params![id,loop_id])?;
+        }
         tx.execute("UPDATE llm_conversations SET turn_count=turn_count+1,updated_at=? WHERE conversation_id=?",params![now(),turn.conversation_id])?;
         tx.commit()?; Ok(())
     })?;
@@ -312,7 +320,10 @@ async fn execute_turn(
         turn.catalog,
         &InstructionContext {
             run_id: turn.run_id.into(),
-            extra: Default::default(),
+            extra: turn
+                .loop_id
+                .map(|id| [("loop_id".into(), json!(id))].into_iter().collect())
+                .unwrap_or_default(),
         },
     );
     // A handoff seeds context only, irrespective of any instructions in its reply.
@@ -342,14 +353,33 @@ async fn execute_turn(
                 .instructions
                 .iter()
                 .find(|raw| raw.index == call.index);
-            let result = runtime
-                .execute(ToolCall {
-                    tool: call.tool.clone(),
-                    arguments: call.arguments.clone(),
-                })
-                .await;
+            let result = if let Some(loop_id) = turn.loop_id {
+                crate::controller_loop::execute_action(
+                    runtime,
+                    store,
+                    loop_id,
+                    &call.tool,
+                    &call.arguments,
+                )
+                .await
+            } else {
+                runtime
+                    .execute(ToolCall {
+                        tool: call.tool.clone(),
+                        arguments: call.arguments.clone(),
+                    })
+                    .await
+            };
             let (status, summary, reason) = match result {
-                Ok(result) => ("executed", summarize(&result), None),
+                Ok(result) => (
+                    "executed",
+                    if turn.loop_id.is_some() && call.tool == "inspect_band" {
+                        result
+                    } else {
+                        summarize(&result)
+                    },
+                    None,
+                ),
                 Err(error) => (
                     "failed",
                     json!({"error_code":error.code(),"error":error.to_string()}),
@@ -457,6 +487,7 @@ pub async fn run_controller_turn(
             runtime,
             store,
             PendingTurn {
+                loop_id: None,
                 run_id: &args.run_id,
                 conversation_id: &conversation.id,
                 parent: None,
@@ -491,6 +522,7 @@ pub async fn run_controller_turn(
         runtime,
         store,
         PendingTurn {
+            loop_id: None,
             run_id: &args.run_id,
             conversation_id: &conversation.id,
             parent: None,
@@ -518,6 +550,7 @@ pub async fn run_controller_turn(
             runtime,
             store,
             PendingTurn {
+                loop_id: None,
                 run_id: &args.run_id,
                 conversation_id: &conversation.id,
                 parent: Some(&parent),

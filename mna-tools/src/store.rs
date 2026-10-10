@@ -26,7 +26,8 @@ const INTAKE_REPORTS_MIGRATION: &str = include_str!("../migrations/008_intake_re
 const PHASE2_MIGRATION: &str = include_str!("../migrations/009_phase2.sql");
 const CONTROLLER_MIGRATION: &str = include_str!("../migrations/010_controller.sql");
 const RUN_CONTROL_MIGRATION: &str = include_str!("../migrations/011_run_control.sql");
-const SCHEMA_VERSION: i64 = 11;
+const CONTROLLER_LOOP_MIGRATION: &str = include_str!("../migrations/012_controller_loop.sql");
+const SCHEMA_VERSION: i64 = 12;
 const MAX_TEXT: usize = 100_000;
 const MAX_LIST: usize = 1_000;
 
@@ -98,6 +99,7 @@ impl Store {
         transaction.execute_batch(PHASE2_MIGRATION)?;
         transaction.execute_batch(CONTROLLER_MIGRATION)?;
         transaction.execute_batch(RUN_CONTROL_MIGRATION)?;
+        transaction.execute_batch(CONTROLLER_LOOP_MIGRATION)?;
         // Labelled simulated output (009). One probe per column: older-schema rebuilds above
         // can recreate model_assessments without it.
         for table in ["source_rows", "model_assessments", "evidence"] {

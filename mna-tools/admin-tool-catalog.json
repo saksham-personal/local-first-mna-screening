@@ -1332,6 +1332,126 @@
     "name": "run_controller_turn"
   },
   {
+    "controller_only": true,
+    "endpoint": "/admin/controller-loop-start",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "analyst_message": {
+          "type": "string"
+        },
+        "max_turns": {
+          "description": "From 1 to 50, default 50.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "analyst_message"
+      ],
+      "title": "Start",
+      "type": "object"
+    },
+    "name": "start_controller_loop"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/controller-loop-turn",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "loop_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop_id"
+      ],
+      "title": "LoopId",
+      "type": "object"
+    },
+    "name": "run_controller_loop_turn"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/controller-loop-consolidate",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "apply": {
+          "type": "boolean"
+        },
+        "loop_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop_id",
+        "apply"
+      ],
+      "title": "Consolidate",
+      "type": "object"
+    },
+    "name": "consolidate_controller_loop"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/controller-loop-cancel",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "keep": {
+          "type": "boolean"
+        },
+        "loop_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop_id",
+        "keep"
+      ],
+      "title": "Cancel",
+      "type": "object"
+    },
+    "name": "cancel_controller_loop"
+  },
+  {
+    "controller_only": true,
+    "endpoint": "/admin/controller-loop-undo",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "force": {
+          "default": false,
+          "type": "boolean"
+        },
+        "loop_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop_id"
+      ],
+      "title": "Undo",
+      "type": "object"
+    },
+    "name": "undo_controller_loop"
+  },
+  {
     "controller_only": false,
     "endpoint": "/admin/index-build-start",
     "input_schema": {
